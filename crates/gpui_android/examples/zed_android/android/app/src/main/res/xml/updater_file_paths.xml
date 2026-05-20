@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Paths the in-app updater's FileProvider is allowed to share with
-     Android's package installer via content:// URIs. We download the
-     APK into `getCacheDir()` to avoid bloating the app's persistent
-     storage; the cache dir is the only path the FileProvider exposes. -->
+<!-- Paths the FileProvider is allowed to mint content:// URIs for.
+     Two consumers share the authority `com.zdroid.updater.fileprovider`:
+       1. The in-app updater hands the downloaded APK to Android's
+          package installer (cacheDir/updater/).
+       2. The in-app diagnostic exporter hands a generated text dump
+          to the system share sheet (cacheDir/diagnostic/).
+     Both live in cacheDir so the OS reclaims them under storage
+     pressure; persistent storage stays untouched. -->
 <paths>
     <cache-path
         name="updater_cache"
         path="updater/" />
+    <cache-path
+        name="diagnostic_cache"
+        path="diagnostic/" />
 </paths>

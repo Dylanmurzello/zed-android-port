@@ -843,13 +843,15 @@ class MainActivity : GameActivity(), ImeHost {
             && rejectedPointerDevices.add(event.deviceId)
         ) {
             val device = InputDevice.getDevice(event.deviceId)
-            Log.w(
-                TAG_CAPTURE,
-                "rejected pointer event during capture: deviceId=${event.deviceId} " +
-                    "name=\"${device?.name}\" source=0x${source.toString(16)} " +
-                    "action=${event.actionMasked} (extend " +
-                    "MainActivity.onGenericMotionEvent gate to accept this combo)",
-            )
+            val msg = "rejected pointer event during capture: deviceId=${event.deviceId} " +
+                "name=\"${device?.name}\" source=0x${source.toString(16)} " +
+                "action=${event.actionMasked} (extend " +
+                "MainActivity.onGenericMotionEvent gate to accept this combo)"
+            Log.w(TAG_CAPTURE, msg)
+            // Also feed Diagnostic so the line is recoverable without
+            // ADB: users tap Zdroid > Export Diagnostic and the share
+            // sheet hands the dump to email/Drive.
+            Diagnostic.record(TAG_CAPTURE, 'W', msg)
         }
         return super.onGenericMotionEvent(event)
     }
@@ -1197,6 +1199,24 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
+    /// Compose a diagnostic dump (device info, input devices, internal
+    /// ring buffer) and hand it to Android's share sheet so the user
+    /// can attach it to a bug report — no ADB, no PC required. Called
+    /// from Rust via JNI when the Zdroid menu's "Export Diagnostic"
+    /// entry fires. `extras` is an opaque text blob the Rust side
+    /// supplies for the "## Runtime state" section (active runtime
+    /// adapter id, PATH, etc.); empty string is fine if Rust has
+    /// nothing to add.
+    @Suppress("unused") // called from Rust via JNI
+    fun exportDiagnostic(extras: String) {
+        try {
+            val file = Diagnostic.composeDump(this, extras.takeIf { it.isNotEmpty() })
+            Diagnostic.share(this, file)
+        } catch (t: Throwable) {
+            Log.e(TAG_DIAG, "exportDiagnostic failed", t)
+        }
+    }
+
     /// Force a clean process exit when the Activity is destroyed.
     ///
     /// gpui_android has multiple static-state init paths (event channels,
@@ -1274,6 +1294,7 @@ class MainActivity : GameActivity(), ImeHost {
         private const val TAG = "zed_android_saf"
         private const val TAG_CAPTURE = "zed_android_capture"
         private const val TAG_UPDATE = "zed_android_update"
+        private const val TAG_DIAG = "zed_android_diag"
         private const val REQ_OPEN_TREE = 0xA1
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3

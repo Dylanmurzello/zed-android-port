@@ -24,7 +24,13 @@ actions!(
     zed_android,
     [
         /// Toggles the always-on Android application menu bar.
-        ToggleAppMenuBar
+        ToggleAppMenuBar,
+        /// Builds an on-device diagnostic dump (device info, input
+        /// devices, log ring buffer + Rust runtime state) and hands
+        /// it to Android's share sheet. Discoverable via Zdroid menu
+        /// > Export Diagnostic or the command palette. No PC + ADB
+        /// required to harvest logs for a bug report.
+        ExportZdroidDiagnostic
     ]
 );
 
@@ -40,6 +46,9 @@ pub fn register_actions(cx: &mut App) {
             })
             .ok();
         }
+    });
+    cx.on_action(|_: &ExportZdroidDiagnostic, _cx: &mut App| {
+        gpui_android::diagnostic::export();
     });
     cx.bind_keys([gpui::KeyBinding::new(
         "ctrl-alt-m",
@@ -248,6 +257,10 @@ fn zed_menu_items() -> Vec<MenuEntry> {
         MenuEntry::Action(
             "Check for Updates",
             Box::new(auto_update::Check),
+        ),
+        MenuEntry::Action(
+            "Export Diagnostic",
+            Box::new(ExportZdroidDiagnostic),
         ),
         MenuEntry::Action(
             "Extensions",

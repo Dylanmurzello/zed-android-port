@@ -5,6 +5,7 @@ pub mod askpass_install;
 mod captured_pointer;
 mod clipboard;
 mod cursor;
+pub mod diagnostic;
 mod dispatcher;
 pub(crate) mod splash;
 pub mod updater;
@@ -90,6 +91,7 @@ where
     // get back to JNI calls. Set once per process — idempotent across
     // Activity recreations.
     updater::register_android_app(android_app.clone());
+    diagnostic::register_android_app(android_app.clone());
     let platform: Rc<dyn gpui::Platform> = Rc::new(AndroidPlatform::new(android_app, false));
     let app = gpui::Application::with_platform(platform).with_assets(assets);
     app.run(on_finish_launching);
