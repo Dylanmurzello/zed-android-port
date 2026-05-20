@@ -828,8 +828,37 @@ class MainActivity : GameActivity(), ImeHost {
             handleCapturedEvent(event)
             return true
         }
+        // Diagnostic for the "mouse pairs but doesn't move the cursor"
+        // reports we keep getting from non-Samsung devices (Tab S11
+        // MediaTek, OnePlus Pad ColorOS, etc.). Capture is held but
+        // the source bits don't match our specific gate above —
+        // probably the device reports a `SOURCE_CLASS_POINTER` combo
+        // we haven't enumerated. Log the first occurrence per
+        // deviceId so a reporter's logcat exposes the exact flags
+        // and device name we need to widen to. Sparse in normal use
+        // (fires once per never-before-seen rejected device, then
+        // silent) — safe to leave on in release builds.
+        if (source and InputDevice.SOURCE_CLASS_POINTER != 0
+            && window.decorView.hasPointerCapture()
+            && rejectedPointerDevices.add(event.deviceId)
+        ) {
+            val device = InputDevice.getDevice(event.deviceId)
+            Log.w(
+                TAG_CAPTURE,
+                "rejected pointer event during capture: deviceId=${event.deviceId} " +
+                    "name=\"${device?.name}\" source=0x${source.toString(16)} " +
+                    "action=${event.actionMasked} (extend " +
+                    "MainActivity.onGenericMotionEvent gate to accept this combo)",
+            )
+        }
         return super.onGenericMotionEvent(event)
     }
+
+    /// `deviceId`s for which we've already emitted a "rejected
+    /// pointer event during capture" log line. Prevents the
+    /// diagnostic above from spamming logcat at the ~100Hz mouse-
+    /// move rate on a reporter's broken-mouse device.
+    private val rejectedPointerDevices = mutableSetOf<Int>()
 
     private fun handleCapturedEvent(event: MotionEvent) {
         // Any captured pointer activity makes pointer the current
