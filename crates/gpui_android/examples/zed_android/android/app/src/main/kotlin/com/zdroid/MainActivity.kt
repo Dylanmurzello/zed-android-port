@@ -1211,7 +1211,7 @@ class MainActivity : GameActivity(), ImeHost {
     fun exportDiagnostic(extras: String) {
         try {
             val file = Diagnostic.composeDump(this, extras.takeIf { it.isNotEmpty() })
-            Diagnostic.share(this, file)
+            Diagnostic.save(this, file)
         } catch (t: Throwable) {
             Log.e(TAG_DIAG, "exportDiagnostic failed", t)
         }
