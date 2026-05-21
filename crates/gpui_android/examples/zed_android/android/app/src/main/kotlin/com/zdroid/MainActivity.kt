@@ -675,6 +675,7 @@ class MainActivity : GameActivity(), ImeHost {
     override fun onPointerCaptureChanged(hasCapture: Boolean) {
         super.onPointerCaptureChanged(hasCapture)
         Log.i(TAG_CAPTURE, "onPointerCaptureChanged hasCapture=$hasCapture")
+        Diagnostic.recordTransition("capture", hasCapture.toString())
         if (hasCapture) {
             val (w, h) = visibleBounds()
             cursorX = w / 2f
@@ -818,13 +819,33 @@ class MainActivity : GameActivity(), ImeHost {
     /// View has focus. This avoids the `isFocusableInTouchMode=true`
     /// trap that triggers Samsung One UI's accessibility tint and
     /// breaks GameActivity's key dispatch.
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        // Outer dispatch probe. If this fires but onGenericMotionEvent
+        // doesn't, an intercept higher in the View hierarchy is
+        // swallowing the event (Samsung One UI freeform window, third-
+        // party accessibility service, etc.). Compare `M/disp.gen` vs
+        // `M/act.gen` counts in the dump to triage.
+        Diagnostic.recordMotion("disp.gen", event, window.decorView.hasPointerCapture(), false)
+        return super.dispatchGenericMotionEvent(event)
+    }
+
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         val source = event.source
+        val hasCapture = window.decorView.hasPointerCapture()
         val isMouseRel = source and InputDevice.SOURCE_MOUSE_RELATIVE != 0
         val isTouchpad = source and InputDevice.SOURCE_TOUCHPAD != 0
         val isMouse = source and InputDevice.SOURCE_MOUSE != 0
-        if ((isMouseRel || isTouchpad || isMouse)
-            && window.decorView.hasPointerCapture()) {
+        val accepted = (isMouseRel || isTouchpad || isMouse) && hasCapture
+        // Activity-level arrival probe. No source-class gate: the
+        // earlier attempt gated on SOURCE_CLASS_POINTER (0x2) which
+        // misses SOURCE_TOUCHPAD (CLASS_POSITION 0x8) and
+        // SOURCE_MOUSE_RELATIVE (CLASS_TRACKBALL 0x4), so trackpad +
+        // captured-mouse events never made it into the ring. Android
+        // already routes non-pointer motion (touchscreen) to
+        // dispatchTouchEvent rather than here, so leaving this
+        // ungated does not flood the ring with finger motion.
+        Diagnostic.recordMotion("act.gen", event, hasCapture, accepted)
+        if (accepted) {
             handleCapturedEvent(event)
             return true
         }
@@ -832,13 +853,15 @@ class MainActivity : GameActivity(), ImeHost {
         // reports we keep getting from non-Samsung devices (Tab S11
         // MediaTek, OnePlus Pad ColorOS, etc.). Capture is held but
         // the source bits don't match our specific gate above —
-        // probably the device reports a `SOURCE_CLASS_POINTER` combo
-        // we haven't enumerated. Log the first occurrence per
-        // deviceId so a reporter's logcat exposes the exact flags
-        // and device name we need to widen to. Sparse in normal use
-        // (fires once per never-before-seen rejected device, then
-        // silent) — safe to leave on in release builds.
-        if (source and InputDevice.SOURCE_CLASS_POINTER != 0
+        // probably the device reports a source-class combo we haven't
+        // enumerated. Log the first occurrence per deviceId so a
+        // reporter's dump exposes the exact flags and device name we
+        // need to widen to. Gated on `SOURCE_CLASS_MASK` so the
+        // detector covers pointer-class (mouse), position-class
+        // (touchpad), trackball-class (captured mouse_relative), and
+        // joystick-class — all the source classes that could plausibly
+        // deliver an indirect-pointer event.
+        if (source and InputDevice.SOURCE_CLASS_MASK != 0
             && window.decorView.hasPointerCapture()
             && rejectedPointerDevices.add(event.deviceId)
         ) {
@@ -935,13 +958,16 @@ class MainActivity : GameActivity(), ImeHost {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        Diagnostic.recordTransition("focus", hasFocus.toString())
         if (hasFocus) {
             if (hasIndirectPointer()) {
                 Log.i(TAG_CAPTURE, "requestPointerCapture()")
                 window.decorView.requestPointerCapture()
+                Diagnostic.recordTransition("capture.request", "true")
             }
         } else {
             window.decorView.releasePointerCapture()
+            Diagnostic.recordTransition("capture.release", "true")
         }
         // Move the sprite to the current cursor position so the
         // first visible-frame after a focus regain is correct, but
@@ -1238,8 +1264,29 @@ class MainActivity : GameActivity(), ImeHost {
     /// system killed for memory, finishAndRemoveTask. For those, killing
     /// the process here guarantees the next launch starts fresh with
     /// zero stale static state.
+    override fun onStart() {
+        super.onStart()
+        Diagnostic.recordTransition("lifecycle", "onStart")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Diagnostic.recordTransition("lifecycle", "onResume")
+    }
+
+    override fun onPause() {
+        Diagnostic.recordTransition("lifecycle", "onPause")
+        super.onPause()
+    }
+
+    override fun onStop() {
+        Diagnostic.recordTransition("lifecycle", "onStop")
+        super.onStop()
+    }
+
     override fun onDestroy() {
         Log.i(TAG, "onDestroy isFinishing=$isFinishing — exiting process for clean restart")
+        Diagnostic.recordTransition("lifecycle", "onDestroy")
         splashHandler.removeCallbacksAndMessages(null)
         cursorOverlay?.release()
         cursorOverlay = null

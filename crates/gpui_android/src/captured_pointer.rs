@@ -356,6 +356,23 @@ struct TapAnchor {
 /// Push a captured event from the JVM listener thread onto the channel.
 /// The game thread drains and synthesizes.
 fn dispatch(event: CapturedEvent) {
+    // Rust-side arrival probe. Mirrors Kotlin's `M/act.gen` lines so a
+    // diagnostic dump shows whether JNI translation faithfully forwarded
+    // every captured event the View received. Empty Rust ring + populated
+    // Kotlin ring = JNI bridge dropped events. Populated both sides =
+    // arrival is fine, look downstream at the SM.
+    let rx0 = event.rxs.first().copied().unwrap_or(0.0);
+    let ry0 = event.rys.first().copied().unwrap_or(0.0);
+    crate::diagnostic::record(format!(
+        "cap.disp w={} act=0x{:x} src=0x{:x} btn=0x{:x} n={} rx={:.2} ry={:.2}",
+        event.window_id,
+        event.action_masked,
+        event.source,
+        event.button_state,
+        event.pointer_count,
+        rx0,
+        ry0,
+    ));
     let guard = EVENT_TX.lock().unwrap();
     let Some(tx) = guard.as_ref() else {
         log::warn!("captured_pointer: event arrived before init_event_channel");

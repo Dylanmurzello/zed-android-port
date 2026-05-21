@@ -1,0 +1,526 @@
+# Zdroid diagnostic 2026-05-21 11:45:57.189
+
+## Device
+manufacturer: samsung
+model:        SM-X910
+device:       gts9uwifi
+product:      gts9uwifixx
+brand:        samsung
+release:      Android 16
+sdk:          36
+fingerprint:  samsung/gts9uwifixx/gts9uwifi:16/<redacted>
+
+## App
+package:      com.zdroid
+versionName:  0.3.1.1-diag.2
+versionCode:  15
+
+## Input devices
+- id=-1 name="Virtual"
+    vendorId=0x0 productId=0x0
+    sources=0x301 (KEYBOARD|DPAD)
+    keyboardType=ALPHABETIC isVirtual=true isExternal=false
+- id=2 name=<redacted:gp***ys[8c90d532]>
+    vendorId=0x1 productId=0x1
+    sources=0x101 (KEYBOARD)
+    keyboardType=NON_ALPHABETIC isVirtual=false isExternal=false
+- id=3 name="hall_wacom"
+    vendorId=0x0 productId=0x0
+    sources=0x-80000000 (NONE)
+    keyboardType=NONE isVirtual=false isExternal=false
+- id=4 name="hall"
+    vendorId=0x0 productId=0x0
+    sources=0x-80000000 (NONE)
+    keyboardType=NONE isVirtual=false isExternal=false
+- id=5 name="pmic_pwrkey"
+    vendorId=0x0 productId=0x0
+    sources=0x101 (KEYBOARD)
+    keyboardType=NON_ALPHABETIC isVirtual=false isExternal=false
+- id=6 name="pmic_resin"
+    vendorId=0x0 productId=0x0
+    sources=0x101 (KEYBOARD)
+    keyboardType=NON_ALPHABETIC isVirtual=false isExternal=false
+- id=7 name="grip_sensor"
+    vendorId=0x0 productId=0x0
+    sources=0x400000 (NONE)
+    keyboardType=NONE isVirtual=false isExternal=false
+- id=8 name="grip_sensor_wifi"
+    vendorId=0x0 productId=0x0
+    sources=0x400000 (NONE)
+    keyboardType=NONE isVirtual=false isExternal=false
+- id=9 name="sec_touchscreen"
+    vendorId=0x0 productId=0x0
+    sources=0x1103 (KEYBOARD|TOUCHSCREEN)
+    keyboardType=NON_ALPHABETIC isVirtual=false isExternal=false
+- id=10 name="sec_touchpad"
+    vendorId=0x0 productId=0x0
+    sources=0x10210b (KEYBOARD|MOUSE|TOUCHPAD)
+    keyboardType=NON_ALPHABETIC isVirtual=false isExternal=false
+- id=11 name="sec_e-pen"
+    vendorId=0x0 productId=0x0
+    sources=0x-7fffaefd (KEYBOARD|TOUCHSCREEN|STYLUS)
+    keyboardType=NON_ALPHABETIC isVirtual=false isExternal=false
+- id=12 name="hall_logical"
+    vendorId=0x0 productId=0x0
+    sources=0x-80000000 (NONE)
+    keyboardType=NONE isVirtual=false isExternal=false
+- id=24 name=<redacted:De***rd[18d579ed]>
+    vendorId=0xa5c productId=0x8502
+    sources=0x10210b (KEYBOARD|MOUSE|TOUCHPAD)
+    keyboardType=ALPHABETIC isVirtual=false isExternal=true
+
+## Runtime state (gpui_android)
+env:
+  PATH=/data/data/com.zdroid/files/usr/.zed/bin:/data/data/com.zdroid/files/usr/bin:/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/apex/com.android.virt/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin
+  SHELL=/data/data/com.zdroid/files/usr/bin/bash
+  HOME=/data/user/0/com.zdroid/files/home
+  PREFIX=/data/data/com.zdroid/files/usr
+  TMPDIR=/data/data/com.zdroid/files/usr/tmp
+  ZED_RELEASE_CHANNEL=(unset)
+  ZD_RUNTIME_CONFIG=(unset)
+  ZDROID_ADAPTER=(unset)
+  ANDROID_DATA=/data
+  ANDROID_ROOT=/system
+  LD_PRELOAD=(unset)
+gpui_android_pkg_version: 0.1.0
+
+rust_ring (144 lines):
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-1.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-7.00 ry=4.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-29.00 ry=15.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-35.00 ry=28.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-39.00 ry=31.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-20.00 ry=23.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-18.00 ry=24.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-28.00 ry=47.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-16.00 ry=45.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-3.00 ry=20.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-1.00 ry=19.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=9.00 ry=45.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=23.00 ry=28.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=31.00 ry=14.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=44.00 ry=-2.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=61.00 ry=-27.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=57.00 ry=-48.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=26.00 ry=-30.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=24.00 ry=-33.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=38.00 ry=-70.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=10.00 ry=-70.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-7.00 ry=-34.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-12.00 ry=-25.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-45.00 ry=-20.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-75.00 ry=27.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-99.00 ry=90.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-75.00 ry=100.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-38.00 ry=91.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-6.00 ry=81.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=31.00 ry=75.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=64.00 ry=51.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=38.00 ry=13.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=89.00 ry=-2.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=49.00 ry=-13.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=100.00 ry=-63.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=87.00 ry=-96.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=48.00 ry=-96.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=9.00 ry=-96.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-38.00 ry=-78.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-93.00 ry=-31.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-56.00 ry=7.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-58.00 ry=20.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-113.00 ry=77.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-99.00 ry=114.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-65.00 ry=119.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-17.00 ry=49.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-8.00 ry=40.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=6.00 ry=56.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=14.00 ry=20.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=29.00 ry=9.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=73.00 ry=-3.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=77.00 ry=-30.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=70.00 ry=-52.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=62.00 ry=-92.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=31.00 ry=-90.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=-76.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-10.00 ry=-28.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-19.00 ry=-18.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-26.00 ry=-10.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-46.00 ry=19.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-51.00 ry=35.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-85.00 ry=90.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-60.00 ry=87.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-35.00 ry=66.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-6.00 ry=18.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-67.00 ry=116.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-7.00 ry=19.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-7.00 ry=28.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=11.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=12.00 ry=20.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=7.00 ry=5.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=5.00 ry=-57.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=27.00 ry=-243.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=3.00 ry=-39.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-2.00 ry=-59.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-3.00 ry=-17.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-5.00 ry=-10.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-21.00 ry=8.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-34.00 ry=66.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-18.00 ry=50.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-18.00 ry=72.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-20.00 ry=129.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-2.00 ry=45.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=-27.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=55.00 ry=-253.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=11.00 ry=-42.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=15.00 ry=-55.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=8.00 ry=-29.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=5.00 ry=-10.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0xb src=0x100008 btn=0x1 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x1 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0xc src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x0 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=4.00 ry=-11.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=15.00 ry=-27.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=21.00 ry=-37.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=32.00 ry=-43.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=37.00 ry=-46.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=32.00 ry=-43.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=32.00 ry=-40.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=28.00 ry=-42.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=15.00 ry=-25.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=6.00 ry=-9.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=2.00 ry=-4.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=5.00 ry=9.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=13.00 ry=27.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=32.00 ry=50.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=28.00 ry=42.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=22.00 ry=42.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=14.00 ry=37.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-5.00 ry=36.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-31.00 ry=20.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-24.00 ry=1.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-60.00 ry=-17.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-79.00 ry=-52.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-34.00 ry=-18.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-29.00 ry=-10.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-46.00 ry=4.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-36.00 ry=43.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=-15.00 ry=77.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=19.00 ry=76.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=41.00 ry=37.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=57.00 ry=2.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=36.00 ry=-12.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=47.00 ry=-21.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=96.00 ry=-46.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=104.00 ry=-44.00
+  cap.disp w=0 act=0x2 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+  cap.disp w=0 act=0x1 src=0x100008 btn=0x0 n=1 rx=0.00 ry=0.00
+
+## Ring buffer (293 lines)
+11:43:21.528 T/lifecycle=onStart
+11:43:21.535 T/lifecycle=onResume
+11:43:21.709 T/focus=true
+11:43:21.709 T/capture.request=true
+11:43:21.712 T/capture=true
+11:43:38.629 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1019.0 y=143.0 rx=0.00 ry=0.00
+11:43:38.631 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1019.0 y=143.0 rx=0.00 ry=0.00
+11:43:38.638 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1018.0 y=143.0 rx=-1.00 ry=0.00
+11:43:38.638 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1018.0 y=143.0 rx=-1.00 ry=0.00
+11:43:38.654 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1011.0 y=147.0 rx=-7.00 ry=4.00
+11:43:38.655 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1011.0 y=147.0 rx=-7.00 ry=4.00
+11:43:38.671 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=982.0 y=162.0 rx=-15.00 ry=10.00
+11:43:38.671 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=982.0 y=162.0 rx=-15.00 ry=10.00
+11:43:38.697 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=947.0 y=190.0 rx=-17.00 ry=15.00
+11:43:38.697 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=947.0 y=190.0 rx=-17.00 ry=15.00
+11:43:38.722 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=908.0 y=221.0 rx=-19.00 ry=15.00
+11:43:38.722 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=908.0 y=221.0 rx=-19.00 ry=15.00
+11:43:38.738 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=888.0 y=244.0 rx=-20.00 ry=23.00
+11:43:38.738 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=888.0 y=244.0 rx=-20.00 ry=23.00
+11:43:38.747 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=870.0 y=268.0 rx=-18.00 ry=24.00
+11:43:38.747 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=870.0 y=268.0 rx=-18.00 ry=24.00
+11:43:38.763 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=842.0 y=315.0 rx=-13.00 ry=23.00
+11:43:38.763 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=842.0 y=315.0 rx=-13.00 ry=23.00
+11:43:38.788 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=826.0 y=360.0 rx=-6.00 ry=21.00
+11:43:38.788 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=826.0 y=360.0 rx=-6.00 ry=21.00
+11:43:38.805 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=823.0 y=380.0 rx=-3.00 ry=20.00
+11:43:38.805 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=823.0 y=380.0 rx=-3.00 ry=20.00
+11:43:38.813 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=822.0 y=399.0 rx=-1.00 ry=19.00
+11:43:38.813 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=822.0 y=399.0 rx=-1.00 ry=19.00
+11:43:38.830 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=831.0 y=444.0 rx=6.00 ry=21.00
+11:43:38.830 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=831.0 y=444.0 rx=6.00 ry=21.00
+11:43:38.855 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=854.0 y=472.0 rx=13.00 ry=12.00
+11:43:38.855 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=854.0 y=472.0 rx=13.00 ry=12.00
+11:43:38.880 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=885.0 y=486.0 rx=16.00 ry=5.00
+11:43:38.880 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=885.0 y=486.0 rx=16.00 ry=5.00
+11:43:38.896 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=929.0 y=484.0 rx=23.00 ry=-3.00
+11:43:38.896 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=929.0 y=484.0 rx=23.00 ry=-3.00
+11:43:38.921 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=990.0 y=457.0 rx=32.00 ry=-17.00
+11:43:38.921 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=990.0 y=457.0 rx=32.00 ry=-17.00
+11:43:38.947 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1047.0 y=409.0 rx=26.00 ry=-26.00
+11:43:38.947 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1047.0 y=409.0 rx=26.00 ry=-26.00
+11:43:38.963 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1073.0 y=379.0 rx=26.00 ry=-30.00
+11:43:38.963 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1073.0 y=379.0 rx=26.00 ry=-30.00
+11:43:38.971 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1097.0 y=346.0 rx=24.00 ry=-33.00
+11:43:38.972 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1097.0 y=346.0 rx=24.00 ry=-33.00
+11:43:38.988 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1135.0 y=276.0 rx=17.00 ry=-36.00
+11:43:38.988 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1135.0 y=276.0 rx=17.00 ry=-36.00
+11:43:39.013 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1145.0 y=206.0 rx=0.00 ry=-36.00
+11:43:39.013 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1145.0 y=206.0 rx=0.00 ry=-36.00
+11:43:39.030 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1138.0 y=172.0 rx=-7.00 ry=-34.00
+11:43:39.030 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1138.0 y=172.0 rx=-7.00 ry=-34.00
+11:43:39.038 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1126.0 y=147.0 rx=-12.00 ry=-25.00
+11:43:39.038 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1126.0 y=147.0 rx=-12.00 ry=-25.00
+11:43:39.055 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1081.0 y=127.0 rx=-26.00 ry=-4.00
+11:43:39.055 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1081.0 y=127.0 rx=-26.00 ry=-4.00
+11:43:39.080 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1006.0 y=154.0 rx=-39.00 ry=19.00
+11:43:39.080 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1006.0 y=154.0 rx=-39.00 ry=19.00
+11:43:39.105 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=907.0 y=244.0 rx=-48.00 ry=48.00
+11:43:39.105 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=907.0 y=244.0 rx=-48.00 ry=48.00
+11:43:39.121 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=832.0 y=344.0 rx=-33.00 ry=49.00
+11:43:39.122 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=832.0 y=344.0 rx=-33.00 ry=49.00
+11:43:39.146 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=794.0 y=435.0 rx=-15.00 ry=44.00
+11:43:39.146 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=794.0 y=435.0 rx=-15.00 ry=44.00
+11:43:39.171 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=788.0 y=516.0 rx=1.00 ry=39.00
+11:43:39.171 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=788.0 y=516.0 rx=1.00 ry=39.00
+11:43:39.188 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=819.0 y=591.0 rx=24.00 ry=38.00
+11:43:39.188 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=819.0 y=591.0 rx=24.00 ry=38.00
+11:43:39.213 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=883.0 y=642.0 rx=36.00 ry=22.00
+11:43:39.213 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=883.0 y=642.0 rx=36.00 ry=22.00
+11:43:39.238 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=921.0 y=655.0 rx=38.00 ry=13.00
+11:43:39.238 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=921.0 y=655.0 rx=38.00 ry=13.00
+11:43:39.246 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1010.0 y=653.0 rx=45.00 ry=-6.00
+11:43:39.247 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1010.0 y=653.0 rx=45.00 ry=-6.00
+11:43:39.272 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1059.0 y=640.0 rx=49.00 ry=-13.00
+11:43:39.272 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1059.0 y=640.0 rx=49.00 ry=-13.00
+11:43:39.280 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1159.0 y=577.0 rx=54.00 ry=-41.00
+11:43:39.280 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1159.0 y=577.0 rx=54.00 ry=-41.00
+11:43:39.305 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1246.0 y=481.0 rx=39.00 ry=-49.00
+11:43:39.305 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1246.0 y=481.0 rx=39.00 ry=-49.00
+11:43:39.329 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1294.0 y=385.0 rx=18.00 ry=-48.00
+11:43:39.330 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1294.0 y=385.0 rx=18.00 ry=-48.00
+11:43:39.347 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1303.0 y=289.0 rx=0.00 ry=-47.00
+11:43:39.347 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1303.0 y=289.0 rx=0.00 ry=-47.00
+11:43:39.372 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1265.0 y=211.0 rx=-30.00 ry=-36.00
+11:43:39.372 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1265.0 y=211.0 rx=-30.00 ry=-36.00
+11:43:39.396 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1172.0 y=180.0 rx=-51.00 ry=-7.00
+11:43:39.397 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1172.0 y=180.0 rx=-51.00 ry=-7.00
+11:43:39.413 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1116.0 y=187.0 rx=-56.00 ry=7.00
+11:43:39.413 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1116.0 y=187.0 rx=-56.00 ry=7.00
+11:43:39.421 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1058.0 y=207.0 rx=-58.00 ry=20.00
+11:43:39.421 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1058.0 y=207.0 rx=-58.00 ry=20.00
+11:43:39.438 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=945.0 y=284.0 rx=-54.00 ry=43.00
+11:43:39.438 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=945.0 y=284.0 rx=-54.00 ry=43.00
+11:43:39.463 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=846.0 y=398.0 rx=-49.00 ry=66.00
+11:43:39.463 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=846.0 y=398.0 rx=-49.00 ry=66.00
+11:43:39.488 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=781.0 y=517.0 rx=-27.00 ry=57.00
+11:43:39.488 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=781.0 y=517.0 rx=-27.00 ry=57.00
+11:43:39.505 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=764.0 y=566.0 rx=-17.00 ry=49.00
+11:43:39.505 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=764.0 y=566.0 rx=-17.00 ry=49.00
+11:43:39.513 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=756.0 y=606.0 rx=-8.00 ry=40.00
+11:43:39.513 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=756.0 y=606.0 rx=-8.00 ry=40.00
+11:43:39.530 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=762.0 y=662.0 rx=7.00 ry=25.00
+11:43:39.530 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=762.0 y=662.0 rx=7.00 ry=25.00
+11:43:39.546 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=776.0 y=682.0 rx=14.00 ry=20.00
+11:43:39.546 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=776.0 y=682.0 rx=14.00 ry=20.00
+11:43:39.555 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=805.0 y=691.0 rx=29.00 ry=9.00
+11:43:39.555 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=805.0 y=691.0 rx=29.00 ry=9.00
+11:43:39.571 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=878.0 y=688.0 rx=39.00 ry=-5.00
+11:43:39.572 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=878.0 y=688.0 rx=39.00 ry=-5.00
+11:43:39.596 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=955.0 y=658.0 rx=39.00 ry=-18.00
+11:43:39.596 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=955.0 y=658.0 rx=39.00 ry=-18.00
+11:43:39.621 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1025.0 y=606.0 rx=33.00 ry=-30.00
+11:43:39.621 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1025.0 y=606.0 rx=33.00 ry=-30.00
+11:43:39.639 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1087.0 y=514.0 rx=28.00 ry=-48.00
+11:43:39.639 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1087.0 y=514.0 rx=28.00 ry=-48.00
+11:43:39.663 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1118.0 y=424.0 rx=12.00 ry=-43.00
+11:43:39.663 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1118.0 y=424.0 rx=12.00 ry=-43.00
+11:43:39.688 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1118.0 y=348.0 rx=-3.00 ry=-35.00
+11:43:39.688 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1118.0 y=348.0 rx=-3.00 ry=-35.00
+11:43:39.705 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1108.0 y=320.0 rx=-10.00 ry=-28.00
+11:43:39.705 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1108.0 y=320.0 rx=-10.00 ry=-28.00
+11:43:39.713 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1089.0 y=302.0 rx=-19.00 ry=-18.00
+11:43:39.713 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1089.0 y=302.0 rx=-19.00 ry=-18.00
+11:43:39.730 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1063.0 y=292.0 rx=-26.00 ry=-10.00
+11:43:39.730 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1063.0 y=292.0 rx=-26.00 ry=-10.00
+11:43:39.738 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1017.0 y=311.0 rx=-46.00 ry=19.00
+11:43:39.738 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1017.0 y=311.0 rx=-46.00 ry=19.00
+11:43:39.747 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=966.0 y=346.0 rx=-51.00 ry=35.00
+11:43:39.747 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=966.0 y=346.0 rx=-51.00 ry=35.00
+11:43:39.763 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=881.0 y=436.0 rx=-39.00 ry=46.00
+11:43:39.763 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=881.0 y=436.0 rx=-39.00 ry=46.00
+11:43:39.788 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=821.0 y=523.0 rx=-27.00 ry=42.00
+11:43:39.788 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=821.0 y=523.0 rx=-27.00 ry=42.00
+11:43:39.813 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=786.0 y=589.0 rx=-15.00 ry=29.00
+11:43:39.813 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=786.0 y=589.0 rx=-15.00 ry=29.00
+11:43:39.825 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=780.0 y=607.0 rx=0.00 ry=0.00
+11:43:39.825 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=780.0 y=607.0 rx=0.00 ry=0.00
+11:43:39.826 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=780.0 y=607.0 rx=0.00 ry=0.00
+11:43:39.826 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=780.0 y=607.0 rx=0.00 ry=0.00
+11:43:41.198 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=929.0 y=195.0 rx=0.00 ry=0.00
+11:43:41.198 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=929.0 y=195.0 rx=0.00 ry=0.00
+11:43:41.246 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=3 x=862.0 y=311.0 rx=-10.00 ry=23.00
+11:43:41.247 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=3 x=862.0 y=311.0 rx=-10.00 ry=23.00
+11:43:41.263 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=855.0 y=330.0 rx=-7.00 ry=19.00
+11:43:41.263 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=855.0 y=330.0 rx=-7.00 ry=19.00
+11:43:41.272 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=848.0 y=358.0 rx=-2.00 ry=13.00
+11:43:41.272 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=848.0 y=358.0 rx=-2.00 ry=13.00
+11:43:41.288 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=848.0 y=369.0 rx=0.00 ry=11.00
+11:43:41.288 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=848.0 y=369.0 rx=0.00 ry=11.00
+11:43:41.304 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=860.0 y=389.0 rx=7.00 ry=9.00
+11:43:41.305 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=860.0 y=389.0 rx=7.00 ry=9.00
+11:43:41.322 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=867.0 y=394.0 rx=0.00 ry=0.00
+11:43:41.322 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=867.0 y=394.0 rx=0.00 ry=0.00
+11:43:41.322 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=867.0 y=394.0 rx=0.00 ry=0.00
+11:43:41.323 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=867.0 y=394.0 rx=0.00 ry=0.00
+11:43:41.608 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=981.0 y=468.0 rx=0.00 ry=0.00
+11:43:41.609 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=981.0 y=468.0 rx=0.00 ry=0.00
+11:43:41.655 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=3 x=986.0 y=411.0 rx=4.00 ry=-26.00
+11:43:41.655 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=3 x=986.0 y=411.0 rx=4.00 ry=-26.00
+11:43:41.714 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=5 x=1013.0 y=168.0 rx=3.00 ry=-43.00
+11:43:41.714 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=5 x=1013.0 y=168.0 rx=3.00 ry=-43.00
+11:43:41.730 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1016.0 y=129.0 rx=3.00 ry=-39.00
+11:43:41.730 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1016.0 y=129.0 rx=3.00 ry=-39.00
+11:43:41.746 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1014.0 y=70.0 rx=-2.00 ry=-25.00
+11:43:41.746 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1014.0 y=70.0 rx=-2.00 ry=-25.00
+11:43:41.763 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1011.0 y=53.0 rx=-3.00 ry=-17.00
+11:43:41.763 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1011.0 y=53.0 rx=-3.00 ry=-17.00
+11:43:41.771 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1006.0 y=43.0 rx=-5.00 ry=-10.00
+11:43:41.772 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1006.0 y=43.0 rx=-5.00 ry=-10.00
+11:43:41.788 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=985.0 y=51.0 rx=-13.00 ry=9.00
+11:43:41.788 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=985.0 y=51.0 rx=-13.00 ry=9.00
+11:43:41.813 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=951.0 y=117.0 rx=-17.00 ry=40.00
+11:43:41.813 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=951.0 y=117.0 rx=-17.00 ry=40.00
+11:43:41.829 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=933.0 y=167.0 rx=-18.00 ry=50.00
+11:43:41.830 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=933.0 y=167.0 rx=-18.00 ry=50.00
+11:43:41.838 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=915.0 y=239.0 rx=-18.00 ry=72.00
+11:43:41.838 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=915.0 y=239.0 rx=-18.00 ry=72.00
+11:43:41.855 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=895.0 y=368.0 rx=-7.00 ry=59.00
+11:43:41.855 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=895.0 y=368.0 rx=-7.00 ry=59.00
+11:43:41.875 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=893.0 y=413.0 rx=0.00 ry=0.00
+11:43:41.875 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=893.0 y=413.0 rx=0.00 ry=0.00
+11:43:41.876 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=893.0 y=413.0 rx=0.00 ry=0.00
+11:43:41.876 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=893.0 y=413.0 rx=0.00 ry=0.00
+11:43:42.105 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=947.0 y=794.0 rx=0.00 ry=0.00
+11:43:42.105 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=947.0 y=794.0 rx=0.00 ry=0.00
+11:43:42.138 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=947.0 y=767.0 rx=0.00 ry=-19.00
+11:43:42.138 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=947.0 y=767.0 rx=0.00 ry=-19.00
+11:43:42.213 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=5 x=1002.0 y=514.0 rx=13.00 ry=-51.00
+11:43:42.213 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=5 x=1002.0 y=514.0 rx=13.00 ry=-51.00
+11:43:42.230 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1013.0 y=472.0 rx=11.00 ry=-42.00
+11:43:42.230 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1013.0 y=472.0 rx=11.00 ry=-42.00
+11:43:42.238 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1028.0 y=417.0 rx=7.00 ry=-23.00
+11:43:42.238 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1028.0 y=417.0 rx=7.00 ry=-23.00
+11:43:42.263 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1036.0 y=388.0 rx=4.00 ry=-12.00
+11:43:42.263 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1036.0 y=388.0 rx=4.00 ry=-12.00
+11:43:42.288 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1041.0 y=378.0 rx=2.00 ry=-4.00
+11:43:42.288 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1041.0 y=378.0 rx=2.00 ry=-4.00
+11:43:42.300 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1041.0 y=378.0 rx=0.00 ry=0.00
+11:43:42.300 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1041.0 y=378.0 rx=0.00 ry=0.00
+11:43:42.301 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1041.0 y=378.0 rx=0.00 ry=0.00
+11:43:42.301 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1041.0 y=378.0 rx=0.00 ry=0.00
+11:43:42.463 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=993.0 y=701.0 rx=0.00 ry=0.00
+11:43:42.464 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=993.0 y=701.0 rx=0.00 ry=0.00
+11:43:42.546 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=993.0 y=701.0 rx=0.00 ry=0.00
+11:43:42.546 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=993.0 y=701.0 rx=0.00 ry=0.00
+11:43:42.547 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=993.0 y=701.0 rx=0.00 ry=0.00
+11:43:42.547 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=993.0 y=701.0 rx=0.00 ry=0.00
+11:43:42.760 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.760 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.841 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.841 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.842 M/disp.gen act=0xb actBtn=0x1 btn=0x1 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.842 M/act.gen act=0xb actBtn=0x1 btn=0x1 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.978 M/disp.gen act=0x2 actBtn=0x0 btn=0x1 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.978 M/act.gen act=0x2 actBtn=0x0 btn=0x1 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.980 M/disp.gen act=0xc actBtn=0x1 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.980 M/act.gen act=0xc actBtn=0x1 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.981 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:42.981 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=779.0 y=808.0 rx=0.00 ry=0.00
+11:43:46.109 M/disp.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=859.0 y=595.0 rx=0.00 ry=0.00
+11:43:46.109 M/act.gen act=0x0 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=859.0 y=595.0 rx=0.00 ry=0.00
+11:43:46.121 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=863.0 y=584.0 rx=4.00 ry=-10.00
+11:43:46.122 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=863.0 y=584.0 rx=4.00 ry=-10.00
+11:43:46.147 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=878.0 y=557.0 rx=8.00 ry=-14.00
+11:43:46.147 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=878.0 y=557.0 rx=8.00 ry=-14.00
+11:43:46.163 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=899.0 y=520.0 rx=11.00 ry=-21.00
+11:43:46.163 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=899.0 y=520.0 rx=11.00 ry=-21.00
+11:43:46.188 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=931.0 y=477.0 rx=18.00 ry=-22.00
+11:43:46.188 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=931.0 y=477.0 rx=18.00 ry=-22.00
+11:43:46.213 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=968.0 y=431.0 rx=18.00 ry=-24.00
+11:43:46.213 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=968.0 y=431.0 rx=18.00 ry=-24.00
+11:43:46.238 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1000.0 y=388.0 rx=16.00 ry=-20.00
+11:43:46.238 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1000.0 y=388.0 rx=16.00 ry=-20.00
+11:43:46.255 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1032.0 y=348.0 rx=16.00 ry=-20.00
+11:43:46.255 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1032.0 y=348.0 rx=16.00 ry=-20.00
+11:43:46.279 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1060.0 y=306.0 rx=13.00 ry=-19.00
+11:43:46.280 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1060.0 y=306.0 rx=13.00 ry=-19.00
+11:43:46.305 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1075.0 y=281.0 rx=6.00 ry=-10.00
+11:43:46.305 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1075.0 y=281.0 rx=6.00 ry=-10.00
+11:43:46.321 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1081.0 y=272.0 rx=2.00 ry=-3.00
+11:43:46.321 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1081.0 y=272.0 rx=2.00 ry=-3.00
+11:43:46.346 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1083.0 y=268.0 rx=1.00 ry=-1.00
+11:43:46.346 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1083.0 y=268.0 rx=1.00 ry=-1.00
+11:43:46.413 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1088.0 y=277.0 rx=4.00 ry=8.00
+11:43:46.414 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1088.0 y=277.0 rx=4.00 ry=8.00
+11:43:46.438 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1101.0 y=304.0 rx=8.00 ry=15.00
+11:43:46.438 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1101.0 y=304.0 rx=8.00 ry=15.00
+11:43:46.463 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1133.0 y=354.0 rx=17.00 ry=25.00
+11:43:46.463 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1133.0 y=354.0 rx=17.00 ry=25.00
+11:43:46.479 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1161.0 y=396.0 rx=12.00 ry=20.00
+11:43:46.480 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1161.0 y=396.0 rx=12.00 ry=20.00
+11:43:46.504 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1183.0 y=438.0 rx=10.00 ry=21.00
+11:43:46.505 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1183.0 y=438.0 rx=10.00 ry=21.00
+11:43:46.530 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1197.0 y=475.0 rx=6.00 ry=18.00
+11:43:46.530 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1197.0 y=475.0 rx=6.00 ry=18.00
+11:43:46.546 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1192.0 y=511.0 rx=-6.00 ry=17.00
+11:43:46.547 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1192.0 y=511.0 rx=-6.00 ry=17.00
+11:43:46.572 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1161.0 y=531.0 rx=-18.00 ry=7.00
+11:43:46.572 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1161.0 y=531.0 rx=-18.00 ry=7.00
+11:43:46.596 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1137.0 y=532.0 rx=-24.00 ry=1.00
+11:43:46.597 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1137.0 y=532.0 rx=-24.00 ry=1.00
+11:43:46.605 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1077.0 y=515.0 rx=-31.00 ry=-12.00
+11:43:46.605 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1077.0 y=515.0 rx=-31.00 ry=-12.00
+11:43:46.630 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=998.0 y=463.0 rx=-38.00 ry=-26.00
+11:43:46.630 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=998.0 y=463.0 rx=-38.00 ry=-26.00
+11:43:46.646 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=964.0 y=445.0 rx=-34.00 ry=-18.00
+11:43:46.647 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=964.0 y=445.0 rx=-34.00 ry=-18.00
+11:43:46.655 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=935.0 y=435.0 rx=-29.00 ry=-10.00
+11:43:46.655 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=935.0 y=435.0 rx=-29.00 ry=-10.00
+11:43:46.671 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=889.0 y=439.0 rx=-20.00 ry=6.00
+11:43:46.672 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=889.0 y=439.0 rx=-20.00 ry=6.00
+11:43:46.696 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=853.0 y=482.0 rx=-17.00 ry=26.00
+11:43:46.696 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=853.0 y=482.0 rx=-17.00 ry=26.00
+11:43:46.721 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=838.0 y=559.0 rx=-4.00 ry=44.00
+11:43:46.721 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=838.0 y=559.0 rx=-4.00 ry=44.00
+11:43:46.738 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=857.0 y=635.0 rx=13.00 ry=34.00
+11:43:46.739 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=857.0 y=635.0 rx=13.00 ry=34.00
+11:43:46.763 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=898.0 y=672.0 rx=24.00 ry=14.00
+11:43:46.763 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=898.0 y=672.0 rx=24.00 ry=14.00
+11:43:46.788 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=955.0 y=674.0 rx=30.00 ry=-4.00
+11:43:46.788 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=955.0 y=674.0 rx=30.00 ry=-4.00
+11:43:46.804 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=991.0 y=662.0 rx=36.00 ry=-12.00
+11:43:46.805 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=991.0 y=662.0 rx=36.00 ry=-12.00
+11:43:46.813 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1038.0 y=641.0 rx=47.00 ry=-21.00
+11:43:46.813 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1038.0 y=641.0 rx=47.00 ry=-21.00
+11:43:46.830 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1134.0 y=595.0 rx=49.00 ry=-23.00
+11:43:46.830 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1134.0 y=595.0 rx=49.00 ry=-23.00
+11:43:46.855 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=1 x=1238.0 y=551.0 rx=54.00 ry=-21.00
+11:43:46.855 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=1 x=1238.0 y=551.0 rx=54.00 ry=-21.00
+11:43:46.867 M/disp.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1238.0 y=551.0 rx=0.00 ry=0.00
+11:43:46.868 M/act.gen act=0x2 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1238.0 y=551.0 rx=0.00 ry=0.00
+11:43:46.869 M/disp.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=0 hist=0 x=1238.0 y=551.0 rx=0.00 ry=0.00
+11:43:46.869 M/act.gen act=0x1 actBtn=0x0 btn=0x0 src=0x100008 dev=24 n=1 cap=1 acc=1 hist=0 x=1238.0 y=551.0 rx=0.00 ry=0.00

@@ -9,6 +9,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import android.view.InputDevice
+import android.view.MotionEvent
 import android.widget.Toast
 import java.io.File
 import java.text.SimpleDateFormat
@@ -32,17 +33,60 @@ import java.util.Locale
 /// needed; pre-29 falls back to the app-private cacheDir copy and the
 /// toast surfaces that path instead.
 object Diagnostic {
-    private const val RING_CAPACITY = 500
+    // Sized to hold ~20s of 100Hz captured-pointer motion plus the
+    // transition/lifecycle lines around it. Tab S11 reporters move the
+    // mouse for ~10s then export, so a single repro fits comfortably.
+    private const val RING_CAPACITY = 2000
 
     private val ring = ArrayDeque<String>()
 
-    @JvmStatic
-    fun record(tag: String, level: Char, message: String) {
-        val line = "${timestamp()} $level/$tag: $message"
+    private fun addLine(line: String) {
         synchronized(ring) {
             if (ring.size >= RING_CAPACITY) ring.pollFirst()
             ring.addLast(line)
         }
+    }
+
+    @JvmStatic
+    fun record(tag: String, level: Char, message: String) {
+        addLine("${timestamp()} $level/$tag: $message")
+    }
+
+    /// Structured arrival probe. Captures every shape-bit we'd need to
+    /// distinguish "framework didn't route", "framework routed but
+    /// source mask mismatched", "captured but historical samples
+    /// dropped", and similar failure modes. `stage` is a short tag
+    /// like "act.gen" (Activity.onGenericMotionEvent) or "act.touch"
+    /// (Activity.dispatchTouchEvent) so we can see which dispatch hook
+    /// fired. `accepted` reflects whether this event made it past our
+    /// source-bit gate into the captured-pointer JNI bridge.
+    @JvmStatic
+    fun recordMotion(stage: String, event: MotionEvent, hasCapture: Boolean, accepted: Boolean) {
+        val sb = StringBuilder(160)
+        sb.append(timestamp()).append(" M/").append(stage)
+            .append(" act=0x").append(event.actionMasked.toString(16))
+            .append(" actBtn=0x").append(event.actionButton.toString(16))
+            .append(" btn=0x").append(event.buttonState.toString(16))
+            .append(" src=0x").append(event.source.toString(16))
+            .append(" dev=").append(event.deviceId)
+            .append(" n=").append(event.pointerCount)
+            .append(" cap=").append(if (hasCapture) "1" else "0")
+            .append(" acc=").append(if (accepted) "1" else "0")
+            .append(" hist=").append(event.historySize)
+        if (event.pointerCount > 0) {
+            sb.append(" x=").append("%.1f".format(event.x))
+                .append(" y=").append("%.1f".format(event.y))
+                .append(" rx=").append("%.2f".format(event.getAxisValue(MotionEvent.AXIS_RELATIVE_X)))
+                .append(" ry=").append("%.2f".format(event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y)))
+        }
+        addLine(sb.toString())
+    }
+
+    /// Binary state transition (capture/focus/lifecycle). One line per
+    /// edge change; do not call on every event.
+    @JvmStatic
+    fun recordTransition(kind: String, value: String) {
+        addLine("${timestamp()} T/$kind=$value")
     }
 
     @JvmStatic
@@ -124,8 +168,25 @@ object Diagnostic {
         sb.appendLine("brand:        ${Build.BRAND}")
         sb.appendLine("release:      Android ${Build.VERSION.RELEASE}")
         sb.appendLine("sdk:          ${Build.VERSION.SDK_INT}")
-        sb.appendLine("fingerprint:  ${Build.FINGERPRINT}")
+        sb.appendLine("fingerprint:  ${redactFingerprint(Build.FINGERPRINT)}")
         sb.appendLine()
+    }
+
+    /// Samsung / AOSP fingerprint shape:
+    ///   <brand>/<product>/<device>:<release>/<buildid>/<incremental>:<type>/<tags>
+    /// The buildid + incremental segments encode the carrier / region
+    /// variant of the OEM ROM (e.g. `gts11wifi` vs `gts11vzw`), so
+    /// they leak geography. Brand/product/device/release identify the
+    /// hardware class — what we actually need — so keep the first
+    /// `release:` segment and drop everything past the second `/`.
+    private fun redactFingerprint(fp: String): String {
+        val firstSlash = fp.indexOf('/')
+        if (firstSlash < 0) return "<redacted>"
+        val secondSlash = fp.indexOf('/', firstSlash + 1)
+        if (secondSlash < 0) return "<redacted>"
+        val thirdSlash = fp.indexOf('/', secondSlash + 1)
+        if (thirdSlash < 0) return fp
+        return fp.substring(0, thirdSlash) + "/<redacted>"
     }
 
     private fun appendAppSection(sb: StringBuilder, context: Context) {
@@ -153,7 +214,21 @@ object Diagnostic {
             } else {
                 for (id in im.inputDeviceIds) {
                     val d = im.getInputDevice(id) ?: continue
-                    sb.appendLine("- id=$id name=\"${d.name}\"")
+                    val displayName = if (d.vendorId == 0 && d.productId == 0) {
+                        // Internal kernel devices (sec_touchpad, gpio-keys,
+                        // hall_*, etc.) report vendor=0 product=0; the
+                        // driver name is the only handle and isn't user-
+                        // settable, so keep verbatim.
+                        "\"${d.name}\""
+                    } else {
+                        // External paired devices: vendor/product hex
+                        // already identifies the model via the public
+                        // USB ID database, so the literal name is
+                        // redundant info that adds PII risk (users
+                        // sometimes name BT devices after themselves).
+                        "<redacted:${redactDeviceName(d.name)}>"
+                    }
+                    sb.appendLine("- id=$id name=$displayName")
                     sb.appendLine("    vendorId=0x${d.vendorId.toString(16)} productId=0x${d.productId.toString(16)}")
                     sb.appendLine("    sources=0x${d.sources.toString(16)} (${sourcesToNames(d.sources)})")
                     sb.appendLine("    keyboardType=${keyboardTypeName(d.keyboardType)} isVirtual=${d.isVirtual} isExternal=${d.isExternal}")
@@ -204,5 +279,19 @@ object Diagnostic {
         InputDevice.KEYBOARD_TYPE_NON_ALPHABETIC -> "NON_ALPHABETIC"
         InputDevice.KEYBOARD_TYPE_ALPHABETIC -> "ALPHABETIC"
         else -> "type=$kt"
+    }
+
+    /// Hashes a user-paired device name while keeping the first/last
+    /// two characters so reporters can still cross-reference reports
+    /// of the same gear ("Lo***se" matches across two Logi M650 dumps
+    /// without leaking the literal string). 8-hex-char stable digest
+    /// of the full name lets us tell apart "Logi M650 Mouse" from
+    /// "Logi M650 Keyboard" if a reporter has both.
+    private fun redactDeviceName(name: String): String {
+        if (name.isEmpty()) return "[empty]"
+        val prefix = name.take(2)
+        val suffix = name.takeLast(2)
+        val hash = name.hashCode().toUInt().toString(16).padStart(8, '0')
+        return "$prefix***$suffix[$hash]"
     }
 }

@@ -11,7 +11,8 @@
 //! via [`register_android_app`], then [`export`] dispatches through
 //! the activity's `exportDiagnostic(String)` instance method.
 
-use std::sync::OnceLock;
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock};
 
 use android_activity::AndroidApp;
 use anyhow::{Context as _, Result, anyhow};
@@ -21,6 +22,37 @@ static ANDROID_APP: OnceLock<AndroidApp> = OnceLock::new();
 
 pub fn register_android_app(app: AndroidApp) {
     let _ = ANDROID_APP.set(app);
+}
+
+/// Rust-side counterpart to Kotlin's `Diagnostic.ring`. Anything
+/// recorded here is drained into the dump's `runtime state` section
+/// at export time. Keeping it separate from the Kotlin ring avoids a
+/// JNI hop on every captured-pointer arrival (motion events can hit
+/// ~200Hz during a sustained trackpad drag); the cross-boundary cost
+/// is paid once at export, not per-event.
+///
+/// Sized to mirror Kotlin's capacity so a single repro window fits
+/// on each side.
+const RUST_RING_CAPACITY: usize = 2000;
+static RUST_RING: Mutex<Option<VecDeque<String>>> = Mutex::new(None);
+
+pub(crate) fn record(line: String) {
+    let Ok(mut guard) = RUST_RING.lock() else { return };
+    let ring = guard.get_or_insert_with(VecDeque::new);
+    if ring.len() >= RUST_RING_CAPACITY {
+        ring.pop_front();
+    }
+    ring.push_back(line);
+}
+
+fn snapshot_rust_ring() -> Vec<String> {
+    let Ok(guard) = RUST_RING.lock() else {
+        return Vec::new();
+    };
+    guard
+        .as_ref()
+        .map(|ring| ring.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Compose Rust-side state extras and hand off to Kotlin to build the
@@ -62,6 +94,15 @@ fn compose_runtime_extras() -> String {
         "gpui_android_pkg_version: {}\n",
         env!("CARGO_PKG_VERSION")
     ));
+    let lines = snapshot_rust_ring();
+    if !lines.is_empty() {
+        s.push_str(&format!("\nrust_ring ({} lines):\n", lines.len()));
+        for line in lines {
+            s.push_str("  ");
+            s.push_str(&line);
+            s.push('\n');
+        }
+    }
     s
 }
 
