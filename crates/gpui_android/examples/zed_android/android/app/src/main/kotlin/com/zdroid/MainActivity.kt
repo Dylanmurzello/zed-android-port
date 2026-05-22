@@ -581,6 +581,13 @@ class MainActivity : GameActivity(), ImeHost {
     /// pointer-capture acquire.
     private var cursorOverlay: CursorSurfaceControl? = null
 
+    /// Whether `View.setOnCapturedPointerListener` is installed on the
+    /// GameActivity SurfaceView. Tracked because the listener must be
+    /// installed after the SurfaceView is attached to the window
+    /// (otherwise `findSurfaceView` returns null) and we don't want to
+    /// re-install on every focus cycle.
+    private var capturedPointerListenerInstalled: Boolean = false
+
     /// Desktop-classic auto-hide: cursor disappears on the first
     /// keystroke and reappears on any pointer motion. Tracked so we
     /// only toggle visibility on edges, not on every key.
@@ -718,6 +725,54 @@ class MainActivity : GameActivity(), ImeHost {
             .toInt()
             .coerceAtLeast(16)
         cursorOverlay = CursorSurfaceControl(this, surfaceView, displaySize)
+    }
+
+    /// Install `View.setOnCapturedPointerListener` on the GameActivity
+    /// SurfaceView. Captured pointer events in canonical AOSP route
+    /// through `View.dispatchCapturedPointerEvent` on the focused View,
+    /// NOT through `Activity.onGenericMotionEvent`. The legacy Samsung
+    /// Activity-level bubble-up path is honored on older One UI builds
+    /// (Tab S9 / One UI 7) but does NOT fire on One UI 8 + Android 16
+    /// (Tab S11 confirmed empty dump with capture granted). Installing
+    /// the canonical listener fixes Tab S11 and stays compatible with
+    /// the older path because the View listener returning `true`
+    /// consumes the event before any Activity-level dispatch.
+    ///
+    /// Lazy install: SurfaceView is attached after `onCreate`, so
+    /// `findSurfaceView` would return null if called too early. Call
+    /// from `onWindowFocusChanged(true)` which fires after the View
+    /// tree is fully laid out. Idempotent via `capturedPointerListenerInstalled`.
+    ///
+    /// Why this doesn't re-trigger the Samsung One UI accessibility
+    /// tint regression: the previous View-listener implementation
+    /// flipped `isFocusableInTouchMode=true` on the SurfaceView to
+    /// satisfy the focus requirement for capture. That focus-state
+    /// manipulation is what triggered the tint. Here we install the
+    /// listener WITHOUT touching focus state — GameActivity's
+    /// SurfaceView is focused by default at the framework level,
+    /// which is sufficient for captured-pointer routing.
+    private fun ensureCapturedPointerListener() {
+        if (capturedPointerListenerInstalled) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val surfaceView = findSurfaceView(window.decorView) ?: return
+        surfaceView.setOnCapturedPointerListener { _, event ->
+            val source = event.source
+            val hasCapture = window.decorView.hasPointerCapture()
+            val isMouseRel = source and InputDevice.SOURCE_MOUSE_RELATIVE != 0
+            val isTouchpad = source and InputDevice.SOURCE_TOUCHPAD != 0
+            val isMouse = source and InputDevice.SOURCE_MOUSE != 0
+            val accepted = (isMouseRel || isTouchpad || isMouse) && hasCapture
+            Diagnostic.recordMotion("view.cap", event, hasCapture, accepted)
+            if (accepted) {
+                handleCapturedEvent(event)
+                true
+            } else {
+                false
+            }
+        }
+        capturedPointerListenerInstalled = true
+        Diagnostic.recordTransition("view.cap.installed", "true")
+        Log.i(TAG_CAPTURE, "View-level OnCapturedPointerListener installed on SurfaceView")
     }
 
     private fun visibleBounds(): Pair<Float, Float> {
@@ -960,6 +1015,10 @@ class MainActivity : GameActivity(), ImeHost {
         super.onWindowFocusChanged(hasFocus)
         Diagnostic.recordTransition("focus", hasFocus.toString())
         if (hasFocus) {
+            // Install the View-level captured-pointer listener now that
+            // the SurfaceView is attached and the window has focus.
+            // Idempotent: a no-op on subsequent focus regains.
+            ensureCapturedPointerListener()
             if (hasIndirectPointer()) {
                 Log.i(TAG_CAPTURE, "requestPointerCapture()")
                 window.decorView.requestPointerCapture()
