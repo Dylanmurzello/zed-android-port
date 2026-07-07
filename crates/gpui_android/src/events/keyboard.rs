@@ -117,13 +117,18 @@ fn build_keystroke(code: Keycode, mut modifiers: Modifiers) -> Keystroke {
         let key_char = matches!(code, Keycode::Space).then(|| " ".to_string());
         (named.to_string(), key_char)
     } else if let Some(ch) = lowercased_key(code) {
-        let key = ch.to_string();
         let typed = if modifiers.shift {
             apply_shift(ch)
         } else {
             ch
         };
-        (key, Some(typed.to_string()))
+        // X11 resolves `key` through the shift level: shift-8 IS "*". Leaving
+        // `key` as the unshifted char makes symbol bindings unmatchable and
+        // collides with the digit's own binding (vim's "*" search lost to
+        // "8" = vim::Number, which wins on later-added precedence). Letters
+        // keep the lowercase key; their shift survives the drop below.
+        let key = if typed.is_ascii_alphabetic() { ch } else { typed };
+        (key.to_string(), Some(typed.to_string()))
     } else {
         (format!("{code:?}").to_lowercase(), None)
     };
@@ -259,5 +264,64 @@ fn apply_shift(ch: char) -> char {
         '/' => '?',
         '`' => '~',
         _ => ch.to_ascii_uppercase(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ACTION_DOWN: i32 = 0;
+    const KEYCODE_8: u32 = 15;
+    const KEYCODE_A: u32 = 29;
+    const KEYCODE_TAB: u32 = 61;
+    const KEYCODE_MINUS: u32 = 69;
+    const META_SHIFT: u32 = 0x41; // META_SHIFT_ON | META_SHIFT_LEFT_ON
+    const META_CTRL: u32 = 0x3000; // META_CTRL_ON | META_CTRL_LEFT_ON
+
+    fn key_down(keycode: u32, meta: u32) -> Keystroke {
+        match translate_extra_key_event(ACTION_DOWN, keycode, meta, 0) {
+            Some(PlatformInput::KeyDown(event)) => event.keystroke,
+            other => panic!("expected KeyDown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shifted_symbol_resolves_to_symbol_key() {
+        let keystroke = key_down(KEYCODE_8, META_SHIFT);
+        assert_eq!(keystroke.key, "*");
+        assert_eq!(keystroke.key_char.as_deref(), Some("*"));
+        assert_eq!(keystroke.modifiers, Modifiers::default());
+    }
+
+    #[test]
+    fn unshifted_digit_stays_digit() {
+        let keystroke = key_down(KEYCODE_8, 0);
+        assert_eq!(keystroke.key, "8");
+        assert_eq!(keystroke.key_char.as_deref(), Some("8"));
+        assert_eq!(keystroke.modifiers, Modifiers::default());
+    }
+
+    #[test]
+    fn shifted_letter_keeps_lowercase_key_and_shift() {
+        let keystroke = key_down(KEYCODE_A, META_SHIFT);
+        assert_eq!(keystroke.key, "a");
+        assert_eq!(keystroke.key_char.as_deref(), Some("A"));
+        assert!(keystroke.modifiers.shift);
+    }
+
+    #[test]
+    fn ctrl_survives_shift_symbol_resolution() {
+        let keystroke = key_down(KEYCODE_MINUS, META_SHIFT | META_CTRL);
+        assert_eq!(keystroke.key, "_");
+        assert!(keystroke.modifiers.control);
+        assert!(!keystroke.modifiers.shift);
+    }
+
+    #[test]
+    fn shifted_named_key_keeps_shift() {
+        let keystroke = key_down(KEYCODE_TAB, META_SHIFT);
+        assert_eq!(keystroke.key, "tab");
+        assert!(keystroke.modifiers.shift);
     }
 }
