@@ -2,7 +2,7 @@
 //! app-private path, decoupled from the Termux-flavored `$PREFIX`.
 //!
 //! The askpass crate (`crates/askpass/src/askpass.rs`) sets `SSH_ASKPASS`
-//! to a generated script that execs whatever path `askpass::set_program`
+//! to a generated script that execs whatever path `askpass::set_askpass_program`
 //! registered. Desktop platforms use `current_exe()` (the zed binary
 //! itself, with `--askpass=<sock>`). On Android `current_exe()` is
 //! `/system/bin/app_process64` (the Zygote launcher hosting the DEX
@@ -41,7 +41,7 @@ const ASSET_NAME: &str = "zed-askpass-helper";
 
 /// Ensure the askpass helper is present at `<data_path>/<ASSET_NAME>`
 /// and matches the APK-bundled asset. Returns the absolute path to the
-/// installed binary so the caller can hand it to `askpass::set_program`.
+/// installed binary so the caller can hand it to `askpass::set_askpass_program`.
 pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<PathBuf> {
     // One-time sweep: pre-Phase 2 of the Termux-divestment refactor
     // installed this same binary at `$PREFIX/bin/zed-askpass-helper`

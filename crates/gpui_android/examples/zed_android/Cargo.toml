@@ -32,7 +32,6 @@ debug_adapter_extension = { path = "../../../debug_adapter_extension" }
 extension = { path = "../../../extension" }
 extension_host = { path = "../../../extension_host" }
 extensions_ui = { path = "../../../extensions_ui" }
-git_graph = { path = "../../../git_graph" }
 git_ui = { path = "../../../git_ui" }
 language_extension = { path = "../../../language_extension" }
 go_to_line = { path = "../../../go_to_line" }
@@ -101,6 +100,23 @@ theme_settings = { path = "../../../theme_settings" }
 ui = { path = "../../../ui" }
 menu = { path = "../../../menu" }
 auto_update = { path = "../../../auto_update" }
+
+# Mirror of the root workspace's [patch.crates-io]. Cargo only honors
+# [patch] from the current workspace root, and this example is its own
+# workspace — without the mirror, every zed-industries fork here resolves
+# from crates.io instead, which only works while the upstream fork happens
+# to stay API-compatible. Keep this table in sync with the root Cargo.toml
+# on every upstream merge (UPSTREAM_MERGE.md step).
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
+calloop = { git = "https://github.com/zed-industries/calloop" }
+livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
+libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
+notify = { git = "https://github.com/zed-industries/notify", rev = "0890bbb8ca40a4b5d1f67031698dd7918b37d991" }
+notify-types = { git = "https://github.com/zed-industries/notify", rev = "0890bbb8ca40a4b5d1f67031698dd7918b37d991" }
+webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
 
 # Debug builds embed unwind/DWARF tables that overflow llvm-strip's ELF
 # parser at our binary size (2GB+). Drop debug info on Android — backtraces

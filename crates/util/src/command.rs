@@ -3,8 +3,6 @@ use std::ffi::OsStr;
 use std::path::Path;
 #[cfg(target_os = "android")]
 use std::path::PathBuf;
-#[cfg(target_os = "android")]
-use std::sync::OnceLock;
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -14,17 +12,6 @@ pub use darwin::{Child, Command, Stdio};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000_u32;
-
-/// Path to the `zd-exec` binary the bridge dispatches through. zd-exec
-/// itself reads `zd-runtime.toml`, picks the active adapter, and routes
-/// the spawn into the chroot / bootstrap / external-Termux world. We
-/// invoke it by short name so kernel PATH lookup finds the
-/// `$PREFIX/zd-runtime/zd-exec` symlink first (matching how every other
-/// PATH-resolved spawn enters the bridge) instead of hardcoding
-/// `$PREFIX/bin/zd-exec` — short name keeps this lib free of app-package
-/// assumptions.
-#[cfg(target_os = "android")]
-const ZD_EXEC_PROGRAM: &str = "zd-exec";
 
 /// `chdir(2)` in the forked subprocess fails with ENOENT for paths
 /// rooted at `/storage/emulated/`, `/sdcard/`, or `/mnt/runtime/` even
@@ -73,178 +60,20 @@ fn android_safe_cwd(dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// Active adapter's host-side environment root. Set once at boot from
-/// `lib.rs` (after `RuntimeProvider::environment_root()` is known); any
-/// absolute-path spawn whose program lives under this root is rewritten
-/// to route through `zd-exec` so it lands inside the right userland.
-///
-/// `OnceLock` so the slot is initialized exactly once and reads are
-/// lock-free for every subsequent `Command::new`.
-#[cfg(target_os = "android")]
-static ENVIRONMENT_ROOT: OnceLock<PathBuf> = OnceLock::new();
+pub use gpui_util::new_std_command;
 
-/// Called from `lib.rs` after the runtime adapter is resolved.
-/// Subsequent `Command::new` calls will detect absolute paths under
-/// `root` and rewrite them to `zd-exec <abs_path> <args…>`.
-///
-/// Idempotent in spirit but enforced by `OnceLock`: a second call after
-/// the slot is set is a no-op. Don't try to "switch adapter at runtime"
-/// by re-registering — adapter switches require a restart so paths /
-/// settings / extensions get re-read from the new root.
+/// The zd-exec spawn bridge itself (env-root routing, shebang rewrite,
+/// boot-time root registration) lives in `gpui_util` so the sync
+/// `new_std_command` path upstream re-exports above carries the Android
+/// rewrite too. Re-exported here so app-side callers keep addressing
+/// the bridge through `util::command`.
 #[cfg(target_os = "android")]
-pub fn register_environment_root(root: PathBuf) {
-    if ENVIRONMENT_ROOT.set(root).is_err() {
-        log::debug!(
-            "util::command: environment_root already registered; ignoring re-register"
-        );
-    }
-}
+pub use gpui_util::register_environment_root;
+#[cfg(target_os = "android")]
+use gpui_util::{ZD_EXEC_PROGRAM, detect_env_shebang, env_root_program_path};
 
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
-}
-
-#[cfg(target_os = "windows")]
-pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    use std::os::windows::process::CommandExt;
-
-    let mut command = std::process::Command::new(program);
-    command.creation_flags(CREATE_NO_WINDOW);
-    command
-}
-
-#[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
-pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    std::process::Command::new(program)
-}
-
-#[cfg(target_os = "android")]
-pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    // Same env_root bridge + shebang fixup as `Command::new` below;
-    // mirrored here so synchronous spawn sites get the rewrite too.
-    // See those fns for the full rationale.
-    let program = program.as_ref();
-    if let Some(program_path) = env_root_program_path(program) {
-        let mut cmd = std::process::Command::new(ZD_EXEC_PROGRAM);
-        cmd.arg(program_path);
-        return cmd;
-    }
-    match detect_env_shebang(program) {
-        Some((interp, script)) => {
-            let mut cmd = std::process::Command::new(interp);
-            cmd.arg(script);
-            cmd
-        }
-        None => std::process::Command::new(program),
-    }
-}
-
-/// Android-only env-root bridge helper.
-///
-/// Zed-the-app runs on Android's bionic libc (the only libc the platform
-/// linker loads for APK processes), but every spawn target that lives
-/// under the active adapter's `environment_root()` is meant to run in
-/// that adapter's userland — a glibc rootfs for the chroot adapter, a
-/// Termux-flavored bionic prefix for the bootstrap adapter, etc. If we
-/// let the host kernel exec a chroot-side absolute path directly, the
-/// process either fails because the binary's `PT_INTERP` (`/lib/ld-
-/// linux-aarch64.so.1`) doesn't exist on bionic, or because the script's
-/// shebang resolves against a non-existent host `/usr/bin/env`. Either
-/// way the user sees a bare "No such file or directory" error and the
-/// LSP / language tool silently dies.
-///
-/// This helper detects the case: program is an absolute path that lives
-/// strictly under the registered environment root. When it matches we
-/// return `Some(program_path)` and the caller rewrites the spawn to
-/// `zd-exec <program_path> <original_args…>`. `zd-exec` then reads
-/// `zd-runtime.toml`, picks the active adapter, and dispatches the
-/// spawn into the right userland — chroot users land inside the chroot
-/// where ld-linux exists, bootstrap users land in their prefix, etc.
-///
-/// Cost: one read of a `OnceLock` plus a `starts_with` byte-compare on
-/// every `Command::new` invocation. Cache-hot, < 1µs.
-///
-/// Returns `None` when `register_environment_root` was never called
-/// (e.g. during init before adapter is picked), when `program` is a
-/// relative path / short name (kernel PATH lookup handles those via the
-/// `zd-runtime/<name>` symlinks already), or when the path doesn't live
-/// under env_root (system binaries like `/system/bin/sh` keep their
-/// native exec semantics).
-#[cfg(target_os = "android")]
-fn env_root_program_path(program: &OsStr) -> Option<PathBuf> {
-    let root = ENVIRONMENT_ROOT.get()?;
-    let path = Path::new(program);
-    if !path.is_absolute() {
-        return None;
-    }
-    // `starts_with` matches on full path components, so a literal
-    // prefix like `<root>foo` won't false-match against `<root>/foo`.
-    if path.starts_with(root) {
-        Some(path.to_path_buf())
-    } else {
-        None
-    }
-}
-
-/// Android-only shebang rewrite helper.
-///
-/// On Android the Zed app process lives in bionic's filesystem
-/// sandbox. There is no `/usr/bin/env` on host — it lives only
-/// inside the user's chroot / bootstrap. So a script whose first
-/// line is `#!/usr/bin/env python3` (the standard portable shebang)
-/// can't be exec'd directly: kernel exec reads the shebang, tries
-/// to launch `/usr/bin/env`, ENOENT, the whole spawn fails before
-/// PATH lookup ever happens.
-///
-/// We rescue this by detecting the pattern at `Command::new` time:
-/// if the program is an absolute path to a regular file whose first
-/// line is `#!/usr/bin/env <interp>`, return `(interp, path_to_script)`.
-/// The caller then builds the Command as
-/// `Command::new(interp).arg(script_path)` — the interpreter is a
-/// SHORT name, kernel PATH lookup finds `zd-runtime/<interp>`, that
-/// re-execs into `zd-exec`, the active runtime adapter dispatches
-/// the spawn into the right environment (chroot / bootstrap), and
-/// the script runs with its interpreter resolved against the
-/// adapter's `/usr/bin/python3` (or whichever) inside that env.
-///
-/// Returns `None` for: relative-path programs (PATH lookup handles
-/// them on its own), non-shebang files (ELF binaries), shebangs
-/// other than `#!/usr/bin/env <X>` (rare; would need different
-/// handling), and any I/O failure (we silently fall through to the
-/// stock spawn behavior — the original error surfaces unchanged).
-///
-/// Cost: one `open(2)` + first-line read at every `Command::new`.
-/// On a freshly-mmaped filesystem this is microseconds; for already
-/// hot pages it's a couple syscalls. LSP spawn is a once-per-session
-/// event, so even a few hundred microseconds is invisible.
-#[cfg(target_os = "android")]
-fn detect_env_shebang(program: &OsStr) -> Option<(std::ffi::OsString, std::path::PathBuf)> {
-    use std::io::{BufRead, BufReader, Read};
-
-    let path = Path::new(program);
-    if !path.is_absolute() {
-        return None;
-    }
-    let file = std::fs::File::open(path).ok()?;
-    // Cap the read at a reasonable shebang length (256 bytes) so we
-    // never accidentally slurp a huge binary into memory just to find
-    // out it doesn't have a shebang.
-    let mut reader = BufReader::new(file.take(256));
-    let mut first = String::new();
-    reader.read_line(&mut first).ok()?;
-    let first = first.trim_end();
-
-    let rest = first.strip_prefix("#!/usr/bin/env ")?;
-    // `#!/usr/bin/env -S python3 -u` (rare GNU extension) leaves the
-    // first whitespace-split token as `-S`; ignore those forms — we'd
-    // need full shebang arg parsing to handle them correctly and the
-    // chrooted env's kernel will itself handle them if we route there.
-    let interp = rest.split_whitespace().next()?;
-    if interp.starts_with('-') {
-        return None;
-    }
-
-    Some((std::ffi::OsString::from(interp), path.to_path_buf()))
 }
 
 #[cfg(not(target_os = "macos"))]

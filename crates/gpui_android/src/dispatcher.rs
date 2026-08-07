@@ -1,16 +1,12 @@
-use std::{
-    mem::MaybeUninit,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{mem::MaybeUninit, thread, time::Duration};
 
 use android_activity::{AndroidApp, AndroidAppWaker};
 use calloop::{EventLoop, channel::Sender, timer::TimeoutAction};
 use util::ResultExt;
 
 use gpui::{
-    GLOBAL_THREAD_TIMINGS, PlatformDispatcher, Priority, PriorityQueueReceiver,
-    PriorityQueueSender, RunnableVariant, TaskTiming, ThreadTaskTimings, profiler,
+    PlatformDispatcher, Priority, PriorityQueueReceiver, PriorityQueueSender, RunnableVariant,
+    profiler,
 };
 
 const MIN_THREADS: usize = 2;
@@ -49,20 +45,11 @@ impl AndroidDispatcher {
                     .name(format!("Worker-{i}"))
                     .spawn(move || {
                         for runnable in receiver.iter() {
-                            let start = Instant::now();
                             let location = runnable.metadata().location;
-                            let mut timing = TaskTiming {
-                                location,
-                                start,
-                                end: None,
-                            };
-                            profiler::add_task_timing(timing);
-
+                            let spawned = runnable.metadata().spawned;
+                            profiler::update_running_task(spawned, location);
                             runnable.run();
-
-                            let end = Instant::now();
-                            timing.end = Some(end);
-                            profiler::add_task_timing(timing);
+                            profiler::save_task_timing();
                         }
                     })
                     .unwrap()
@@ -87,20 +74,11 @@ impl AndroidDispatcher {
                                     calloop::timer::Timer::from_duration(timer.duration),
                                     move |_, _, _| {
                                         if let Some(runnable) = runnable.take() {
-                                            let start = Instant::now();
                                             let location = runnable.metadata().location;
-                                            let mut timing = TaskTiming {
-                                                location,
-                                                start,
-                                                end: None,
-                                            };
-                                            profiler::add_task_timing(timing);
-
+                                            let spawned = runnable.metadata().spawned;
+                                            profiler::update_running_task(spawned, location);
                                             runnable.run();
-                                            let end = Instant::now();
-
-                                            timing.end = Some(end);
-                                            profiler::add_task_timing(timing);
+                                            profiler::save_task_timing();
                                         }
                                         TimeoutAction::Drop
                                     },
@@ -129,15 +107,6 @@ impl AndroidDispatcher {
 }
 
 impl PlatformDispatcher for AndroidDispatcher {
-    fn get_all_timings(&self) -> Vec<ThreadTaskTimings> {
-        let global_timings = GLOBAL_THREAD_TIMINGS.lock();
-        ThreadTaskTimings::convert(&global_timings)
-    }
-
-    fn get_current_thread_timings(&self) -> ThreadTaskTimings {
-        gpui::profiler::get_current_thread_task_timings()
-    }
-
     fn is_main_thread(&self) -> bool {
         thread::current().id() == self.main_thread_id
     }

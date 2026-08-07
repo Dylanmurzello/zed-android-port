@@ -140,7 +140,7 @@ impl NoexecMoveModal {
         {
             let toast_for_show = toast.clone();
             mw.update(cx, |mw, _window, cx| {
-                let active_ws = mw.active_workspace().clone();
+                let active_ws = mw.workspace().clone();
                 active_ws.update(cx, |ws, cx| ws.toggle_status_toast(toast_for_show, cx));
             })
             .ok();

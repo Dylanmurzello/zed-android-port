@@ -64,3 +64,8 @@ crates/docs_preprocessor/actions.json
 *.aab
 release-notes-draft*.md
 /release-staging/
+
+# NixOS integration test state
+.nixos-test-history
+
+.local*

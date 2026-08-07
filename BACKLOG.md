@@ -198,3 +198,19 @@ The `android-activity` crate (which we use) wraps a subset of GameActivity APIs.
 ## Other deferred concerns
 
 (add new sections here as they come up; keep each one self-contained with what / why / what's-needed-to-resolve)
+
+## Post-2026-08 upstream-merge follow-ups
+
+The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parallel APIs and deferred cleanups. None block shipping; all shrink future merge cost or unlock upstream features.
+
+**Converge onto upstream's official mobile API surface.** Upstream gpui now ships `PlatformWindow::show_soft_keyboard`/`hide_soft_keyboard`/`insets()`/`on_insets_changed`/`set_back_handler`, `Platform::on_app_lifecycle`/`on_memory_warning`, `PlatformInput::Touch` + `gestures()`, and `text_input_state_changed`. The fork's private inventions (`toggle_soft_keyboard`, `soft_keyboard_visible`, `last_input_was_touch`, `trackpad_mode_enabled`, `set_drag_active`, the touch.rs mouse-synthesis) coexist with them today with zero name collisions. Re-expressing ours on top of theirs deletes fork hunks in ~20 upstream-hot call sites (ui/scrollbar, workspace panes/docks, editor element, terminal_view) that will otherwise re-conflict every merge. Also evaluate `Application::run_embedded` as a replacement for the custom android run-loop shim, and upstream's `ThreadedDispatcher` as a replacement for the hand-rolled calloop worker pool in `gpui_android/src/dispatcher.rs`.
+
+**Accessibility tree.** `PlatformWindow::a11y_init`/`a11y_tree_update` defaults mean Android currently reports nothing to AccessKit. Wire it to Android's accessibility APIs (upstream: `crates/gpui/src/window/a11y.rs`).
+
+**Audit new git CLI spawn sites.** git2 is gone; `crates/git/src/repository.rs` (+3.3k) and `project/src/git_store.rs` (+3.2k) now spawn `git` per operation through the zd-exec router (verified working on-device for status/trust). Sweep for spawn sites that assume desktop git semantics (pager, hooks, credential helpers) under the runtime's git.
+
+**`sandbox` crate on Android.** New non-optional dep of the `zed` binary path; heavy backends are cfg-gated off android and it compiled clean, but its runtime fallback arm has never been exercised on-device beyond boot. Check what agent tool-calls hit it.
+
+**`spawn_when_idle` support.** New defaulted `PlatformDispatcher` methods (`dispatch_on_main_thread_when_idle`, `idle_time_remaining`) are unimplemented on Android, so `BackgroundExecutor::spawn_when_idle` degrades to never-idle. Fine today; revisit if upstream starts scheduling real work through it.
+
+**`util::command` bridge doc.** The zd-exec spawn bridge (`new_std_command` android arm, env-root routing, shebang rewrite) moved into `crates/gpui_util` so upstream's `pub use gpui_util::new_std_command` re-export carries the rewrite for sync spawn sites too. Update the workarounds index entry that still points at util/command.rs internals.

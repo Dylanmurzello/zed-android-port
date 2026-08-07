@@ -21,7 +21,7 @@
 //! not Dalvik / not app_process) that does the same socket-IPC dance the
 //! askpass crate's `main()` does on desktop. It gets bundled in the APK
 //! as an asset, extracted to `$PREFIX/bin/zed-askpass-helper` at boot,
-//! and wired in via `askpass::set_program` so any subsequent
+//! and wired in via `askpass::set_askpass_program` so any subsequent
 //! AskPassSession uses this binary instead of `current_exe()`.
 //!
 //! Protocol (kept identical to `crates/askpass/src/askpass.rs::main` so
