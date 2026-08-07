@@ -1373,6 +1373,11 @@ impl Platform for AndroidPlatform {
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.reopen = Some(callback);
     }
+    fn on_system_wake(&self, _callback: Box<dyn FnMut()>) {
+        // Android exposes no system sleep/wake signal to apps; process
+        // lifecycle (onResume etc.) is a different concept and already
+        // flows through the app-lifecycle path. Drop the callback.
+    }
     fn set_menus(&self, _menus: Vec<Menu>, _keymap: &Keymap) {}
     fn set_dock_menu(&self, _menu: Vec<MenuItem>, _keymap: &Keymap) {}
     fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>) {

@@ -275,7 +275,7 @@ fn android_main(app: AndroidApp) {
     // AskPassSession is created (Open Remote, git auth prompts, etc.)
     // — the askpass crate's ASKPASS_PROGRAM OnceLock initializes on
     // first read with current_exe() (= /system/bin/app_process64 on
-    // Android) and subsequent set_program calls are silently ignored.
+    // Android) and subsequent set_askpass_program calls are silently ignored.
     let askpass_path = match gpui_android::askpass_install::ensure_installed(&app, &data_path) {
         Ok(path) => path,
         Err(err) => {
@@ -284,24 +284,20 @@ fn android_main(app: AndroidApp) {
                  SSH password / passphrase prompts will fall back to \
                  current_exe() (= app_process64) and SIGABRT on Android"
             );
-            // Construct the expected path anyway so set_program isn't
+            // Construct the expected path anyway so set_askpass_program isn't
             // skipped — if the binary materializes later (next boot
             // after the install issue is resolved) it'll be picked up.
             data_path.join("zed-askpass-helper")
         }
     };
     if askpass_path.is_file() {
-        match askpass::set_program(askpass_path.clone()) {
-            Ok(()) => log::info!(
-                "zed_android: askpass program set to {}",
-                askpass_path.display()
-            ),
-            Err(_) => log::warn!(
-                "zed_android: askpass::set_program rejected (OnceLock \
-                 already initialized — set_program must run BEFORE first \
-                 AskPassSession)"
-            ),
-        }
+        // Upstream's setter debug_panics on double-set; boot runs this
+        // exactly once, before any AskPassSession exists.
+        askpass::set_askpass_program(askpass_path.clone());
+        log::info!(
+            "zed_android: askpass program set to {}",
+            askpass_path.display()
+        );
     } else {
         log::warn!(
             "zed_android: askpass helper missing at {}; SSH password / \
@@ -1123,15 +1119,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // panics at first paint with "no state of type
     // language_model::registry::GlobalLanguageModelRegistry exists".
     language_model::init(cx);
+    // Also covers the git graph (commit history) view: upstream folded
+    // crates/git_graph into git_ui, so its serializable item, action
+    // handlers, and database domain register here.
     git_ui::init(cx);
-    // Mirror production zed/src/main.rs:733 — register the git graph
-    // (commit history) view's serializable item, action handlers
-    // (git::FileHistory, git_panel::Open, OpenAtCommit), and database
-    // domain. Action-driven: shows up as a workspace pane item when the
-    // user triggers it (e.g. via git panel "View History"), not pre-
-    // loaded as a panel like ProjectPanel/GitPanel. Uses
-    // project.git_store() so remote-SSH projects work transparently.
-    git_graph::init(cx);
     // Production zed/src/main.rs:741. Registers the workspace observer
     // that handles `zed_actions::Extensions::default()` — opens the
     // browse/install/manage pane (an `ExtensionsPage` workspace item).

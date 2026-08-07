@@ -707,7 +707,7 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
         .items_center()
         .child(Icon::new(IconName::Keyboard).size(IconSize::Small).color(Color::Muted))
         .child(Label::new("Soft Keyboard"))
-        .child(div().flex_grow())
+        .child(div().flex_grow(1.))
         .child(
             Switch::new(
                 "onboarding-android-on-screen-keyboard",
@@ -736,7 +736,7 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
         .items_center()
         .child(Icon::new(IconName::Code).size(IconSize::Small).color(Color::Muted))
         .child(Label::new("Programming Keys Row"))
-        .child(div().flex_grow())
+        .child(div().flex_grow(1.))
         .child(
             Switch::new(
                 "onboarding-android-programming-extras-row",
@@ -768,7 +768,7 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
         .items_center()
         .child(Icon::new(IconName::Crosshair).size(IconSize::Small).color(Color::Muted))
         .child(Label::new("Virtual Trackpad"))
-        .child(div().flex_grow())
+        .child(div().flex_grow(1.))
         .child(
             Switch::new(
                 "onboarding-android-trackpad-mode",

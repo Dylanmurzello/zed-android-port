@@ -227,7 +227,7 @@ impl TitleBar {
                     Some(RemoteServerProjects::popover(
                         fs,
                         workspace_for_menu.clone(),
-                        false,
+                        Some(false),
                         window,
                         cx,
                     ))
@@ -256,7 +256,7 @@ impl TitleBar {
                             tooltip_title,
                             Some(&OpenRemote {
                                 from_existing_connection: false,
-                                create_new_window: false,
+                                create_new_window: Some(false),
                             }),
                             meta.clone(),
                             cx,

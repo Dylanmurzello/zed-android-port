@@ -161,6 +161,7 @@ fn android_input_page() -> SettingsPage {
                     focus and expose its toggle in the pane tab bar. \
                     Turn off when using a hardware keyboard.",
                 field: Box::new(SettingField {
+                    organization_override: None,
                     json_path: Some("android_input.on_screen_keyboard"),
                     pick: |settings_content| {
                         settings_content
@@ -186,6 +187,7 @@ fn android_input_page() -> SettingsPage {
                     and Alt are sticky: tap once for next key, \
                     double-tap to lock until tapped again.",
                 field: Box::new(SettingField {
+                    organization_override: None,
                     json_path: Some("android_input.programming_extras_row"),
                     pick: |settings_content| {
                         settings_content
@@ -216,6 +218,7 @@ fn android_input_page() -> SettingsPage {
                     splitter drag) is disabled; toggle off from the \
                     tab-bar icon to go back.",
                 field: Box::new(SettingField {
+                    organization_override: None,
                     json_path: Some("android_input.trackpad_mode"),
                     pick: |settings_content| {
                         settings_content
@@ -243,6 +246,7 @@ fn android_input_page() -> SettingsPage {
                     trackpad. Direct-touch finger scrolling is never \
                     inverted.",
                 field: Box::new(SettingField {
+                    organization_override: None,
                     json_path: Some("android_input.invert_scroll"),
                     pick: |settings_content| {
                         settings_content

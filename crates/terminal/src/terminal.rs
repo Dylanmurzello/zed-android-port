@@ -2858,7 +2858,7 @@ impl Terminal {
     /// Returns zero on the alternate screen, where the running program owns the
     /// grid and a sub-row shift would only misalign it.
     pub fn scroll_fract_px(&self) -> Pixels {
-        if self.last_content.mode.contains(TermMode::ALT_SCREEN) {
+        if self.last_content.mode.contains(Modes::ALT_SCREEN) {
             Pixels::ZERO
         } else {
             self.scroll_px % self.last_content.terminal_bounds.line_height

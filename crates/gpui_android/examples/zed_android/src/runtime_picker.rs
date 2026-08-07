@@ -426,7 +426,6 @@ impl Render for RuntimePicker {
                 .child(content),
             window,
             cx,
-            Tiling::default(),
         )
     }
 }
