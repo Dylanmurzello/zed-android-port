@@ -595,7 +595,7 @@ impl HostWorktree for WasmState {
     ) -> wasmtime::Result<Result<String, String>> {
         let delegate = self.table.get(&delegate)?;
         Ok(delegate
-            .read_text_file(&RelPath::new(Path::new(&path), PathStyle::Posix)?)
+            .read_text_file(&RelPath::new(Path::new(&path), PathStyle::Unix)?)
             .await
             .map_err(|error| error.to_string()))
     }
@@ -877,13 +877,12 @@ impl platform::Host for WasmState {
                 // for the parallel reasoning.
                 "linux" | "android" => platform::Os::Linux,
                 "windows" => platform::Os::Windows,
-                _ => panic!("unsupported os"),
+                _ => bail!("unsupported os"),
             },
             match env::consts::ARCH {
                 "aarch64" => platform::Architecture::Aarch64,
-                "x86" => platform::Architecture::X86,
                 "x86_64" => platform::Architecture::X8664,
-                _ => panic!("unsupported architecture"),
+                _ => bail!("unsupported architecture"),
             },
         ))
     }
@@ -961,7 +960,7 @@ impl ExtensionImports for WasmState {
         self.on_main_thread(|cx| {
             async move {
                 let path = location.as_ref().and_then(|location| {
-                    RelPath::new(Path::new(&location.path), PathStyle::Posix).ok()
+                    RelPath::new(Path::new(&location.path), PathStyle::Unix).ok()
                 });
                 let location = path
                     .as_ref()
@@ -981,6 +980,7 @@ impl ExtensionImports for WasmState {
                         );
                         Ok(serde_json::to_string(&settings::LanguageSettings {
                             tab_size: settings.tab_size,
+                            hard_tabs: settings.hard_tabs,
                             preferred_line_length: settings.preferred_line_length,
                         })?)
                     }

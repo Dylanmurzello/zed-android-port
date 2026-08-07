@@ -6,9 +6,7 @@ use scheduler::Instant;
 use scheduler::Scheduler;
 use std::{future::Future, marker::PhantomData, mem, pin::Pin, rc::Rc, sync::Arc, time::Duration};
 
-pub use scheduler::{
-    FallibleTask, ForegroundExecutor as SchedulerForegroundExecutor, Priority, Task,
-};
+pub use scheduler::{FallibleTask, LocalExecutor as SchedulerLocalExecutor, Priority, Task};
 
 /// A pointer to the executor that is currently running,
 /// for spawning background tasks.
@@ -22,7 +20,7 @@ pub struct BackgroundExecutor {
 /// for spawning tasks on the main thread.
 #[derive(Clone)]
 pub struct ForegroundExecutor {
-    inner: scheduler::ForegroundExecutor,
+    inner: scheduler::LocalExecutor,
     dispatcher: Arc<dyn PlatformDispatcher>,
     not_send: PhantomData<Rc<()>>,
 }
@@ -280,18 +278,29 @@ impl ForegroundExecutor {
                 )
             } else {
                 let platform_scheduler = Arc::new(PlatformScheduler::new(dispatcher.clone()));
-                let session_id = platform_scheduler.allocate_session_id();
-                (platform_scheduler, session_id)
+                let inner = platform_scheduler.foreground_executor();
+                return Self {
+                    inner,
+                    dispatcher,
+                    not_send: PhantomData,
+                };
             };
 
         #[cfg(not(any(test, feature = "test-support")))]
-        let (scheduler, session_id): (Arc<dyn Scheduler>, _) = {
+        let inner = {
             let platform_scheduler = Arc::new(PlatformScheduler::new(dispatcher.clone()));
-            let session_id = platform_scheduler.allocate_session_id();
-            (platform_scheduler, session_id)
+            platform_scheduler.foreground_executor()
         };
 
-        let inner = scheduler::ForegroundExecutor::new(session_id, scheduler);
+        #[cfg(any(test, feature = "test-support"))]
+        let inner = {
+            let scheduler_for_dispatch = Arc::downgrade(&scheduler);
+            scheduler::LocalExecutor::new(session_id, scheduler, move |runnable| {
+                if let Some(scheduler) = scheduler_for_dispatch.upgrade() {
+                    scheduler.schedule_local(session_id, runnable);
+                }
+            })
+        };
 
         Self {
             inner,
@@ -321,6 +330,40 @@ impl ForegroundExecutor {
     {
         // Priority is ignored for foreground tasks - they run in order on the main thread
         self.inner.spawn(future)
+    }
+
+    /// On platforms with dedicated support, enqueues the given future to run
+    /// on the main thread during platform idle time. Without a `timeout`,
+    /// polls may be deferred indefinitely while the platform stays busy;
+    /// with one, a poll still waiting after that long runs as ordinary main-thread work.
+    /// Each poll occupies part of one idle slice, so long synchronous stretches
+    /// should bound themselves against [`Self::idle_time_remaining`] and yield.
+    ///
+    /// On platforms without dedicated support, schedules the given future to run
+    /// with a low priority, ignoring `timeout`.
+    #[track_caller]
+    pub fn spawn_when_idle<R>(
+        &self,
+        timeout: Option<Duration>,
+        future: impl Future<Output = R> + 'static,
+    ) -> Task<R>
+    where
+        R: 'static,
+    {
+        let dispatcher = self.dispatcher.clone();
+        self.inner
+            .spawn_with_dispatch(future.boxed_local(), move |runnable| {
+                dispatcher.dispatch_on_main_thread_when_idle(runnable, timeout);
+            })
+    }
+
+    /// The time remaining in the current idle slice, when called from a task
+    /// spawned via [`Self::spawn_when_idle`] on a platform that meters idle
+    /// time. `None` when idle time is unmetered (or the caller is not inside
+    /// an idle slice); work that must bound itself should then fall back to a
+    /// budget of its own.
+    pub fn idle_time_remaining(&self) -> Option<Duration> {
+        self.dispatcher.idle_time_remaining()
     }
 
     /// Used by the test harness to run an async test in a synchronous fashion.
@@ -366,7 +409,7 @@ impl ForegroundExecutor {
     }
 
     #[doc(hidden)]
-    pub fn scheduler_executor(&self) -> SchedulerForegroundExecutor {
+    pub fn scheduler_executor(&self) -> SchedulerLocalExecutor {
         self.inner.clone()
     }
 }
