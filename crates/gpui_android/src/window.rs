@@ -256,7 +256,6 @@ impl AndroidWindowStatePtr {
             // at the wgpu default of 2 until we have a way to keep the
             // panel pinned at 120Hz.
             preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
-            desired_maximum_frame_latency: None,
         };
 
         let mut state = self.state.borrow_mut();

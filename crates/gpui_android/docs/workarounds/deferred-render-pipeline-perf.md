@@ -29,9 +29,12 @@ without CPU compositing.
   Engagement verified via a new `log::info!` in `wgpu_renderer.rs`
   right after `surface.configure()`:
   `present_mode=Mailbox, frame_latency=3, available_modes=[Mailbox, Fifo]`.
-- **Item 6 (Triple-buffer swap chain)**: New `desired_maximum_frame_latency:
-  Option<u32>` field on `WgpuSurfaceConfig` (additive, defaults to prior
-  behavior of 2 for all non-Android platforms). Android passes `Some(3)`.
+- **Item 6 (Triple-buffer swap chain)**: Tried via a
+  `desired_maximum_frame_latency` override on `WgpuSurfaceConfig`
+  (`Some(3)`) and reverted: Samsung's smart refresh drops the panel to
+  60/30Hz when idle, where the extra image adds 16-33ms of perceived
+  input latency. The override was removed again; Android uses wgpu's
+  default of 2 (see the comment in `window.rs::attach_surface`).
 - **Item 4 (FrameMetrics-class instrumentation)**: New
   `crates/gpui_android/src/frame_timing.rs` records per-frame
   `vsync_interval` / `vsync_to_paint` / `paint_duration`, logs
