@@ -39,6 +39,43 @@ use zdroid_runtime::{
     config::RuntimeFile,
 };
 
+/// Builds before 0.4.3 kept credentials in zed_credentials_provider's
+/// plaintext development file, since the Keystore wasn't wired up. Move any
+/// such entries into the Keystore, deleting the file only once every write
+/// succeeded.
+fn migrate_development_credentials(cx: &mut App) {
+    let path = paths::config_dir().join("development_credentials");
+    let json = match std::fs::read(&path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            log::warn!("zed_android: can't read {}: {error}", path.display());
+            return;
+        }
+    };
+    let credentials: std::collections::HashMap<String, (String, Vec<u8>)> =
+        match serde_json::from_slice(&json) {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                log::warn!("zed_android: can't parse {}: {error}", path.display());
+                return;
+            }
+        };
+    let writes = credentials
+        .iter()
+        .map(|(url, (username, password))| cx.write_credentials(url, username, password))
+        .collect::<Vec<_>>();
+    cx.background_spawn(async move {
+        for write in writes {
+            write.await?;
+        }
+        std::fs::remove_file(&path)?;
+        info!("zed_android: moved {} credentials into the Keystore", credentials.len());
+        anyhow::Ok(())
+    })
+    .detach_and_log_err(cx);
+}
+
 /// Android counterpart of `restore_or_create_workspace` in
 /// crates/zed/src/main.rs: honors `restore_on_startup` and reconnects remote
 /// projects instead of reopening their paths locally. The app hosts a single
@@ -741,6 +778,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     release_channel::init(semver::Version::new(0, 1, 0), cx);
     info!("zed_android: release_channel init");
+    migrate_development_credentials(cx);
 
     info!("zed_android: http client init");
     let http = ReqwestClient::user_agent("zed_android/0.1")?;

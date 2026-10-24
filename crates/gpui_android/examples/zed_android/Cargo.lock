@@ -15141,6 +15141,7 @@ dependencies = [
  "rust-embed",
  "search",
  "semver",
+ "serde_json",
  "session",
  "settings",
  "settings_profile_selector",
