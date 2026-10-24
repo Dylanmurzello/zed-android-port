@@ -8,6 +8,13 @@ This repository builds Zdroid from [Dylanmurzello/zed-android-port](https://gith
 
 Everything in [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md) and [RELEASING.md](RELEASING.md) still applies, except where this file says otherwise.
 
+## Branches
+
+- `main` is an exact mirror of `Dylanmurzello/zed-android-port:main`. Never commit to it. Update it with GitHub's **Sync fork** button, which is always a fast-forward, or with `git fetch dylan && git push origin dylan/main:main`. While it's behind, GitHub shows "This branch is N commits behind Dylanmurzello:main", which is the signal that Dylan pushed something.
+- `zdroid` is the default branch and holds everything this fork adds: Zed syncs, fixes, CI, and releases. `git diff main...zdroid` shows the fork's whole delta.
+
+To get notified when Dylan pushes, **Watch** his repository on GitHub (Custom → Releases, or All activity).
+
 ## Remotes (one-time, per clone)
 
 ```sh
@@ -24,9 +31,11 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
 
   ```sh
   git fetch upstream tag v1.25.3 --no-tags
-  git checkout -b upstream-sync-v1.25.3
+  git checkout -b upstream-sync-v1.25.3 zdroid
   git merge v1.25.3
   ```
+
+- The sync branch lands on `zdroid`, not `main`, wherever UPSTREAM_MERGE.md says `main`.
 
 - When sweeping upstream's `.github/workflows` files, keep `zdroid_apk.yml`.
 - Reseed the Android app's lockfile from the root one before the `cargo ndk` check. A stale example lock can resolve mismatched versions of crates that upstream bumped together (2026-10: `merman` vs `merman-render`):
@@ -34,7 +43,7 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```sh
   cp Cargo.lock crates/gpui_android/examples/zed_android/Cargo.lock
   ```
-- Push the sync branch and open a pull request. The **Zdroid APK** check builds the full APK. It covers the `cargo ndk` gate, Gradle, and the bundled helper binaries.
+- Push the sync branch and open a pull request into `zdroid`. The **Zdroid APK** check builds the full APK. It covers the `cargo ndk` gate, Gradle, and the bundled helper binaries.
 - Never `git push --tags`. A local clone carries every Zed `v1.x.y` tag, and those match the release trigger.
 
 ## Syncing Dylan's repo
@@ -43,9 +52,11 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
 
 ```sh
 git fetch dylan
+git push origin dylan/main:main      # keep the mirror current
+git checkout -b dylan-sync zdroid
 git config --unset merge.ours.driver
 git merge dylan/main
-# resolve conflicts, build, commit
+# resolve conflicts, build, commit, then open a pull request into zdroid
 git config merge.ours.driver true
 ```
 
@@ -53,6 +64,8 @@ Fork-specific changes to keep while resolving:
 
 - `ZDROID_RELEASE_REPO` in `crates/gpui_android/src/updater.rs`. Without it, the in-app updater follows Dylan's releases, and those are signed with a different key.
 - `versionCode`/`versionName` in `crates/gpui_android/examples/zed_android/android/app/build.gradle.kts`. Take whichever is higher.
+
+To offer a change back to Dylan, branch off `main`, cherry-pick the generic commits (not CI, this file, or version bumps), and open a pull request against his repository.
 
 ## Releasing
 
@@ -74,7 +87,7 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 
 ### Each release
 
-1. Bump `versionCode` (+1) and `versionName` in `build.gradle.kts`, following the versioning rules in [RELEASING.md](RELEASING.md). Commit and push to `main`.
+1. Bump `versionCode` (+1) and `versionName` in `build.gradle.kts`, following the versioning rules in [RELEASING.md](RELEASING.md). Commit and push to `zdroid`.
 2. Write the release notes as an annotated tag. The first line is the subject (`Zdroid X.Y.Z`); the rest becomes the release body. Use the `Install`, `Highlights` (or `Fixes`), and `Caveats` sections from RELEASING.md. The workflow appends `Verification` (APK and certificate SHA-256, commit, provenance) itself.
 
    ```sh
@@ -85,7 +98,7 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 
 3. The workflow builds the APK, attests its provenance, and publishes a **pre-release** with `Zdroid-X.Y.Z.apk` attached. A tag that doesn't match `versionName` fails right away.
 4. Install the pre-release on a device and run the smoke checklist in RELEASING.md.
-5. If it passes, edit the release on GitHub: clear **Set as a pre-release** and tick **Set as the latest release**. The in-app updater only follows the latest release. If it fails, fix it on `main` and cut a new PATCH tag. Don't delete or re-upload releases.
+5. If it passes, edit the release on GitHub: clear **Set as a pre-release** and tick **Set as the latest release**. The in-app updater only follows the latest release. If it fails, fix it on `zdroid` and cut a new PATCH tag. Don't delete or re-upload releases.
 
 To verify a downloaded APK:
 

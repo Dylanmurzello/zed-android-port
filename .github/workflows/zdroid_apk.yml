@@ -3,7 +3,7 @@
 # - Tag pushes matching vX.Y.Z build a signed APK and publish it as a GitHub
 #   pre-release. Promote it to "latest" after the device smoke test in
 #   RELEASING.md; the in-app updater only follows the latest release.
-# - Pushes to main, pull requests, and manual runs upload the APK as a
+# - Pushes to zdroid, pull requests, and manual runs upload the APK as a
 #   workflow artifact. Pull requests are never signed with the release key.
 #
 # Signing secrets and the release flow are described in FORK.md.
@@ -11,7 +11,7 @@ name: Zdroid APK
 
 on:
   push:
-    branches: [main]
+    branches: [zdroid]
     tags: ["v*.*.*"]
     paths-ignore: ["**.md", "docs/**"]
   pull_request:
