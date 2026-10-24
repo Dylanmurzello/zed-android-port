@@ -154,30 +154,43 @@ fn resolve_latest_tag(release_repo: &str) -> Result<String> {
     Ok(tag.to_owned())
 }
 
-/// Download the bootstrap zip for the given tag and verify it.
+/// Download the bootstrap zip for the given tag, verifying it when possible.
 ///
 /// Enumerates the release's assets via
-/// `api.github.com/repos/<repo>/releases/tags/<tag>` (one request from the
-/// 60-req/hour anonymous quota) to pick the canonical `RELEASE_ASSET_NAME`,
-/// or else the first `<ASSET_NAME_PREFIX>*<ASSET_NAME_SUFFIX>` asset, along
-/// with the size and SHA-256 digest GitHub computed at upload. The download
-/// is rejected unless both match.
+/// `api.github.com/repos/<repo>/releases/tags/<tag>` to pick the canonical
+/// `RELEASE_ASSET_NAME`, or else the first
+/// `<ASSET_NAME_PREFIX>*<ASSET_NAME_SUFFIX>` asset, along with the size and
+/// SHA-256 digest GitHub computed at upload; a download that doesn't match
+/// is rejected. The API allows 60 anonymous requests an hour per IP, which
+/// carrier NAT can use up, so when it's unavailable the canonical asset is
+/// downloaded unverified rather than failing the install.
 fn download_bootstrap_asset(release_repo: &str, tag: &str) -> Result<Vec<u8>> {
-    let asset = find_release_asset(release_repo, tag)?;
-    if asset.size > MAX_ARCHIVE_BYTES {
+    let asset = find_release_asset(release_repo, tag)
+        .map_err(|error| {
+            log::warn!(
+                "bootstrap_install: release metadata unavailable, downloading \
+                 {RELEASE_ASSET_NAME} without verification: {error:#}"
+            );
+        })
+        .ok();
+    if let Some(asset) = &asset
+        && asset.size > MAX_ARCHIVE_BYTES
+    {
         return Err(anyhow!(
             "bootstrap asset {} is {} bytes, above the {MAX_ARCHIVE_BYTES}-byte safety limit",
             asset.name,
             asset.size,
         ));
     }
-    let url = format!(
-        "https://github.com/{release_repo}/releases/download/{tag}/{}",
-        asset.name
-    );
-    log::info!("bootstrap_install: fetching {}", asset.name);
+    let name = asset
+        .as_ref()
+        .map_or(RELEASE_ASSET_NAME, |asset| asset.name.as_str());
+    let url = format!("https://github.com/{release_repo}/releases/download/{tag}/{name}");
+    log::info!("bootstrap_install: fetching {name}");
     let bytes = fetch_asset_bytes(&url)?;
-    validate_bootstrap_asset(&bytes, &asset)?;
+    if let Some(asset) = &asset {
+        validate_bootstrap_asset(&bytes, asset)?;
+    }
     Ok(bytes)
 }
 
@@ -189,11 +202,18 @@ fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
             asset.size
         ));
     }
-    let expected = asset
+    // GitHub only records digests for assets uploaded since mid-2025.
+    let Some(expected) = asset
         .digest
         .as_deref()
         .and_then(|digest| digest.strip_prefix("sha256:"))
-        .ok_or_else(|| anyhow!("GitHub did not provide a SHA-256 digest for {}", asset.name))?;
+    else {
+        log::warn!(
+            "bootstrap_install: GitHub has no SHA-256 digest for {}; checked size only",
+            asset.name
+        );
+        return Ok(());
+    };
     let actual = format!("{:x}", Sha256::digest(bytes));
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(anyhow!("bootstrap asset SHA-256 mismatch for {}", asset.name));
@@ -522,6 +542,7 @@ mod tests {
         assert!(validate_bootstrap_asset(b"abc", &asset(4, abc_digest)).is_err());
         let mut no_digest = asset(3, abc_digest);
         no_digest.digest = None;
-        assert!(validate_bootstrap_asset(b"abc", &no_digest).is_err());
+        assert!(validate_bootstrap_asset(b"abc", &no_digest).is_ok());
+        assert!(validate_bootstrap_asset(b"abcd", &no_digest).is_err());
     }
 }
