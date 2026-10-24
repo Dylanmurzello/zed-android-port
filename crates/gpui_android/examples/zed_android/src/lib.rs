@@ -27,8 +27,9 @@ use log::{error, info};
 use settings::{Settings as _, SettingsStore};
 use util::ResultExt as _;
 use workspace::{
-    AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, SerializedWorkspaceLocation,
-    SessionWorkspace, Workspace, WorkspaceDb, WorkspaceStore, open_new,
+    AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, RestoreOnStartupBehavior,
+    SerializedWorkspaceLocation, SessionWorkspace, Toast, Workspace, WorkspaceDb,
+    WorkspaceSettings, WorkspaceStore, notifications::NotificationId, open_new,
     workspace_windows_for_location,
 };
 use reqwest_client::ReqwestClient;
@@ -37,6 +38,108 @@ use zdroid_runtime::{
     adapters,
     config::RuntimeFile,
 };
+
+/// Android counterpart of `restore_or_create_workspace` in
+/// crates/zed/src/main.rs: honors `restore_on_startup` and reconnects remote
+/// projects instead of reopening their paths locally. The app hosts a single
+/// main window, so `last_session` restores only the most recent workspace,
+/// like `last_workspace`.
+async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut gpui::AsyncApp) -> Result<()> {
+    let (restore_on_startup, db) = cx.update(|cx| {
+        (
+            WorkspaceSettings::get_global(cx).restore_on_startup,
+            WorkspaceDb::global(cx),
+        )
+    });
+    let recent = match restore_on_startup {
+        RestoreOnStartupBehavior::LastWorkspace | RestoreOnStartupBehavior::LastSession => {
+            workspace::last_opened_workspace_location(&db, app_state.fs.as_ref()).await
+        }
+        RestoreOnStartupBehavior::EmptyTab | RestoreOnStartupBehavior::Launchpad => None,
+    };
+    let serialized = recent.and_then(|(workspace_id, location, paths)| {
+        cx.update(|cx| {
+            workspace::read_serialized_multi_workspaces(
+                vec![SessionWorkspace {
+                    workspace_id,
+                    location,
+                    paths,
+                    window_id: None,
+                }],
+                cx,
+            )
+            .into_iter()
+            .next()
+        })
+    });
+
+    let mut failure = None;
+    if let Some(multi_workspace) = serialized {
+        let result = match &multi_workspace.active_workspace.location {
+            SerializedWorkspaceLocation::Local => {
+                workspace::restore_multiworkspace(multi_workspace, app_state.clone(), cx)
+                    .await
+                    .map(|_| ())
+            }
+            SerializedWorkspaceLocation::Remote(connection_options) => {
+                let mut connection_options = connection_options.clone();
+                if let remote::RemoteConnectionOptions::Ssh(options) = &mut connection_options {
+                    cx.update(|cx| {
+                        recent_projects::RemoteSettings::get_global(cx)
+                            .fill_connection_options_from_settings(options)
+                    });
+                }
+                let paths = multi_workspace
+                    .active_workspace
+                    .paths
+                    .paths()
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>();
+                let state = multi_workspace.state.clone();
+                async {
+                    let window = recent_projects::open_remote_project(
+                        connection_options,
+                        paths,
+                        app_state.clone(),
+                        OpenOptions::default(),
+                        cx,
+                    )
+                    .await?;
+                    workspace::apply_restored_multiworkspace_state(
+                        window,
+                        &state,
+                        app_state.fs.clone(),
+                        cx,
+                    )
+                    .await;
+                    anyhow::Ok(())
+                }
+                .await
+            }
+        };
+        match result {
+            // A remote connection the user cancelled returns Ok but closes
+            // its window, so check that something actually opened.
+            Ok(()) if cx.update(|cx| !cx.windows().is_empty()) => return Ok(()),
+            Ok(()) => {}
+            Err(error) => {
+                error!("zed_android: failed to restore the last workspace: {error:#}");
+                failure = Some("Failed to restore the last workspace. Check logs for details.");
+            }
+        }
+    }
+
+    cx.update(|cx| {
+        open_new(Default::default(), app_state, cx, move |workspace, _, cx| {
+            if let Some(message) = failure {
+                workspace.show_toast(Toast::new(NotificationId::unique::<()>(), message), cx);
+            }
+        })
+    })
+    .await?;
+    Ok(())
+}
 
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
     gpui::WindowOptions::default()
@@ -1634,41 +1737,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         onboarding::show_onboarding_view(app_state.clone(), cx)
             .detach_and_log_err(cx);
     } else {
-        info!("zed_android: returning launch → restore most recent workspace");
-        let db = WorkspaceDb::global(cx);
-        let fs = app_state.fs.clone();
-        cx.spawn(async move |cx| {
-            let recent = workspace::last_opened_workspace_location(&db, fs.as_ref()).await;
-            if let Some((workspace_id, location, paths)) = recent {
-                let serialized = cx.update(|cx| {
-                    workspace::read_serialized_multi_workspaces(
-                        vec![SessionWorkspace {
-                            workspace_id,
-                            location,
-                            paths,
-                            window_id: None,
-                        }],
-                        cx,
-                    )
-                    .into_iter()
-                    .next()
-                });
-                if let Some(serialized) = serialized {
-                    match workspace::restore_multiworkspace(serialized, app_state.clone(), cx).await
-                    {
-                        Ok(_) => return Ok(()),
-                        Err(error) => {
-                            error!("zed_android: failed to restore recent workspace: {error:#}");
-                        }
-                    }
-                }
-            }
-
-            cx.update(|cx| open_new(Default::default(), app_state, cx, |_, _, _| {}))
-                .await?;
-            anyhow::Ok(())
-        })
-        .detach_and_log_err(cx);
+        info!("zed_android: returning launch → restore_or_create_workspace");
+        cx.spawn(async move |cx| restore_or_create_workspace(app_state, cx).await)
+            .detach_and_log_err(cx);
     }
 
     Ok(())
