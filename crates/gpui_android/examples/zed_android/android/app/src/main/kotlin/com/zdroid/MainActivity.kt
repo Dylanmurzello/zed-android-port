@@ -914,7 +914,42 @@ class MainActivity : GameActivity(), ImeHost {
             InputModality.setNonPointer()
             applyCursorVisibility()
         }
+        if (event != null) offsetEventToSurface(event)
         return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        // Captured pointer events carry relative motion; only absolute
+        // hover and scroll positions need moving into surface space.
+        if (!window.decorView.hasPointerCapture()) offsetEventToSurface(event)
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    private var lastSurfaceOffsetX = Int.MIN_VALUE
+    private var lastSurfaceOffsetY = Int.MIN_VALUE
+
+    /**
+     * GameActivity reports events in decor-view coordinates, while gpui
+     * expects them relative to the SurfaceView. The two differ in DeX
+     * freeform windows, which shifted every click and hover by the
+     * surface's offset.
+     */
+    private fun offsetEventToSurface(event: MotionEvent) {
+        val surface = findSurfaceView(window.decorView) ?: return
+        val surfaceLocation = IntArray(2)
+        val decorLocation = IntArray(2)
+        surface.getLocationInWindow(surfaceLocation)
+        window.decorView.getLocationInWindow(decorLocation)
+        val offsetX = surfaceLocation[0] - decorLocation[0]
+        val offsetY = surfaceLocation[1] - decorLocation[1]
+        if (offsetX != lastSurfaceOffsetX || offsetY != lastSurfaceOffsetY) {
+            Log.i("zdroid_input", "surface input origin offset=($offsetX,$offsetY)")
+            lastSurfaceOffsetX = offsetX
+            lastSurfaceOffsetY = offsetY
+        }
+        if (offsetX != 0 || offsetY != 0) {
+            event.offsetLocation(-offsetX.toFloat(), -offsetY.toFloat())
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
