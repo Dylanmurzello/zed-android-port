@@ -84,6 +84,44 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Configure release signing
+        # Runs early (keytool comes with the JDK) so bad secrets fail fast.
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ZDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ZDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ vars.ZDROID_KEY_ALIAS || 'zdroid' }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              echo "::error::ZDROID_KEYSTORE_BASE64 and ZDROID_KEYSTORE_PASSWORD secrets are required for releases"
+              exit 1
+            fi
+            echo "::warning::Signing secrets are not configured; building an unsigned APK"
+            exit 0
+          fi
+          umask 077
+          app="$APP_DIR/android/app"
+          # Pasted secrets easily pick up line breaks or stray characters;
+          # check them here instead of failing deep inside Gradle.
+          KEYSTORE_PASSWORD=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '\r\n')
+          export KEYSTORE_PASSWORD
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$app/release.keystore" 2> /dev/null; then
+            echo "::error::ZDROID_KEYSTORE_BASE64 is not valid base64. Recreate it from the output of 'base64 -w0 release.keystore' (see FORK.md)."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$app/release.keystore" -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::Could not open key '$KEY_ALIAS' in the decoded keystore: ZDROID_KEYSTORE_PASSWORD is wrong or ZDROID_KEYSTORE_BASE64 holds a different file."
+            exit 1
+          fi
+          # PKCS12 keystores use the store password for the key as well.
+          {
+            echo "storeFile=release.keystore"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+          } > "$app/signing.properties"
+
       - name: Install Android SDK packages
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -116,32 +154,6 @@ jobs:
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
-
-      - name: Configure release signing
-        if: github.event_name != 'pull_request'
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ZDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ZDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ vars.ZDROID_KEY_ALIAS || 'zdroid' }}
-        run: |
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
-            if [ "$GITHUB_REF_TYPE" = tag ]; then
-              echo "::error::ZDROID_KEYSTORE_BASE64 and ZDROID_KEYSTORE_PASSWORD secrets are required for releases"
-              exit 1
-            fi
-            echo "::warning::Signing secrets are not configured; building an unsigned APK"
-            exit 0
-          fi
-          umask 077
-          app="$APP_DIR/android/app"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$app/release.keystore"
-          # PKCS12 keystores use the store password for the key as well.
-          {
-            echo "storeFile=release.keystore"
-            echo "storePassword=$KEYSTORE_PASSWORD"
-            echo "keyAlias=$KEY_ALIAS"
-            echo "keyPassword=$KEYSTORE_PASSWORD"
-          } > "$app/signing.properties"
 
       - name: Build native library
         working-directory: ${{ env.APP_DIR }}
