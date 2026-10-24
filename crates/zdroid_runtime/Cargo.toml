@@ -26,7 +26,7 @@ path = "src/bin/zd-exec.rs"
 anyhow.workspace = true
 log.workspace = true
 serde.workspace = true
-toml.workspace = true
+toml = { workspace = true, features = ["display"] }
 util.workspace = true
 
 # Phase 6: bootstrap adapter downloads its 240 MB zip from a GitHub
