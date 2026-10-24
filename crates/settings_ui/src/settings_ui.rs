@@ -1822,46 +1822,9 @@ impl SettingsWindow {
         let search_bar = cx.new(|cx| {
             let mut editor = Editor::single_line(window, cx);
             editor.set_placeholder_text("Search settings…", window, cx);
-            log::info!(
-                "settings_ui::search_bar: editor created (entity_id={:?}, focus_handle={:?})",
-                cx.entity_id(),
-                editor.focus_handle(cx).clone()
-            );
             editor
         });
-        cx.subscribe(&search_bar, |this, search_bar, event: &EditorEvent, cx| {
-            // Bisect-the-input-pipeline probe (settings search isn't reacting
-            // to typing on Android). Logs every event the search bar emits,
-            // not just `Edited` — distinguishes "events arrive, just not
-            // Edited" (e.g. focus came but typing didn't register) from
-            // "no events at all" (focus/IME never landed here).
-            let kind = match event {
-                EditorEvent::Edited { .. } => "Edited",
-                EditorEvent::BufferEdited => "BufferEdited",
-                EditorEvent::SelectionsChanged { .. } => "SelectionsChanged",
-                EditorEvent::Focused => "Focused",
-                EditorEvent::Blurred => "Blurred",
-                EditorEvent::InputHandled { text, .. } => {
-                    log::info!(
-                        "settings_ui::search_bar: InputHandled text={:?}",
-                        text
-                    );
-                    "InputHandled"
-                }
-                EditorEvent::InputIgnored { text } => {
-                    log::info!(
-                        "settings_ui::search_bar: InputIgnored text={:?}",
-                        text
-                    );
-                    "InputIgnored"
-                }
-                _ => "<other>",
-            };
-            log::info!(
-                "settings_ui::search_bar: event {} (text_len={})",
-                kind,
-                search_bar.read(cx).text(cx).len()
-            );
+        cx.subscribe(&search_bar, |this, _, event: &EditorEvent, cx| {
             let EditorEvent::Edited { transaction_id: _ } = event else {
                 return;
             };
@@ -1870,10 +1833,6 @@ impl SettingsWindow {
                 this.opening_link = false;
                 return;
             }
-            log::info!(
-                "settings_ui::search_bar: dispatching update_matches (query={:?})",
-                search_bar.read(cx).text(cx)
-            );
             this.update_matches(cx);
         })
         .detach();
