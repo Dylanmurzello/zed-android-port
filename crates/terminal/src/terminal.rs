@@ -729,13 +729,7 @@ pub enum MaybeNavigationTarget {
 
 #[derive(Clone)]
 enum InternalEvent {
-    /// `sync_pty` is true when the row / column count changed and the
-    /// PTY needs a `Msg::Resize` (SIGWINCH). False for pixel-only deltas
-    /// during an interactive dock-edge drag, where we still want to
-    /// resize alacritty's in-process grid so the rendered content fills
-    /// the new bounds, but don't want to spam the shell with resize
-    /// signals on every pixel of drag.
-    Resize(TerminalBounds, bool),
+    Resize(TerminalBounds),
     Clear,
     // FocusNextMatch,
     Scroll(Scroll),
@@ -1773,24 +1767,18 @@ impl Terminal {
         cx: &mut Context<Self>,
     ) {
         match event {
-            &InternalEvent::Resize(new_bounds, sync_pty) => {
+            &InternalEvent::Resize(new_bounds) => {
                 let new_bounds = normalize_terminal_bounds(new_bounds);
-                trace!("Resizing: new_bounds={new_bounds:?} sync_pty={sync_pty}");
+                trace!("Resizing: new_bounds={new_bounds:?}");
 
                 let columns_changed =
                     self.last_content.terminal_bounds.num_columns() != new_bounds.num_columns();
                 self.last_content.terminal_bounds = new_bounds;
 
-                // The PTY signal (kernel resize + SIGWINCH) is the
-                // expensive half of a resize; senders throttle it to
-                // actual row/col changes via `sync_pty`. The in-process
-                // grid resize below is cheap and always runs so the
-                // rendered cell count tracks the bounds.
-                if sync_pty
-                    && let TerminalType::Pty {
-                        resources: PtyResources::Active(pty_tx),
-                        ..
-                    } = &self.terminal_type
+                if let TerminalType::Pty {
+                    resources: PtyResources::Active(pty_tx),
+                    ..
+                } = &self.terminal_type
                 {
                     pty_tx.resize(new_bounds);
                 }
@@ -2216,31 +2204,20 @@ impl Terminal {
         let old_bounds = self.last_content.terminal_bounds;
         self.last_content.terminal_bounds = new_bounds;
 
-        // Only sync the PTY when row / column count or cell metrics
-        // actually change. Pixel-only deltas during an interactive
-        // dock-edge drag would otherwise SIGWINCH the shell on every
-        // single pixel and cause visible flicker / reflow spam. We
-        // still queue the resize event though, because alacritty's
-        // in-process grid resize is what makes the rendered content
-        // track the dock bounds without lag — without it, the visible
-        // area expands but the cell grid stays the old size, leaving a
-        // dock-background gap between the new dock edge and where the
-        // old content ends.
-        let sync_pty = old_bounds.num_lines() != new_bounds.num_lines()
+        // Avoid spamming PTY resizes on pixel-level size changes (e.g. while dragging edges),
+        // since those can generate excessive SIGWINCH/reflows and cause visible flicker.
+        let requires_resize = old_bounds.num_lines() != new_bounds.num_lines()
             || old_bounds.num_columns() != new_bounds.num_columns()
             || old_bounds.cell_width != new_bounds.cell_width
             || old_bounds.line_height != new_bounds.line_height;
 
+        if !requires_resize {
+            return;
+        }
+
         match self.events.back_mut() {
-            // Coalesce: keep the most recent bounds, OR-merge the PTY
-            // flag so a row-crossing drag mid-coalesce keeps its sync.
-            Some(InternalEvent::Resize(pending_bounds, pending_sync_pty)) => {
-                *pending_bounds = new_bounds;
-                *pending_sync_pty |= sync_pty;
-            }
-            _ => self
-                .events
-                .push_back(InternalEvent::Resize(new_bounds, sync_pty)),
+            Some(InternalEvent::Resize(pending_bounds)) => *pending_bounds = new_bounds,
+            _ => self.events.push_back(InternalEvent::Resize(new_bounds)),
         }
     }
 
@@ -4734,28 +4711,20 @@ mod tests {
         terminal.events.clear();
         assert_eq!(terminal.last_content.terminal_bounds, base_bounds);
 
-        // Pixel-only change: height grows by 1px but still the same
-        // number of rows/cols. We queue a grid-resize event (so the
-        // rendered area tracks the bounds) but skip the PTY SIGWINCH
-        // half by setting sync_pty=false.
+        // Pixel-only change: height grows by 1px but still the same number of rows/cols.
         let mut pixel_changed = base_bounds;
         pixel_changed.bounds.size.height = Pixels::from(101.);
         terminal.set_size(pixel_changed);
-        assert!(matches!(
-            terminal.events.back(),
-            Some(InternalEvent::Resize(_, false))
-        ));
+        assert!(terminal.events.is_empty());
         assert_eq!(terminal.last_content.terminal_bounds, pixel_changed);
 
-        terminal.events.clear();
-        // Grid change: height increases enough to add a row. PTY sync
-        // is required so the shell knows the new row count.
+        // Grid change: height increases enough to add a row.
         let mut grid_changed = base_bounds;
         grid_changed.bounds.size.height = Pixels::from(110.);
         terminal.set_size(grid_changed);
         assert!(matches!(
             terminal.events.back(),
-            Some(InternalEvent::Resize(_, true))
+            Some(InternalEvent::Resize(_))
         ));
     }
 
