@@ -910,23 +910,7 @@ impl GitStore {
                 cx.spawn(async move |this, cx| {
                     let watcher = fs.watch(&path, Duration::from_millis(100));
                     let (mut watcher, _) = watcher.await;
-                    while let Some(events) = watcher.next().await {
-                        // `fs.watch` falls back to watching the nearest existing
-                        // ancestor if `path` doesn't exist (see fs::effective_watch_path).
-                        // When ~/.gitconfig is missing — common on fresh remote
-                        // servers — we end up watching $HOME, and every event
-                        // there (.bash_history rotation, ~/.cache writes, any
-                        // tool touching $HOME) fires this loop, causing
-                        // GlobalConfigurationUpdated and a refetch of every
-                        // repo at whatever rate $HOME is busy at. On an active
-                        // SSH session that's ~10 events/sec, which cascades
-                        // into a UI re-render loop the user sees as a
-                        // flickering tab. Only react when the specific config
-                        // path we care about is actually the path that
-                        // changed; ignore ancestor noise.
-                        if !events.iter().any(|event| event.path == path) {
-                            continue;
-                        }
+                    while let Some(_) = watcher.next().await {
                         let Ok(_) = this.update(cx, |this, cx| {
                             let GitStoreState::Local {
                                 project_environment,
