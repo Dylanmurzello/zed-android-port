@@ -1445,19 +1445,26 @@ impl Platform for AndroidPlatform {
         crate::clipboard::write(&self.android_app, item);
     }
 
+    // Keystore operations are binder calls (and key generation can take
+    // hundreds of milliseconds), so keep them off the thread that renders.
     fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
-        Task::ready(crate::credentials::write(
-            &self.android_app,
-            url,
-            username,
-            password,
-        ))
+        let android_app = self.android_app.clone();
+        let (url, username, password) = (url.to_owned(), username.to_owned(), password.to_vec());
+        self.background_executor().spawn(async move {
+            crate::credentials::write(&android_app, &url, &username, &password)
+        })
     }
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
-        Task::ready(crate::credentials::read(&self.android_app, url))
+        let android_app = self.android_app.clone();
+        let url = url.to_owned();
+        self.background_executor()
+            .spawn(async move { crate::credentials::read(&android_app, &url) })
     }
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
-        Task::ready(crate::credentials::delete(&self.android_app, url))
+        let android_app = self.android_app.clone();
+        let url = url.to_owned();
+        self.background_executor()
+            .spawn(async move { crate::credentials::delete(&android_app, &url) })
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
