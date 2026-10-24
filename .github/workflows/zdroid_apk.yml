@@ -36,7 +36,7 @@ env:
   BUILD_TOOLS_VERSION: 35.0.0
   CARGO_NDK_VERSION: 4.1.2
   GRADLE_VERSION: 8.14.3
-  GRADLE_SHA256: bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531
+  SCCACHE_VERSION: v0.18.0
   # Certificate of the key stored in ZDROID_KEYSTORE_BASE64. Every release
   # must be signed by it, otherwise installed copies can't upgrade in place.
   SIGNING_CERT_SHA256: 33:A2:DB:E8:82:DC:16:70:A3:AC:2C:1C:F2:C9:BD:D9:BF:99:05:06:D0:94:B1:0F:33:4C:D9:AA:81:D4:2E:67
@@ -47,7 +47,7 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 90
     permissions:
       contents: read # checkout
     outputs:
@@ -134,12 +134,15 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
-      - name: Install Gradle
-        run: |
-          curl -fsSLo "$RUNNER_TEMP/gradle.zip" "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
-          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle.zip" | sha256sum --check --strict
-          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/gradle-$GRADLE_VERSION/bin" >> "$GITHUB_PATH"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # zizmor: ignore[cache-poisoning] v6.4.0
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          # The open-source provider built on actions/cache; the default one is
+          # proprietary.
+          cache-provider: basic
+          # Releases build from a clean slate so a poisoned cache can't reach them.
+          cache-disabled: ${{ github.ref_type == 'tag' }}
 
       - name: Install Rust toolchain
         # Installs the channel, targets and components from rust-toolchain.toml.
@@ -147,14 +150,32 @@ jobs:
           rustup toolchain install
           rustc --version
 
-      - name: Cache Rust build
-        # Releases build from a clean slate so a poisoned cache can't reach them.
+      # Releases build from a clean slate so a poisoned cache can't reach them,
+      # so the two caches below only run for pull requests and zdroid pushes.
+      - name: Cache Cargo registry
+        # Downloaded crates, git dependencies and cargo-ndk. Compiled artifacts
+        # are left to sccache.
         if: github.ref_type != 'tag'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # zizmor: ignore[cache-poisoning] v2.9.3
         with:
-          workspaces: ${{ env.APP_DIR }} -> target
-          cache-on-failure: true
+          workspaces: ${{ env.APP_DIR }}
+          cache-targets: false
           save-if: ${{ github.event_name == 'push' }}
+
+      - name: Set up sccache
+        # Content-addressed compiler cache in the GitHub Actions cache. Unlike
+        # cargo's target dir it survives a fresh checkout, so Zed crates that
+        # didn't change aren't rebuilt. cc-rs picks it up for C code too.
+        if: github.ref_type != 'tag'
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # zizmor: ignore[cache-poisoning] v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
+
+      - name: Enable sccache
+        if: github.ref_type != 'tag'
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
