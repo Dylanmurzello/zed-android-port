@@ -36,6 +36,11 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```
 
 - The sync branch lands on `zdroid`, not `main`, wherever UPSTREAM_MERGE.md says `main`.
+- Release tags set `crates/zed/RELEASE_CHANNEL` to `stable`, and the merge takes that without a conflict. Put it back to `dev`. The Android build relies on the Dev channel: it fetches the latest remote server for SSH projects (the app reports version `0.1.0`, which no stable server matches), allows the newest extension API, and keeps workspace state in the same database scope as earlier releases.
+
+  ```sh
+  git checkout dylan/main -- crates/zed/RELEASE_CHANNEL
+  ```
 
 - When sweeping upstream's `.github/workflows` files, keep `zdroid_apk.yml`.
 - Reseed the Android app's lockfile from the root one before the `cargo ndk` check. A stale example lock can resolve mismatched versions of crates that upstream bumped together (2026-10: `merman` vs `merman-render`):
