@@ -21,6 +21,7 @@ use db::kvp::KeyValueStore;
 use fs::{Fs, RealFs};
 use node_runtime::NodeRuntime;
 use project::Project;
+use prompt_store::PromptBuilder;
 use session::{AppSession, Session};
 use gpui::{App, AppContext as _, TaskExt as _, UpdateGlobal as _};
 use log::{error, info};
@@ -176,6 +177,33 @@ async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut gpui::As
     })
     .await?;
     Ok(())
+}
+
+/// Adds the agent panel unless `disable_ai` is set, and removes it when the
+/// setting turns on. Mirrors `setup_or_teardown_ai_panel` in
+/// crates/zed/src/zed.rs, which the Android app doesn't link.
+fn ensure_agent_panel(
+    workspace: &mut Workspace,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<Workspace>,
+) -> gpui::Task<Result<()>> {
+    let disable_ai = project::DisableAiSettings::get_global(cx).disable_ai;
+    match (disable_ai, workspace.panel::<agent_ui::AgentPanel>(cx)) {
+        (false, None) => cx.spawn_in(window, async move |workspace, cx| {
+            let panel = agent_ui::AgentPanel::load(workspace.clone(), cx.clone()).await?;
+            workspace.update_in(cx, |workspace, window, cx| {
+                let disable_ai = project::DisableAiSettings::get_global(cx).disable_ai;
+                if !disable_ai && workspace.panel::<agent_ui::AgentPanel>(cx).is_none() {
+                    workspace.add_panel(panel, window, cx);
+                }
+            })
+        }),
+        (true, Some(panel)) => {
+            workspace.remove_panel(&panel, window, cx);
+            gpui::Task::ready(Ok(()))
+        }
+        _ => gpui::Task::ready(Ok(())),
+    }
 }
 
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
@@ -1235,9 +1263,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // Modal pickers / panels — mirror production zed/src/main.rs init order.
     // Each registers its own actions + a SettingsStore observer if needed.
     // Skipped from production (non-portable on Android): audio/call/livekit
-    // (collab), agent_ui/copilot/language_models (AI), debugger_ui/repl
-    // (DAP/Jupyter), auto_update (we self-distribute), telemetry/crashes,
-    // extension_host (deferred to L3).
+    // (collab), copilot/language_models (AI model providers; agent_ui is
+    // initialized below for ACP agents only), debugger_ui/repl (DAP/Jupyter),
+    // auto_update (we self-distribute), telemetry/crashes, extension_host
+    // (deferred to L3).
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1268,6 +1297,26 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // panics at first paint with "no state of type
     // language_model::registry::GlobalLanguageModelRegistry exists".
     language_model::init(cx);
+    // Agent Panel for external ACP agents (Claude Code, Codex, ...), in the
+    // same order as crates/zed/src/main.rs. On remote projects the agent runs
+    // on the remote host through the remote server, so nothing agent-related
+    // is spawned on Android. language_models::init is deliberately skipped:
+    // with no model providers registered, Zed's built-in agent and the inline
+    // assistant have no model, and only ACP agents can run.
+    let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
+    project::AgentRegistryStore::init_global(
+        cx,
+        app_state.fs.clone(),
+        app_state.client.http_client(),
+    );
+    agent_ui::init(
+        app_state.fs.clone(),
+        prompt_builder,
+        app_state.languages.clone(),
+        false,
+        false,
+        cx,
+    );
     // Also covers the git graph (commit history) view: upstream folded
     // crates/git_graph into git_ui, so its serializable item, action
     // handlers, and database domain register here.
@@ -1356,6 +1405,26 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // action dispatcher — `hjkl`/`i`/`:w` etc. fire nothing.
     cx.observe_global::<settings::SettingsStore>(|cx| {
         reload_zdroid_keymaps(cx);
+    })
+    .detach();
+
+    // Mirror crates/zed's `initialize_workspace`: every MultiWorkspace gets
+    // the sidebar that lists projects and agent threads (closed by default).
+    cx.observe_new(|_: &mut MultiWorkspace, window, cx| {
+        let Some(window) = window else { return };
+        let window_handle = window.window_handle();
+        let multi_workspace_handle = cx.entity();
+        cx.defer(move |cx| {
+            window_handle
+                .update(cx, |_, window, cx| {
+                    let sidebar = cx
+                        .new(|cx| sidebar::Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
+                        multi_workspace.register_sidebar(sidebar, cx);
+                    });
+                })
+                .log_err();
+        });
     })
     .detach();
 
@@ -1623,6 +1692,18 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+
+        // Mirror crates/zed's `initialize_agent_panel`.
+        ensure_agent_panel(workspace, window, cx).detach_and_log_err(cx);
+        cx.observe_global_in::<SettingsStore>(window, |workspace, window, cx| {
+            ensure_agent_panel(workspace, window, cx).detach_and_log_err(cx);
+        })
+        .detach();
+        workspace
+            .register_action(agent_ui::AgentPanel::toggle_focus)
+            .register_action(agent_ui::AgentPanel::focus)
+            .register_action(agent_ui::AgentPanel::toggle)
+            .register_action(agent_ui::InlineAssistant::inline_assist);
     })
     .detach();
 
