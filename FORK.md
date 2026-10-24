@@ -62,8 +62,10 @@ APKs from this repo are signed with this fork's own key, not Dylan's. Android wo
 
 1. Back up `~/zdroid-signing/` (`release.keystore` and `keystore-password.txt`) somewhere safe and offline. If the key is lost, installed copies can never be upgraded in place again.
 2. In the repository's **Settings → Secrets and variables → Actions**, add two repository secrets:
-   - `ZDROID_KEYSTORE_BASE64`: the output of `base64 -w0 ~/zdroid-signing/release.keystore`
+   - `ZDROID_KEYSTORE_BASE64`: the contents of a file made with `base64 -w0 ~/zdroid-signing/release.keystore > ~/zdroid-signing/ZDROID_KEYSTORE_BASE64.txt`. Open the file in a text editor and copy everything. Copying the output straight from a zsh terminal also picks up the `%` that zsh prints after output with no trailing newline, which breaks the secret.
    - `ZDROID_KEYSTORE_PASSWORD`: the contents of `~/zdroid-signing/keystore-password.txt`
+
+   With the GitHub CLI, `gh secret set ZDROID_KEYSTORE_BASE64 < ~/zdroid-signing/ZDROID_KEYSTORE_BASE64.txt` (and the same for the password file) avoids copying entirely.
 
    The key alias defaults to `zdroid`. Override it with an Actions variable named `ZDROID_KEY_ALIAS`.
 3. Make sure Actions are enabled under the repository's **Actions** tab.
