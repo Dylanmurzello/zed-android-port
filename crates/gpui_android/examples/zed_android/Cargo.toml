@@ -19,7 +19,7 @@ askpass = { path = "../../../askpass" }
 assets = { path = "../../../assets" }
 client = { path = "../../../client" }
 command_palette = { path = "../../../command_palette" }
-csv_preview = { path = "../../../csv_preview" }
+tabular_data_preview = { path = "../../../tabular_data_preview" }
 db = { path = "../../../db" }
 diagnostics = { path = "../../../diagnostics" }
 editor = { path = "../../../editor" }
@@ -108,15 +108,35 @@ auto_update = { path = "../../../auto_update" }
 # to stay API-compatible. Keep this table in sync with the root Cargo.toml
 # on every upstream merge (UPSTREAM_MERGE.md step).
 [patch.crates-io]
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "e1612d5d98152f8dc2a62e1b51ef7cbf4f7f26b7" }
+# Unify `tree_sitter_language::LanguageFn` between crates.io grammar crates and
+# the git tree-sitter above; two instances of the crate would make grammar
+# constants type-incompatible with `tree_sitter::Language`.
+tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623ec9bf0eaaf7113285c46e8a09018f181b18" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
-async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
 windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
-calloop = { git = "https://github.com/zed-industries/calloop" }
-livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
-libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
-notify = { git = "https://github.com/zed-industries/notify", rev = "0890bbb8ca40a4b5d1f67031698dd7918b37d991" }
-notify-types = { git = "https://github.com/zed-industries/notify", rev = "0890bbb8ca40a4b5d1f67031698dd7918b37d991" }
-webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+notify = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+notify-types = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+# Avoid panicking when a failed EGL call reports EGL_SUCCESS.
+# https://github.com/timothee-haudebourg/khronos-egl/pull/37
+khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+
+# corgi runs build.rs/proc-macros in a sandbox with no write access outside the
+# action's own OUT_DIR. Upstream `scratch` bakes its build-time OUT_DIR in via
+# `env!` and hands every crate one shared directory, which the sandbox can't
+# grant and a content-addressed build can't share. This patch reads OUT_DIR at
+# runtime, so each build script gets a private, writable dir in its own entry —
+# where cxx-build writes its shared cxxbridge headers. Kept local rather than a
+# cxx git fork so Windows cargo builds are unaffected (a git checkout of cxx
+# needs symlink support that Windows CI lacks). webrtc-sys is self-contained, so
+# per-crate scratch dirs are sufficient. Upstream issue:
+# https://github.com/dtolnay/cxx/issues/1752
+scratch = { path = "../../../../tooling/corgi/patches/scratch" }
 
 # Debug builds embed unwind/DWARF tables that overflow llvm-strip's ELF
 # parser at our binary size (2GB+). Drop debug info on Android — backtraces

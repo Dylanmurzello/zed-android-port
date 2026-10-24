@@ -4152,7 +4152,12 @@ impl Window {
     /// hit zones / show grabber affordances when touch is the active
     /// input mode, without affecting mouse precision. Default impl
     /// (non-Android platforms) returns false.
-    pub fn last_input_was_touch(&self) -> bool {
+    ///
+    /// Distinct from `last_input_was_touch`, which tracks gpui's own
+    /// `PlatformInput::Touch` events and gates hover styles. Android
+    /// delivers touches as synthesized mouse events, so only the
+    /// platform window knows they came from a finger.
+    pub fn last_platform_input_was_touch(&self) -> bool {
         self.platform_window.last_input_was_touch()
     }
 

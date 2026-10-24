@@ -1315,7 +1315,7 @@ impl Render for Dock {
             // a visible pill in the middle so fingers can find +
             // grab the edge. Mouse mode stays at the precise 6px
             // hitbox to avoid intercepting clicks near panel content.
-            let touch_mode = window.last_input_was_touch();
+            let touch_mode = window.last_platform_input_was_touch();
             let handle_size = if touch_mode { px(20.) } else { RESIZE_HANDLE_SIZE };
             let pill_thickness = px(4.);
             let pill_length = px(32.);

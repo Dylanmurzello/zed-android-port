@@ -1605,7 +1605,7 @@ mod element {
                             // position check so a fingertip lands on
                             // the splitter without pixel precision.
                             let hit = handle_hitbox.is_hovered(window)
-                                || (window.last_input_was_touch()
+                                || (window.last_platform_input_was_touch()
                                     && handle_hitbox
                                         .bounds
                                         .dilate(px(16.0))

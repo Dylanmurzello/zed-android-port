@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    ffi::c_void,
+    ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -14,9 +14,9 @@ use futures::channel::oneshot;
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
     DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Pixels,
-    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PriorityQueueReceiver, RunnableVariant, Task, ThermalState, WindowAppearance,
-    WindowParams,
+    ActivityGuard, Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper,
+    PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, RunnableVariant, Task, ThermalState,
+    WindowAppearance, WindowParams,
 };
 use gpui_wgpu::GpuContext;
 
@@ -165,7 +165,7 @@ fn install_choreographer_callback() {
 #[derive(Default)]
 pub(crate) struct PlatformHandlers {
     pub(crate) open_urls: Option<Box<dyn FnMut(Vec<String>)>>,
-    pub(crate) quit: Option<Box<dyn FnMut()>>,
+    pub(crate) quit: Option<Box<dyn FnMut() -> bool>>,
     pub(crate) reopen: Option<Box<dyn FnMut()>>,
     pub(crate) app_menu_action: Option<Box<dyn FnMut(&dyn Action)>>,
     pub(crate) will_open_app_menu: Option<Box<dyn FnMut()>>,
@@ -1240,11 +1240,13 @@ impl Platform for AndroidPlatform {
         std::process::exit(0);
     }
 
-    fn restart(&self, _binary_path: Option<PathBuf>) {}
+    fn restart(&self, _binary_path: Option<PathBuf>, _arguments: Vec<OsString>) {}
     fn activate(&self, _ignoring_other_apps: bool) {}
     fn hide(&self) {}
     fn hide_other_apps(&self) {}
     fn unhide_other_apps(&self) {}
+
+    fn on_displays_changed(&self, _callback: Box<dyn FnMut()>) {}
 
     fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>> {
         vec![Rc::new(AndroidDisplay::new())]
@@ -1367,11 +1369,14 @@ impl Platform for AndroidPlatform {
     fn reveal_path(&self, _path: &Path) {}
     fn open_with_system(&self, _path: &Path) {}
 
-    fn on_quit(&self, callback: Box<dyn FnMut()>) {
+    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.common.borrow_mut().callbacks.quit = Some(callback);
     }
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.reopen = Some(callback);
+    }
+    fn on_system_sleep(&self, _callback: Box<dyn FnMut()>) {
+        // Same as on_system_wake: no app-visible system sleep signal.
     }
     fn on_system_wake(&self, _callback: Box<dyn FnMut()>) {
         // Android exposes no system sleep/wake signal to apps; process
@@ -1394,6 +1399,11 @@ impl Platform for AndroidPlatform {
         ThermalState::Nominal
     }
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
+    fn prevent_idle_sleep(&self, reason: &str) -> Task<Result<ActivityGuard>> {
+        Task::ready(Err(anyhow::anyhow!(
+            "idle sleep prevention for {reason:?} is not yet implemented on Android"
+        )))
+    }
 
     fn compositor_name(&self) -> &'static str {
         "Android"

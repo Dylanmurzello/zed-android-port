@@ -516,11 +516,11 @@ fn go_menu_items() -> Vec<MenuEntry> {
         ),
         MenuEntry::Action(
             "Go to Declaration",
-            Box::new(editor::actions::GoToDeclaration),
+            Box::new(editor::actions::GoToDeclaration::default()),
         ),
         MenuEntry::Action(
             "Go to Type Definition",
-            Box::new(editor::actions::GoToTypeDefinition),
+            Box::new(editor::actions::GoToTypeDefinition::default()),
         ),
         MenuEntry::Action(
             "Find All References",

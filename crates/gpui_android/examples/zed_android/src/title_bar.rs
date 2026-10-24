@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, Context, DismissEvent, Entity, FocusHandle,
+    Action, Anchor, AnyElement, App, Context, DismissEvent, Entity, FocusHandle,
     Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
     Pixels, Point, Render, SharedString, Styled, WeakEntity, Window, anchored, deferred, div,
     prelude::FluentBuilder,

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render, Size,
-    Tiling, Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
+    Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
 };
 use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
