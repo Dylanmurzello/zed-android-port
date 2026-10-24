@@ -281,7 +281,17 @@ impl PasswordProxy {
         >,
         executor: BackgroundExecutor,
     ) -> Result<Self> {
-        let temp_dir = tempfile::Builder::new().prefix("zed-askpass").tempdir()?;
+        let temp_base = std::env::temp_dir();
+        // On Android TMPDIR points into the runtime's userland, which may not
+        // exist yet (e.g. a chroot data dir before first use).
+        #[cfg(not(target_os = "windows"))]
+        fs::create_dir_all(&temp_base)
+            .await
+            .with_context(|| format!("creating temp directory at {temp_base:?}"))?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("zed-askpass")
+            .tempdir_in(&temp_base)
+            .with_context(|| format!("creating askpass temp directory in {temp_base:?}"))?;
         let askpass_socket = temp_dir.path().join("askpass.sock");
         let current_exec =
             std::env::current_exe().context("Failed to determine current zed executable path.")?;
