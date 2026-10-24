@@ -596,6 +596,23 @@ impl TerminalView {
             .upgrade()
             .and_then(|workspace| workspace.read(cx).panel::<TerminalPanel>(cx))
             .is_some_and(|terminal_panel| terminal_panel.read(cx).assistant_enabled());
+        // On Android there's no Cmd/Ctrl-click to follow a link, so offer to
+        // open a selected web URL instead.
+        let selected_url = if cfg!(target_os = "android") {
+            self.terminal
+                .read(cx)
+                .last_content
+                .selection_text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| {
+                    (text.starts_with("https://") || text.starts_with("http://"))
+                        && !text.contains(char::is_whitespace)
+                })
+                .map(str::to_string)
+        } else {
+            None
+        };
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
@@ -619,6 +636,10 @@ impl TerminalView {
                     !self.read_only && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| menu.action("Clear", Box::new(Clear)),
                 )
+                .when_some(selected_url, |menu, url| {
+                    menu.separator()
+                        .entry("Open in Browser", None, move |_, cx| cx.open_url(&url))
+                })
                 .when(
                     assistant_enabled && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {
