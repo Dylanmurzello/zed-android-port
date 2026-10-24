@@ -178,6 +178,11 @@ fn android_main(app: AndroidApp) {
                     util::env::EnvOp::Remove => std::env::remove_var(key),
                 }
             }
+            // The app runs on the Dev channel, where zed_credentials_provider
+            // otherwise writes API keys and tokens to a plaintext JSON file.
+            // Use gpui's credential API instead, which gpui_android backs
+            // with the Android Keystore.
+            std::env::set_var("ZED_DEVELOPMENT_USE_KEYCHAIN", "1");
         }
         log::info!(
             "zed_android: PATH = {}; SHELL = {}",

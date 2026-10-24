@@ -1023,6 +1023,19 @@ class MainActivity : GameActivity(), ImeHost {
         return sb.toString()
     }
 
+    /** Backs gpui's credential API; see `gpui_android/src/credentials.rs`. */
+    @Suppress("unused") // called from Rust via JNI
+    fun writeCredential(url: String, username: String, password: ByteArray): Boolean =
+        SecureCredentialStore.write(this, url, username, password)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun readCredential(url: String): ByteArray? =
+        SecureCredentialStore.read(this, url)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun deleteCredential(url: String): Boolean =
+        SecureCredentialStore.delete(this, url)
+
     @Suppress("unused") // called from Rust via JNI
     /**
      * Open an HTTPS URL in the user's default browser. Called via JNI from

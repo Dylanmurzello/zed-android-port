@@ -1445,23 +1445,19 @@ impl Platform for AndroidPlatform {
         crate::clipboard::write(&self.android_app, item);
     }
 
-    fn write_credentials(
-        &self,
-        _url: &str,
-        _username: &str,
-        _password: &[u8],
-    ) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "credential storage not yet wired on Android"
-        )))
+    fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
+        Task::ready(crate::credentials::write(
+            &self.android_app,
+            url,
+            username,
+            password,
+        ))
     }
-    fn read_credentials(&self, _url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
-        Task::ready(Ok(None))
+    fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
+        Task::ready(crate::credentials::read(&self.android_app, url))
     }
-    fn delete_credentials(&self, _url: &str) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "credential storage not yet wired on Android"
-        )))
+    fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
+        Task::ready(crate::credentials::delete(&self.android_app, url))
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
