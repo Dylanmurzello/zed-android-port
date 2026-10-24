@@ -1218,8 +1218,10 @@ class MainActivity : GameActivity(), ImeHost {
     @Suppress("DEPRECATION")
     private fun isTrustedUpdateApk(file: File): Boolean {
         return try {
+            // Android 9 leaves signingInfo unset for APK archives, so also
+            // request the legacy signatures as a fallback.
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                PackageManager.GET_SIGNING_CERTIFICATES
+                PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
             } else {
                 PackageManager.GET_SIGNATURES
             }
@@ -1229,11 +1231,12 @@ class MainActivity : GameActivity(), ImeHost {
             if (archive.packageName != packageName) return false
 
             fun signerDigests(info: android.content.pm.PackageInfo): Set<String> {
-                val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    info.signingInfo?.apkContentsSigners.orEmpty()
+                val signingInfoSigners = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
                 } else {
-                    info.signatures.orEmpty()
+                    null
                 }
+                val signatures = signingInfoSigners ?: info.signatures.orEmpty()
                 return signatures.map { signature ->
                     MessageDigest.getInstance("SHA-256")
                         .digest(signature.toByteArray())
