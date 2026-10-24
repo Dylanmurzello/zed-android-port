@@ -8282,7 +8282,6 @@ dependencies = [
 name = "http_client_tls"
 version = "0.1.0"
 dependencies = [
- "log",
  "rustls",
  "webpki-roots 1.0.10",
 ]
