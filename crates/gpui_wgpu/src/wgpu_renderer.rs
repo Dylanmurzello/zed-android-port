@@ -2301,6 +2301,7 @@ impl WgpuRenderer {
         self.atlas.handle_device_lost(context);
 
         let is_bgr = self.is_bgr;
+        let clear_color = self.clear_color;
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
@@ -2310,6 +2311,7 @@ impl WgpuRenderer {
             self.atlas.clone(),
         )?;
         self.set_subpixel_layout(is_bgr);
+        self.set_clear_color(clear_color);
 
         log::info!("GPU recovery complete");
         Ok(())
