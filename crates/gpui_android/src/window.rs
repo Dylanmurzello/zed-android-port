@@ -14,8 +14,9 @@ use raw_window_handle as rwh;
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, GpuSpecs, Modifiers,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Pixels,
-    Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams, point, px, size,
+    FrameRequestSource, Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
+    WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
@@ -401,6 +402,8 @@ impl AndroidWindowStatePtr {
             callback(RequestFrameOptions {
                 require_presentation: false,
                 force_render,
+                signal_at: None,
+                signal_source: FrameRequestSource::NativeCallback,
             });
             self.callbacks.borrow_mut().request_frame = Some(callback);
         }
@@ -655,6 +658,12 @@ impl PlatformWindow for AndroidWindow {
         true
     }
 
+    fn visibility(&self) -> WindowVisibility {
+        // Backgrounding tears down the Surface, which already stops
+        // painting, so gpui never needs to see a Hidden window.
+        WindowVisibility::Visible
+    }
+
     fn is_hovered(&self) -> bool {
         false
     }
@@ -698,6 +707,8 @@ impl PlatformWindow for AndroidWindow {
         self.ptr.callbacks.borrow_mut().active_status_change = Some(callback);
     }
 
+    fn on_visibility_change(&self, _callback: Box<dyn FnMut(WindowVisibility)>) {}
+
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.ptr.callbacks.borrow_mut().hovered_status_change = Some(callback);
     }
@@ -709,6 +720,8 @@ impl PlatformWindow for AndroidWindow {
     fn on_moved(&self, callback: Box<dyn FnMut()>) {
         self.ptr.callbacks.borrow_mut().moved = Some(callback);
     }
+
+    fn on_display_changed(&self, _callback: Box<dyn FnMut()>) {}
 
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>) {
         self.ptr.callbacks.borrow_mut().should_close = Some(callback);
@@ -821,7 +834,7 @@ impl PlatformWindow for AndroidWindow {
             .borrow()
             .renderer
             .as_ref()
-            .map(|r| r.gpu_specs())
+            .and_then(|r| r.gpu_specs())
     }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}

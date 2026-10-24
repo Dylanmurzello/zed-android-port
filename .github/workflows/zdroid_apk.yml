@@ -1,0 +1,274 @@
+# Builds the Zdroid APK.
+#
+# - Tag pushes matching vX.Y.Z build a signed APK and publish it as a GitHub
+#   pre-release. Promote it to "latest" after the device smoke test in
+#   RELEASING.md; the in-app updater only follows the latest release.
+# - Pushes to main, pull requests, and manual runs upload the APK as a
+#   workflow artifact. Pull requests are never signed with the release key.
+#
+# Signing secrets and the release flow are described in FORK.md.
+name: Zdroid APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: zdroid-apk-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  APP_DIR: crates/gpui_android/examples/zed_android
+  # Keep in sync with `ndkVersion` in android/app/build.gradle.kts.
+  NDK_VERSION: 27.0.12077973
+  ANDROID_PLATFORM: "26"
+  BUILD_TOOLS_VERSION: 35.0.0
+  CARGO_NDK_VERSION: 4.1.2
+  GRADLE_VERSION: 8.14.3
+  GRADLE_SHA256: bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531
+  # Certificate of the key stored in ZDROID_KEYSTORE_BASE64. Every release
+  # must be signed by it, otherwise installed copies can't upgrade in place.
+  SIGNING_CERT_SHA256: 33:A2:DB:E8:82:DC:16:70:A3:AC:2C:1C:F2:C9:BD:D9:BF:99:05:06:D0:94:B1:0F:33:4C:D9:AA:81:D4:2E:67
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read # checkout
+    outputs:
+      version: ${{ steps.apk.outputs.version }}
+      apk_name: ${{ steps.apk.outputs.apk_name }}
+      apk_sha256: ${{ steps.apk.outputs.apk_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check tag matches versionName
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' "$APP_DIR/android/app/build.gradle.kts")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match versionName $version in build.gradle.kts"
+            exit 1
+          fi
+
+      - name: Put the Android target dir on the scratch disk
+        # A release build needs more space than the root filesystem has free.
+        run: |
+          root_free=$(df --output=avail -k / | tail -1)
+          mnt_free=$(df --output=avail -k /mnt 2>/dev/null | tail -1 || echo 0)
+          if [ "${mnt_free:-0}" -gt "$root_free" ]; then
+            sudo mkdir -p /mnt/zdroid-target
+            sudo chown "$(id -u):$(id -g)" /mnt/zdroid-target
+            mkdir -p "$APP_DIR/target"
+            sudo mount --bind /mnt/zdroid-target "$APP_DIR/target"
+          fi
+          df -h / /mnt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" --install "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;$BUILD_TOOLS_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install Gradle
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/gradle.zip" "https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle.zip" | sha256sum --check --strict
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-$GRADLE_VERSION/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust toolchain
+        # Installs the channel, targets and components from rust-toolchain.toml.
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      - name: Cache Rust build
+        # Releases build from a clean slate so a poisoned cache can't reach them.
+        if: github.ref_type != 'tag'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # zizmor: ignore[cache-poisoning] v2.9.3
+        with:
+          workspaces: ${{ env.APP_DIR }} -> target
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
+
+      - name: Configure release signing
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ZDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ZDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ vars.ZDROID_KEY_ALIAS || 'zdroid' }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              echo "::error::ZDROID_KEYSTORE_BASE64 and ZDROID_KEYSTORE_PASSWORD secrets are required for releases"
+              exit 1
+            fi
+            echo "::warning::Signing secrets are not configured; building an unsigned APK"
+            exit 0
+          fi
+          umask 077
+          app="$APP_DIR/android/app"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$app/release.keystore"
+          # PKCS12 keystores use the store password for the key as well.
+          {
+            echo "storeFile=release.keystore"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+          } > "$app/signing.properties"
+
+      - name: Build native library
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          # Point the in-app updater at this repository's releases.
+          ZDROID_RELEASE_REPO: ${{ github.repository }}
+        run: cargo ndk -t arm64-v8a -P "$ANDROID_PLATFORM" -o android/app/src/main/jniLibs build --release
+
+      - name: Build APK
+        # Gradle also builds and bundles zd-exec and zed-askpass-helper.
+        working-directory: ${{ env.APP_DIR }}/android
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$APP_DIR/android/app/release.keystore" "$APP_DIR/android/app/signing.properties"
+
+      - name: Verify APK
+        id: apk
+        run: |
+          build_tools="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          outputs="$APP_DIR/android/app/build/outputs/apk/release"
+          if [ -f "$outputs/app-release.apk" ]; then
+            apk="$outputs/app-release.apk"
+          else
+            apk="$outputs/app-release-unsigned.apk"
+          fi
+          # The leading space skips `platformBuildVersionName` on the same line.
+          version=$("$build_tools/aapt2" dump badging "$apk" | sed -n "s/.* versionName='\([^']*\)'.*/\1/p")
+          if [ -z "$version" ]; then
+            echo "::error::Could not read versionName from $apk"
+            exit 1
+          fi
+
+          if [ "$(basename "$apk")" = app-release.apk ]; then
+            "$build_tools/apksigner" verify --print-certs "$apk" | tee "$RUNNER_TEMP/certs.txt"
+            actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/certs.txt")
+            expected=$(echo "$SIGNING_CERT_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::APK is signed with certificate $actual, expected $expected"
+              exit 1
+            fi
+            apk_name="Zdroid-$version.apk"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "::error::Release builds must be signed"
+            exit 1
+          else
+            apk_name="Zdroid-$version-unsigned.apk"
+          fi
+
+          mkdir -p dist
+          cp "$apk" "dist/$apk_name"
+          apk_sha256=$(sha256sum "dist/$apk_name" | cut -d' ' -f1)
+          echo "$apk_name: $apk_sha256" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "version=$version"
+            echo "apk_name=$apk_name"
+            echo "apk_sha256=$apk_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zdroid-apk
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish pre-release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release and upload the APK
+      id-token: write # sign the provenance attestation via OIDC
+      attestations: write # store the provenance attestation
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: zdroid-apk
+          path: dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/${{ needs.build.outputs.apk_name }}
+
+      - name: Write release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          APK_NAME: ${{ needs.build.outputs.apk_name }}
+          APK_SHA256: ${{ needs.build.outputs.apk_sha256 }}
+        run: |
+          # The annotated tag's message (minus its subject line) is the
+          # hand-written part of the notes: Install, Highlights, Caveats.
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME")
+          if [ "$(echo "$ref" | jq -r .object.type)" = tag ]; then
+            gh api "repos/$GITHUB_REPOSITORY/git/tags/$(echo "$ref" | jq -r .object.sha)" --jq .message \
+              | sed '1d' | sed '/./,$!d' > notes.md
+          else
+            : > notes.md
+          fi
+          {
+            echo
+            echo "### Verification"
+            echo
+            echo "* APK SHA-256: \`$APK_SHA256\`"
+            echo "* Signing cert SHA-256: \`$SIGNING_CERT_SHA256\`"
+            echo "* Built from commit \`${GITHUB_SHA:0:10}\` by [this workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "* Build provenance: \`gh attestation verify $APK_NAME --repo $GITHUB_REPOSITORY\`"
+          } >> notes.md
+          cat notes.md
+
+      - name: Create GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          APK_NAME: ${{ needs.build.outputs.apk_name }}
+        # `gh release create` refuses to overwrite an existing release, so a
+        # re-run can never clobber an asset and reset its download count.
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/$APK_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Zdroid $VERSION" \
+            --notes-file notes.md \
+            --prerelease \
+            --verify-tag

@@ -357,7 +357,7 @@ impl Render for NoexecMoveModal {
                         Button::new("noexec-cancel", "Cancel")
                             .key_binding(
                                 KeyBinding::for_action(&menu::Cancel, cx)
-                                    .size(rems_from_px(12.)),
+                                    .size(rems_from_px(12_f32)),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.cancel_and_maybe_suppress(cx);
@@ -370,7 +370,7 @@ impl Render for NoexecMoveModal {
                             .layer(ElevationIndex::ModalSurface)
                             .key_binding(
                                 KeyBinding::for_action(&menu::Confirm, cx)
-                                    .size(rems_from_px(12.)),
+                                    .size(rems_from_px(12_f32)),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.copy_and_dismiss(cx);
