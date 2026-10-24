@@ -781,10 +781,6 @@ impl PlatformWindow for AndroidWindow {
         crate::ime::soft_keyboard_visible()
     }
 
-    fn trackpad_mode_enabled(&self) -> bool {
-        crate::ime::trackpad_mode_enabled()
-    }
-
     fn draw(&self, scene: &Scene) {
         let mut state = self.ptr.state.borrow_mut();
         let raw_window = state.raw_window;

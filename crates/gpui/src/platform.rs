@@ -1315,13 +1315,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
-    /// True when virtual trackpad mode is currently active. Used
-    /// by the pane tab-bar toggle button to draw its lit-up state,
-    /// matching the convention other togglable buttons use.
-    fn trackpad_mode_enabled(&self) -> bool {
-        false
-    }
-
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
