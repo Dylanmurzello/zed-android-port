@@ -16,6 +16,9 @@
          explicit after. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- Opt-in background mode (KeepAliveService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <!-- Required for the in-app updater to hand the downloaded APK to
@@ -115,5 +118,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/updater_file_paths"/>
         </provider>
+
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"/>
     </application>
 </manifest>

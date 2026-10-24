@@ -449,6 +449,7 @@ class MainActivity : GameActivity(), ImeHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installSplashOverlay()
+        KeepAliveService.startIfEnabled(this)
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -1057,6 +1058,13 @@ class MainActivity : GameActivity(), ImeHost {
         }
         return sb.toString()
     }
+
+    /** Backs the Zdroid menu's background-mode toggle. */
+    @Suppress("unused") // called from Rust via JNI
+    fun isBackgroundModeEnabled(): Boolean = KeepAliveService.isEnabled(this)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun setBackgroundModeEnabled(enabled: Boolean) = KeepAliveService.setEnabled(this, enabled)
 
     /** Backs gpui's credential API; see `gpui_android/src/credentials.rs`. */
     @Suppress("unused") // called from Rust via JNI

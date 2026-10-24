@@ -92,7 +92,9 @@ pub(crate) fn delete(android_app: &AndroidApp, url: &str) -> Result<()> {
     })
 }
 
-fn with_activity<T>(
+/// Runs `callback` with an attached JNI env and the activity, clearing any
+/// pending Java exception before and after.
+pub(crate) fn with_activity<T>(
     android_app: &AndroidApp,
     callback: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T>,
 ) -> Result<T> {

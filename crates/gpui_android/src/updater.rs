@@ -37,7 +37,7 @@ pub fn register_android_app(app: AndroidApp) {
     let _ = ANDROID_APP.set(app);
 }
 
-fn android_app() -> Result<&'static AndroidApp> {
+pub(crate) fn android_app() -> Result<&'static AndroidApp> {
     ANDROID_APP
         .get()
         .ok_or_else(|| anyhow!("updater: AndroidApp not registered yet"))
