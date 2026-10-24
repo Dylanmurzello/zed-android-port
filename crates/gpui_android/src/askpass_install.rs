@@ -76,6 +76,7 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
 
     if let Ok(meta) = fs::metadata(&target)
         && meta.len() as usize == expected_len
+        && crate::zd_exec_install::asset_matches_file(&mut asset, &target)?
     {
         log::debug!(
             "askpass_install: {} up to date ({} bytes); skipping",
@@ -84,6 +85,11 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
         );
         return Ok(target);
     }
+
+    // The comparison consumes the asset stream; reopen it before extracting.
+    let mut asset = asset_manager.open(&asset_name).ok_or_else(|| {
+        anyhow!("{ASSET_NAME} asset disappeared while checking the installed copy")
+    })?;
 
     let mut buf = Vec::with_capacity(expected_len);
     asset.read_to_end(&mut buf)?;

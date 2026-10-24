@@ -26,9 +26,8 @@
 //! userland (libc, coreutils, package set) and shouldn't drag in our
 //! Rust binaries. Two artifacts, two cadences.
 //!
-//! Idempotent: a quick byte-length comparison decides whether to
-//! re-extract. Fast enough on flash to do on every boot if the
-//! comparison detects a stale binary.
+//! Idempotent: a bounded-memory content comparison decides whether to
+//! re-extract, including upgrades whose ELF size does not change.
 
 use std::ffi::CString;
 use std::fs;
@@ -44,9 +43,8 @@ use anyhow::{Context, Result, anyhow};
 const ASSET_NAME: &str = "zd-exec";
 
 /// Ensure `<data_path>/bin/zd-exec` exists and matches the APK-bundled
-/// asset. Re-extracts if the file is missing or has a different byte
-/// length than the asset (catches both fresh-install and stale-binary
-/// cases). No-op when the on-disk file already matches.
+/// asset. Re-extracts if the file is missing or its contents differ
+/// from the asset. No-op when the on-disk file already matches.
 ///
 /// Sweeps the pre-Phase-4 `<data_path>/usr/bin/zd-exec` orphan if
 /// present so existing installs upgrading through this change don't
@@ -75,14 +73,12 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<()
         .ok_or_else(|| anyhow!("{ASSET_NAME} asset not present in APK; check `buildZdExec` Gradle task ran"))?;
     let expected_len = asset.length();
 
-    // Skip re-extraction when the destination already matches the
-    // asset's byte length. Won't catch silent corruption (mismatched
-    // content with matching size), but that's exceedingly rare and a
-    // full SHA-256 every boot is wasted work. Reinstalling the APK
-    // bumps the asset's bytes, length almost always differs, and we
-    // re-extract.
+    // Release builds can change while keeping exactly the same ELF byte
+    // length, so a size-only check could leave an old spawn bridge in place
+    // after an APK upgrade.
     if let Ok(meta) = fs::metadata(&target)
         && meta.len() as usize == expected_len
+        && asset_matches_file(&mut asset, &target)?
     {
         log::debug!(
             "zd_exec_install: {} up to date ({} bytes); skipping",
@@ -91,6 +87,11 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<()
         );
         return Ok(());
     }
+
+    // The comparison consumes the asset stream; reopen it before extracting.
+    let mut asset = asset_manager.open(&asset_name).ok_or_else(|| {
+        anyhow!("{ASSET_NAME} asset disappeared while checking the installed copy")
+    })?;
 
     let mut buf = Vec::with_capacity(expected_len);
     asset.read_to_end(&mut buf)?;
@@ -261,4 +262,23 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String]) -> Result<
         skipped,
     );
     Ok(())
+}
+
+/// Compares an APK asset stream with an installed file in fixed-size
+/// chunks, so neither binary has to be held in memory twice.
+pub(crate) fn asset_matches_file(asset: &mut impl Read, target: &Path) -> Result<bool> {
+    let mut installed = fs::File::open(target)?;
+    let mut asset_buffer = [0_u8; 64 * 1024];
+    let mut installed_buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = asset.read(&mut asset_buffer)?;
+        if read == 0 {
+            return Ok(true);
+        }
+        if installed.read_exact(&mut installed_buffer[..read]).is_err()
+            || asset_buffer[..read] != installed_buffer[..read]
+        {
+            return Ok(false);
+        }
+    }
 }
