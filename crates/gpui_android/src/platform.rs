@@ -241,6 +241,8 @@ pub(crate) struct AndroidCommon {
     /// has the setting off.
     pub(crate) last_soft_keyboard_setting: Option<bool>,
     pub(crate) running: bool,
+    /// Set by `quit()` so `run()` exits the process once the event loop ends.
+    pub(crate) exit_requested: bool,
 }
 
 impl AndroidCommon {
@@ -283,6 +285,7 @@ impl AndroidCommon {
             last_extras_row_enabled: None,
             last_soft_keyboard_setting: None,
             running: true,
+            exit_requested: false,
         }
     }
 }
@@ -1219,25 +1222,32 @@ impl Platform for AndroidPlatform {
         log::info!("AndroidPlatform::run: exiting event loop");
         let quit = self.common.borrow_mut().callbacks.quit.take();
         if let Some(mut fun) = quit {
-            fun();
+            if !fun() {
+                log::warn!("AndroidPlatform::run: app was busy, shutdown skipped");
+            }
+        }
+        if self.common.borrow().exit_requested {
+            // gpui's quit hook only stops the run loop. On Android the
+            // hosting GameActivity stays alive (its JVM-side thread keeps
+            // running independently of `android_main` returning), so the
+            // user-visible result of a "Quit" menu click would be: editor
+            // stops responding to gestures but the window doesn't dismiss.
+            // Exit the process so `MainActivity.onDestroy` runs (it does
+            // its own `Process.killProcess` fallback + cursor / splash
+            // teardown) and the OS returns the user to the launcher.
+            std::process::exit(0);
         }
     }
 
     fn quit(&self) {
-        self.common.borrow_mut().running = false;
-        let quit = self.common.borrow_mut().callbacks.quit.take();
-        if let Some(mut fun) = quit {
-            fun();
-        }
-        // gpui's quit hook only stops the run loop. On Android the
-        // hosting GameActivity stays alive (its JVM-side thread keeps
-        // running independently of `android_main` returning), so the
-        // user-visible result of a "Quit" menu click would be: editor
-        // stops responding to gestures but the window doesn't dismiss.
-        // Exit the process so `MainActivity.onDestroy` runs (it does
-        // its own `Process.killProcess` fallback + cursor / splash
-        // teardown) and the OS returns the user to the launcher.
-        std::process::exit(0);
+        // App::quit runs inside an app update, where the quit callback can't
+        // borrow the app and skips App::shutdown, so quit observers (workspace
+        // serialization and the like) would never run. Stop the loop instead;
+        // run() invokes the callback once the update has unwound, as the
+        // Linux and Windows backends do.
+        let mut common = self.common.borrow_mut();
+        common.running = false;
+        common.exit_requested = true;
     }
 
     fn restart(&self, _binary_path: Option<PathBuf>, _arguments: Vec<OsString>) {}
