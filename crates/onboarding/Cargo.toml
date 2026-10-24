@@ -10,6 +10,8 @@ workspace = true
 
 [lib]
 path = "src/onboarding.rs"
+test = false
+doctest = false
 
 [features]
 default = []
@@ -53,3 +55,6 @@ zdroid_runtime = { path = "../zdroid_runtime" }
 
 [dev-dependencies]
 db = {workspace = true, features = ["test-support"]}
+
+[package.metadata.cargo-shear]
+ignored = ["component", "documented"]
