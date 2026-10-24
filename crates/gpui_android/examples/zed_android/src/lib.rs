@@ -40,6 +40,20 @@ use zdroid_runtime::{
     config::RuntimeFile,
 };
 
+/// The Zed release this app is built from, reported as the app version so
+/// SSH projects fetch the matching stable remote server. Read from
+/// crates/zed so it follows every upstream sync.
+fn zed_release_version() -> semver::Version {
+    let version = include_str!("../../../../zed/Cargo.toml")
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+        .and_then(|version| version.parse().ok());
+    version.unwrap_or_else(|| {
+        log::error!("zed_android: no version in crates/zed/Cargo.toml");
+        semver::Version::new(0, 1, 0)
+    })
+}
+
 /// Builds before 0.4.3 kept credentials in zed_credentials_provider's
 /// plaintext development file, since the Keystore wasn't wired up. Move any
 /// such entries into the Keystore, deleting the file only once every write
@@ -804,7 +818,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         }
     }
 
-    release_channel::init(semver::Version::new(0, 1, 0), cx);
+    release_channel::init(zed_release_version(), cx);
     info!("zed_android: release_channel init");
     migrate_development_credentials(cx);
 
