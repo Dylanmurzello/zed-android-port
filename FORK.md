@@ -105,6 +105,16 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 4. Install the pre-release on a device and run the smoke checklist in RELEASING.md.
 5. If it passes, edit the release on GitHub: clear **Set as a pre-release** and tick **Set as the latest release**. The in-app updater only follows the latest release. If it fails, fix it on `zdroid` and cut a new PATCH tag. Don't delete or re-upload releases.
 
+### Testing a pull request
+
+Pull requests from this repository build an APK signed with the release key, named `Zdroid-X.Y.Z-<commit>.apk`. Pull requests from forks never get the key, so their APKs are unsigned and won't install.
+
+1. Open the pull request's **Checks** tab, open the **Zdroid APK** run, and download the `zdroid-apk` artifact. GitHub delivers it as a `.zip`; unzip it to get the APK.
+2. Install it over the current release. Same package and key means it installs as an update and keeps your data.
+3. Keep `versionCode` in mind. Android refuses to install a lower `versionCode` over a higher one without uninstalling, which deletes the app's data. Bump the version in the pull request itself, so the test build and the release made from it share a `versionCode` and the release installs cleanly over the test build.
+
+Test builds can't use a separate package name such as `com.zdroid.dev` to install side by side: the Bootstrap userland has `/data/data/com.zdroid` compiled into its binaries, so terminal, git and `pkg` would break.
+
 To verify a downloaded APK:
 
 ```sh
