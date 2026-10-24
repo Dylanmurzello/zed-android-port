@@ -7633,7 +7633,6 @@ dependencies = [
  "console_error_panic_hook",
  "criterion",
  "gpui",
- "gpui_android",
  "gpui_linux",
  "gpui_macos",
  "gpui_web",

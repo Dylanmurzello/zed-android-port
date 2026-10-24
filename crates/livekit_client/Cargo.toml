@@ -43,12 +43,12 @@ smallvec.workspace = true
 ui.workspace = true
 util.workspace = true
 
-[target.'cfg(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd", target_os = "android"))'.dependencies]
+[target.'cfg(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd"))'.dependencies]
 livekit_api.workspace = true
 nanoid.workspace = true
 postage = { workspace = true, features = ["futures-traits", "logging", "blocking"] }
 
-[target.'cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd", target_os = "android")))'.dependencies]
+[target.'cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
 libwebrtc.workspace = true
 livekit.workspace = true
 

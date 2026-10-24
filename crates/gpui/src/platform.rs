@@ -34,9 +34,6 @@ pub(crate) type PlatformScreenCaptureFrame = ();
 #[cfg(all(target_os = "macos", feature = "screen-capture"))]
 pub(crate) type PlatformScreenCaptureFrame =
     objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
-// Android has no screen capture path yet; satisfy the type so feature-on builds compile.
-#[cfg(all(target_os = "android", feature = "screen-capture"))]
-pub(crate) type PlatformScreenCaptureFrame = ();
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
