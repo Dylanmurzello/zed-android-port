@@ -1401,6 +1401,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
+name = "call_hierarchy"
+version = "0.1.0"
+dependencies = [
+ "editor",
+ "fuzzy",
+ "gpui",
+ "language",
+ "log",
+ "menu",
+ "picker",
+ "project",
+ "proto",
+ "settings",
+ "theme",
+ "theme_settings",
+ "ui",
+ "util",
+ "workspace",
+ "zed_actions",
+]
+
+[[package]]
 name = "calloop"
 version = "0.14.3"
 source = "git+https://github.com/zed-industries/calloop?rev=3759371fee14c40066d64777e2a36b6ffcc22590#3759371fee14c40066d64777e2a36b6ffcc22590"
@@ -6525,6 +6547,23 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "lsp_command_selector"
+version = "0.1.0"
+dependencies = [
+ "editor",
+ "fuzzy",
+ "gpui",
+ "language",
+ "log",
+ "lsp",
+ "picker",
+ "project",
+ "serde_json",
+ "ui",
+ "workspace",
 ]
 
 [[package]]
@@ -15047,6 +15086,7 @@ dependencies = [
  "askpass",
  "assets",
  "auto_update",
+ "call_hierarchy",
  "client",
  "command_palette",
  "db",
@@ -15079,6 +15119,7 @@ dependencies = [
  "languages",
  "line_ending_selector",
  "log",
+ "lsp_command_selector",
  "markdown_preview",
  "menu",
  "multi_buffer",

@@ -17,6 +17,7 @@ anyhow = "1"
 jni = "0.21"
 askpass = { path = "../../../askpass" }
 assets = { path = "../../../assets" }
+call_hierarchy = { path = "../../../call_hierarchy" }
 client = { path = "../../../client" }
 command_palette = { path = "../../../command_palette" }
 tabular_data_preview = { path = "../../../tabular_data_preview" }
@@ -46,6 +47,7 @@ language = { path = "../../../language" }
 language_model = { path = "../../../language_model" }
 language_selector = { path = "../../../language_selector" }
 language_tools = { path = "../../../language_tools" }
+lsp_command_selector = { path = "../../../lsp_command_selector" }
 languages = { path = "../../../languages", features = ["load-grammars"] }
 line_ending_selector = { path = "../../../line_ending_selector" }
 markdown_preview = { path = "../../../markdown_preview" }

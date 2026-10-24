@@ -1095,6 +1095,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     file_finder::init(cx);
     tab_switcher::init(cx);
     outline::init(cx);
+    call_hierarchy::init(cx);
     project_symbols::init(cx);
     project_panel::init(cx);
     outline_panel::init(cx);
@@ -1108,6 +1109,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     encoding_selector::init(cx);
     language_selector::init(cx);
     line_ending_selector::init(cx);
+    lsp_command_selector::init(cx);
     toolchain_selector::init(cx);
     theme_selector::init(cx);
     settings_profile_selector::init(cx);
