@@ -584,6 +584,29 @@ impl TerminalView {
         cx.emit(Event::Wakeup);
     }
 
+    /// Opens the context menu at the end of an Android long press. Deferred to
+    /// the next frame because the long-press-then-tap gesture also releases
+    /// the long press right before its right-click, which opens the menu
+    /// itself.
+    #[cfg(target_os = "android")]
+    pub(crate) fn deploy_long_press_context_menu(
+        &mut self,
+        position: GpuiPoint<Pixels>,
+        has_selection: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            this.update(cx, |view, cx| {
+                if view.context_menu.is_none() {
+                    view.deploy_context_menu(position, has_selection, window, cx);
+                }
+            })
+            .ok();
+        });
+    }
+
     pub fn deploy_context_menu(
         &mut self,
         position: GpuiPoint<Pixels>,

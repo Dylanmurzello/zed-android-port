@@ -1032,11 +1032,15 @@ impl TerminalElement {
                     });
                     // gpui_android reports a long press as a double click,
                     // optionally followed by a drag. Offer the context menu on
-                    // release so copy and paste don't need a two-finger tap.
+                    // release so copy and paste don't need a two-finger tap,
+                    // unless the app in the terminal is using the mouse.
                     #[cfg(target_os = "android")]
                     if button == MouseButton::Left
                         && event.click_count == 2
                         && window.last_platform_input_was_touch()
+                        && !terminal
+                            .read(cx)
+                            .mouse_mode(event.modifiers.shift, mouse_input_mode)
                     {
                         let has_selection = terminal
                             .read(cx)
@@ -1045,7 +1049,12 @@ impl TerminalElement {
                             .as_ref()
                             .is_some_and(|text| !text.is_empty());
                         terminal_view.update(cx, |view, cx| {
-                            view.deploy_context_menu(event.position, has_selection, window, cx);
+                            view.deploy_long_press_context_menu(
+                                event.position,
+                                has_selection,
+                                window,
+                                cx,
+                            );
                         });
                     }
                 }
