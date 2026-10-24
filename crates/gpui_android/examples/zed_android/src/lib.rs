@@ -28,7 +28,8 @@ use settings::{Settings as _, SettingsStore};
 use util::ResultExt as _;
 use workspace::{
     AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, SerializedWorkspaceLocation,
-    Workspace, WorkspaceStore, open_new, workspace_windows_for_location,
+    SessionWorkspace, Workspace, WorkspaceDb, WorkspaceStore, open_new,
+    workspace_windows_for_location,
 };
 use reqwest_client::ReqwestClient;
 use zdroid_runtime::{
@@ -1628,13 +1629,40 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         onboarding::show_onboarding_view(app_state.clone(), cx)
             .detach_and_log_err(cx);
     } else {
-        info!("zed_android: returning launch → workspace::open_new");
-        workspace::open_new(
-            Default::default(),
-            app_state.clone(),
-            cx,
-            |_workspace, _window, _cx| {},
-        )
+        info!("zed_android: returning launch → restore most recent workspace");
+        let db = WorkspaceDb::global(cx);
+        let fs = app_state.fs.clone();
+        cx.spawn(async move |cx| {
+            let recent = workspace::last_opened_workspace_location(&db, fs.as_ref()).await;
+            if let Some((workspace_id, location, paths)) = recent {
+                let serialized = cx.update(|cx| {
+                    workspace::read_serialized_multi_workspaces(
+                        vec![SessionWorkspace {
+                            workspace_id,
+                            location,
+                            paths,
+                            window_id: None,
+                        }],
+                        cx,
+                    )
+                    .into_iter()
+                    .next()
+                });
+                if let Some(serialized) = serialized {
+                    match workspace::restore_multiworkspace(serialized, app_state.clone(), cx).await
+                    {
+                        Ok(_) => return Ok(()),
+                        Err(error) => {
+                            error!("zed_android: failed to restore recent workspace: {error:#}");
+                        }
+                    }
+                }
+            }
+
+            cx.update(|cx| open_new(Default::default(), app_state, cx, |_, _, _| {}))
+                .await?;
+            anyhow::Ok(())
+        })
         .detach_and_log_err(cx);
     }
 
