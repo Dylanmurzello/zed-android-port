@@ -7633,7 +7633,6 @@ dependencies = [
  "console_error_panic_hook",
  "criterion",
  "gpui",
- "gpui_android",
  "gpui_linux",
  "gpui_macos",
  "gpui_web",
@@ -8282,7 +8281,6 @@ dependencies = [
 name = "http_client_tls"
 version = "0.1.0"
 dependencies = [
- "log",
  "rustls",
  "webpki-roots 1.0.10",
 ]

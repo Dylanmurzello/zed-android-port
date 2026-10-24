@@ -583,9 +583,6 @@ impl WaylandWindowState {
                 transparent: true,
                 // Prefer Mailbox to avoid blocking. Falls back to FIFO if Mailbox is unsupported.
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
-                // Field added by the Android port to the shared WgpuSurfaceConfig;
-                // Linux has no frame-latency override, so default (2) applies.
-                desired_maximum_frame_latency: None,
             };
             WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
         };

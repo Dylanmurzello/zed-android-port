@@ -4,7 +4,11 @@
 #   pre-release. Promote it to "latest" after the device smoke test in
 #   RELEASING.md; the in-app updater only follows the latest release.
 # - Pushes to zdroid, pull requests, and manual runs upload the APK as a
-#   workflow artifact. Pull requests are never signed with the release key.
+#   workflow artifact named after the commit. Pull requests from this
+#   repository are signed with the release key so their APKs install as an
+#   update over a release (a different package name would break the
+#   Bootstrap userland, which has com.zdroid compiled in). Pull requests from
+#   forks never receive the key.
 #
 # Signing secrets and the release flow are described in FORK.md.
 name: Zdroid APK
@@ -86,7 +90,7 @@ jobs:
 
       - name: Configure release signing
         # Runs early (keytool comes with the JDK) so bad secrets fail fast.
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           KEYSTORE_BASE64: ${{ secrets.ZDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ZDROID_KEYSTORE_PASSWORD }}
@@ -173,6 +177,10 @@ jobs:
 
       - name: Verify APK
         id: apk
+        env:
+          # For pull requests, name test builds after the branch head rather
+          # than the temporary merge commit GitHub builds.
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           build_tools="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
           outputs="$APP_DIR/android/app/build/outputs/apk/release"
@@ -196,12 +204,22 @@ jobs:
               echo "::error::APK is signed with certificate $actual, expected $expected"
               exit 1
             fi
-            apk_name="Zdroid-$version.apk"
+            signed=true
           elif [ "$GITHUB_REF_TYPE" = tag ]; then
             echo "::error::Release builds must be signed"
             exit 1
           else
-            apk_name="Zdroid-$version-unsigned.apk"
+            signed=false
+          fi
+
+          # The in-app updater looks for exactly Zdroid-X.Y.Z.apk on releases;
+          # test builds carry the commit so they can't be mistaken for one.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            apk_name="Zdroid-$version.apk"
+          elif [ "$signed" = true ]; then
+            apk_name="Zdroid-$version-${SOURCE_SHA:0:10}.apk"
+          else
+            apk_name="Zdroid-$version-${SOURCE_SHA:0:10}-unsigned.apk"
           fi
 
           mkdir -p dist

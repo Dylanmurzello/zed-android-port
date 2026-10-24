@@ -34,9 +34,6 @@ pub(crate) type PlatformScreenCaptureFrame = ();
 #[cfg(all(target_os = "macos", feature = "screen-capture"))]
 pub(crate) type PlatformScreenCaptureFrame =
     objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
-// Android has no screen capture path yet; satisfy the type so feature-on builds compile.
-#[cfg(all(target_os = "android", feature = "screen-capture"))]
-pub(crate) type PlatformScreenCaptureFrame = ();
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
@@ -1315,13 +1312,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// other Zed togglable buttons follow. Default false on platforms
     /// where IME visibility isn't a meaningful concept here.
     fn soft_keyboard_visible(&self) -> bool {
-        false
-    }
-
-    /// True when virtual trackpad mode is currently active. Used
-    /// by the pane tab-bar toggle button to draw its lit-up state,
-    /// matching the convention other togglable buttons use.
-    fn trackpad_mode_enabled(&self) -> bool {
         false
     }
 

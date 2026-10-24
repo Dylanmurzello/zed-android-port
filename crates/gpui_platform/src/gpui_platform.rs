@@ -83,25 +83,6 @@ pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
         gpui_linux::current_platform(headless)
     }
 
-    #[cfg(target_os = "android")]
-    {
-        // gpui_platform::current_platform isn't reachable on the
-        // Zdroid Android port — `crates/gpui_android/examples/
-        // zed_android/src/lib.rs::android_main` calls
-        // `gpui_android::run_app(app, ...)` directly and constructs
-        // its own AndroidPlatform with the AndroidApp handed in by
-        // android_activity. There's no way to synthesize an
-        // AndroidApp from inside a factory function that doesn't
-        // already have one. Panic loudly if anything routes through
-        // here so the wrong path surfaces immediately instead of
-        // failing as a confusing zero-arg `AndroidPlatform::new`.
-        let _ = headless;
-        unimplemented!(
-            "gpui_platform::current_platform is not supported on Android; \
-             use gpui_android::run_app from your android_main entry instead"
-        );
-    }
-
     #[cfg(target_family = "wasm")]
     {
         let _ = headless;

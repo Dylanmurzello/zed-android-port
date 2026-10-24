@@ -256,7 +256,6 @@ impl AndroidWindowStatePtr {
             // at the wgpu default of 2 until we have a way to keep the
             // panel pinned at 120Hz.
             preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
-            desired_maximum_frame_latency: None,
         };
 
         let mut state = self.state.borrow_mut();
@@ -780,10 +779,6 @@ impl PlatformWindow for AndroidWindow {
 
     fn soft_keyboard_visible(&self) -> bool {
         crate::ime::soft_keyboard_visible()
-    }
-
-    fn trackpad_mode_enabled(&self) -> bool {
-        crate::ime::trackpad_mode_enabled()
     }
 
     fn draw(&self, scene: &Scene) {

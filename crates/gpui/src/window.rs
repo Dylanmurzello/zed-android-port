@@ -4177,12 +4177,6 @@ impl Window {
         self.platform_window.soft_keyboard_visible()
     }
 
-    /// True when touch trackpad mode is active. Drives the pane
-    /// tab-bar toggle button's lit-up state.
-    pub fn trackpad_mode_enabled(&self) -> bool {
-        self.platform_window.trackpad_mode_enabled()
-    }
-
     /// Updates the cursor style for the entire window at the platform level. A cursor
     /// style using this method will have precedence over any cursor style set using
     /// `set_cursor_style`. This method should only be called during the paint
