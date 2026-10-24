@@ -584,6 +584,29 @@ impl TerminalView {
         cx.emit(Event::Wakeup);
     }
 
+    /// Opens the context menu at the end of an Android long press. Deferred to
+    /// the next frame because the long-press-then-tap gesture also releases
+    /// the long press right before its right-click, which opens the menu
+    /// itself.
+    #[cfg(target_os = "android")]
+    pub(crate) fn deploy_long_press_context_menu(
+        &mut self,
+        position: GpuiPoint<Pixels>,
+        has_selection: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            this.update(cx, |view, cx| {
+                if view.context_menu.is_none() {
+                    view.deploy_context_menu(position, has_selection, window, cx);
+                }
+            })
+            .ok();
+        });
+    }
+
     pub fn deploy_context_menu(
         &mut self,
         position: GpuiPoint<Pixels>,
@@ -596,6 +619,23 @@ impl TerminalView {
             .upgrade()
             .and_then(|workspace| workspace.read(cx).panel::<TerminalPanel>(cx))
             .is_some_and(|terminal_panel| terminal_panel.read(cx).assistant_enabled());
+        // On Android there's no Cmd/Ctrl-click to follow a link, so offer to
+        // open a selected web URL instead.
+        let selected_url = if cfg!(target_os = "android") {
+            self.terminal
+                .read(cx)
+                .last_content
+                .selection_text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| {
+                    (text.starts_with("https://") || text.starts_with("http://"))
+                        && !text.contains(char::is_whitespace)
+                })
+                .map(str::to_string)
+        } else {
+            None
+        };
         let context_menu = ContextMenu::build(window, cx, |menu, _, _| {
             menu.context(self.focus_handle.clone())
                 .when(self.shows_workspace_actions(), |menu| {
@@ -619,6 +659,10 @@ impl TerminalView {
                     !self.read_only && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| menu.action("Clear", Box::new(Clear)),
                 )
+                .when_some(selected_url, |menu, url| {
+                    menu.separator()
+                        .entry("Open in Browser", None, move |_, cx| cx.open_url(&url))
+                })
                 .when(
                     assistant_enabled && !matches!(self.mode, TerminalMode::Embedded { .. }),
                     |menu| {

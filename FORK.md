@@ -20,8 +20,17 @@ To get notified when Dylan pushes, **Watch** his repository on GitHub (Custom â†
 ```sh
 git remote add upstream https://github.com/zed-industries/zed
 git remote add dylan https://github.com/Dylanmurzello/zed-android-port
-git config merge.ours.driver true
 ```
+
+## The `ours` merge driver
+
+`.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`, and UPSTREAM_MERGE.md tells you to enable the driver once per clone. Don't: with the driver on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
+
+```sh
+git -c merge.ours.driver=true merge v1.25.3
+```
+
+If an earlier setup enabled it, run `git config --unset merge.ours.driver`.
 
 ## Syncing a Zed release
 
@@ -32,11 +41,11 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```sh
   git fetch upstream tag v1.25.3 --no-tags
   git checkout -b upstream-sync-v1.25.3 zdroid
-  git merge v1.25.3
+  git -c merge.ours.driver=true merge v1.25.3
   ```
 
 - The sync branch lands on `zdroid`, not `main`, wherever UPSTREAM_MERGE.md says `main`.
-- Release tags set `crates/zed/RELEASE_CHANNEL` to `stable`, and the merge takes that without a conflict. Put it back to `dev`. The Android build relies on the Dev channel: it fetches the latest remote server for SSH projects (the app reports version `0.1.0`, which no stable server matches), allows the newest extension API, and keeps workspace state in the same database scope as earlier releases.
+- Release tags set `crates/zed/RELEASE_CHANNEL` to `stable`, and the merge takes that without a conflict. Put it back to `dev`. The Android build relies on the Dev channel: it allows the newest extension API and keeps workspace state in the same database scope as earlier releases. For SSH projects, Android's Dev funnel (`remote/src/transport/ssh.rs`, `auto_update/src/auto_update.rs`) downloads the stable remote server matching the Zed version in `crates/zed/Cargo.toml`, which the app reports as its own version. That only works when the sync is a published release tag.
 
   ```sh
   git checkout dylan/main -- crates/zed/RELEASE_CHANNEL
@@ -53,16 +62,14 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
 
 ## Syncing Dylan's repo
 
-`.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`. That protects them during Zed merges. During a merge from Dylan's repo, though, it would silently throw away his changes to any of those files that this fork also touched. Turn the driver off for that merge so those files get a normal 3-way merge:
+Merge without the `ours` driver (see above), so Dylan's changes to fork-owned files get a normal 3-way merge instead of being dropped:
 
 ```sh
 git fetch dylan
 git push origin dylan/main:main      # keep the mirror current
 git checkout -b dylan-sync zdroid
-git config --unset merge.ours.driver
 git merge dylan/main
 # resolve conflicts, build, commit, then open a pull request into zdroid
-git config merge.ours.driver true
 ```
 
 Fork-specific changes to keep while resolving:

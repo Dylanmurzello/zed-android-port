@@ -704,11 +704,12 @@ impl AutoUpdater {
         };
         let http_client = client.http_client();
 
-        // Zed's CDN rejects "dev" as a channel; on Android we always run
-        // as Dev but want Nightly's remote_server binaries. Pairs with
-        // the same funnel arm in `remote/src/transport/ssh.rs`.
+        // Zed's CDN rejects "dev" as a channel. Android runs as Dev but is
+        // built from a Zed stable release, so it uses that release's
+        // remote_server. Pairs with the same funnel arm in
+        // `remote/src/transport/ssh.rs`.
         let cdn_channel = if cfg!(target_os = "android") && release_channel == ReleaseChannel::Dev {
-            ReleaseChannel::Nightly.dev_name()
+            ReleaseChannel::Stable.dev_name()
         } else {
             release_channel.dev_name()
         };

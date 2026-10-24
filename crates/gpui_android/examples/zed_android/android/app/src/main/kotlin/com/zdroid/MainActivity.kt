@@ -32,6 +32,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
+import java.security.MessageDigest
 
 /// SAF flows go through legacy `startActivityForResult` instead of
 /// `ActivityResultLauncher` because `ActivityResultRegistry` silently
@@ -448,6 +449,7 @@ class MainActivity : GameActivity(), ImeHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installSplashOverlay()
+        KeepAliveService.startIfEnabled(this)
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -844,6 +846,9 @@ class MainActivity : GameActivity(), ImeHost {
             handleCapturedEvent(event)
             return true
         }
+        // Captured events above carry relative motion; only absolute hover
+        // and scroll positions are moved into surface space.
+        offsetEventToSurface(event)
         return super.onGenericMotionEvent(event)
     }
 
@@ -871,9 +876,11 @@ class MainActivity : GameActivity(), ImeHost {
                 var sumRx = 0f
                 var sumRy = 0f
                 val limit = event.pointerCount
+                val rotation = displayRotation()
                 for (i in 0 until limit) {
-                    sumRx += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-                    sumRy += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+                    val (dx, dy) = capturedRelativeDelta(event, i, rotation)
+                    sumRx += dx
+                    sumRy += dy
                 }
                 val (maxX, maxY) = visibleBounds()
                 // Mouse-tuned pointer curve. Under pointer capture Android
@@ -914,6 +921,41 @@ class MainActivity : GameActivity(), ImeHost {
             applyCursorVisibility()
         }
         return super.dispatchTouchEvent(event)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        offsetEventToSurface(event)
+        return super.onTouchEvent(event)
+    }
+
+    private var lastSurfaceOffsetX = Int.MIN_VALUE
+    private var lastSurfaceOffsetY = Int.MIN_VALUE
+
+    /**
+     * GameActivity forwards input to gpui from the Activity-level
+     * onTouchEvent / onGenericMotionEvent, in window coordinates, while gpui
+     * expects them relative to the SurfaceView. The two differ in DeX
+     * freeform windows, which shifted every click and hover by the
+     * surface's offset. Applied only there, after the view tree has
+     * dispatched the event, so sibling views like the extras row still
+     * hit-test with their own coordinates.
+     */
+    private fun offsetEventToSurface(event: MotionEvent) {
+        val surface = findSurfaceView(window.decorView) ?: return
+        val surfaceLocation = IntArray(2)
+        val decorLocation = IntArray(2)
+        surface.getLocationInWindow(surfaceLocation)
+        window.decorView.getLocationInWindow(decorLocation)
+        val offsetX = surfaceLocation[0] - decorLocation[0]
+        val offsetY = surfaceLocation[1] - decorLocation[1]
+        if (offsetX != lastSurfaceOffsetX || offsetY != lastSurfaceOffsetY) {
+            Log.i("zdroid_input", "surface input origin offset=($offsetX,$offsetY)")
+            lastSurfaceOffsetX = offsetX
+            lastSurfaceOffsetY = offsetY
+        }
+        if (offsetX != 0 || offsetY != 0) {
+            event.offsetLocation(-offsetX.toFloat(), -offsetY.toFloat())
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -967,11 +1009,13 @@ class MainActivity : GameActivity(), ImeHost {
         val ys = FloatArray(n)
         val rxs = FloatArray(n)
         val rys = FloatArray(n)
+        val rotation = displayRotation()
         for (i in 0 until n) {
             xs[i] = event.getX(i)
             ys[i] = event.getY(i)
-            rxs[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-            rys[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+            val (dx, dy) = capturedRelativeDelta(event, i, rotation)
+            rxs[i] = dx
+            rys[i] = dy
         }
         val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
         val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
@@ -1021,6 +1065,26 @@ class MainActivity : GameActivity(), ImeHost {
         }
         return sb.toString()
     }
+
+    /** Backs the Zdroid menu's background-mode toggle. */
+    @Suppress("unused") // called from Rust via JNI
+    fun isBackgroundModeEnabled(): Boolean = KeepAliveService.isEnabled(this)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun setBackgroundModeEnabled(enabled: Boolean) = KeepAliveService.setEnabled(this, enabled)
+
+    /** Backs gpui's credential API; see `gpui_android/src/credentials.rs`. */
+    @Suppress("unused") // called from Rust via JNI
+    fun writeCredential(url: String, username: String, password: ByteArray): Boolean =
+        SecureCredentialStore.write(this, url, username, password)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun readCredential(url: String): ByteArray? =
+        SecureCredentialStore.read(this, url)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun deleteCredential(url: String): Boolean =
+        SecureCredentialStore.delete(this, url)
 
     @Suppress("unused") // called from Rust via JNI
     /**
@@ -1174,6 +1238,10 @@ class MainActivity : GameActivity(), ImeHost {
             Log.e(TAG_UPDATE, "launchPackageInstaller: APK missing at $apkPath")
             return false
         }
+        if (!isTrustedUpdateApk(file)) {
+            Log.e(TAG_UPDATE, "launchPackageInstaller: rejected untrusted APK at $apkPath")
+            return false
+        }
         return try {
             val uri = FileProvider.getUriForFile(
                 this,
@@ -1189,6 +1257,47 @@ class MainActivity : GameActivity(), ImeHost {
             true
         } catch (t: Throwable) {
             Log.e(TAG_UPDATE, "launchPackageInstaller dispatch failed", t)
+            false
+        }
+    }
+
+    /// Only hand the system installer an APK for this package, signed by
+    /// the same certificates as the running build. The installer would
+    /// reject a different signer anyway, but a different package would
+    /// install as a separate app.
+    @Suppress("DEPRECATION")
+    private fun isTrustedUpdateApk(file: File): Boolean {
+        return try {
+            // Android 9 leaves signingInfo unset for APK archives, so also
+            // request the legacy signatures as a fallback.
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
+            } else {
+                PackageManager.GET_SIGNATURES
+            }
+            val current = packageManager.getPackageInfo(packageName, flags)
+            val archive = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+                ?: return false
+            if (archive.packageName != packageName) return false
+
+            fun signerDigests(info: android.content.pm.PackageInfo): Set<String> {
+                val signingInfoSigners = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+                val signatures = signingInfoSigners ?: info.signatures.orEmpty()
+                return signatures.map { signature ->
+                    MessageDigest.getInstance("SHA-256")
+                        .digest(signature.toByteArray())
+                        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                }.toSet()
+            }
+
+            val currentSigners = signerDigests(current)
+            currentSigners.isNotEmpty() && currentSigners == signerDigests(archive)
+        } catch (t: Throwable) {
+            Log.e(TAG_UPDATE, "Could not verify update APK", t)
             false
         }
     }

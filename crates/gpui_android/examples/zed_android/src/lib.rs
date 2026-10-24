@@ -21,14 +21,17 @@ use db::kvp::KeyValueStore;
 use fs::{Fs, RealFs};
 use node_runtime::NodeRuntime;
 use project::Project;
+use prompt_store::PromptBuilder;
 use session::{AppSession, Session};
 use gpui::{App, AppContext as _, TaskExt as _, UpdateGlobal as _};
 use log::{error, info};
 use settings::{Settings as _, SettingsStore};
 use util::ResultExt as _;
 use workspace::{
-    AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, SerializedWorkspaceLocation,
-    Workspace, WorkspaceStore, open_new, workspace_windows_for_location,
+    AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, RestoreOnStartupBehavior,
+    SerializedWorkspaceLocation, SessionWorkspace, Toast, Workspace, WorkspaceDb,
+    WorkspaceSettings, WorkspaceStore, notifications::NotificationId, open_new,
+    workspace_windows_for_location,
 };
 use reqwest_client::ReqwestClient;
 use zdroid_runtime::{
@@ -36,6 +39,186 @@ use zdroid_runtime::{
     adapters,
     config::RuntimeFile,
 };
+
+/// The Zed release this app is built from, reported as the app version so
+/// SSH projects fetch the matching stable remote server. Read from
+/// crates/zed so it follows every upstream sync.
+fn zed_release_version() -> semver::Version {
+    let version = include_str!("../../../../zed/Cargo.toml")
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+        .and_then(|version| version.parse().ok());
+    version.unwrap_or_else(|| {
+        log::error!("zed_android: no version in crates/zed/Cargo.toml");
+        semver::Version::new(0, 1, 0)
+    })
+}
+
+/// Builds before 0.4.3 kept credentials in zed_credentials_provider's
+/// plaintext development file, since the Keystore wasn't wired up. Move any
+/// such entries into the Keystore, deleting the file only once every write
+/// succeeded.
+fn migrate_development_credentials(cx: &mut App) {
+    let path = paths::config_dir().join("development_credentials");
+    let json = match std::fs::read(&path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            log::warn!("zed_android: can't read {}: {error}", path.display());
+            return;
+        }
+    };
+    let credentials: std::collections::HashMap<String, (String, Vec<u8>)> =
+        match serde_json::from_slice(&json) {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                log::warn!("zed_android: can't parse {}: {error}", path.display());
+                return;
+            }
+        };
+    let writes = credentials
+        .iter()
+        .map(|(url, (username, password))| cx.write_credentials(url, username, password))
+        .collect::<Vec<_>>();
+    cx.background_spawn(async move {
+        for write in writes {
+            write.await?;
+        }
+        std::fs::remove_file(&path)?;
+        info!("zed_android: moved {} credentials into the Keystore", credentials.len());
+        anyhow::Ok(())
+    })
+    .detach_and_log_err(cx);
+}
+
+/// Android counterpart of `restore_or_create_workspace` in
+/// crates/zed/src/main.rs: honors `restore_on_startup` and reconnects remote
+/// projects instead of reopening their paths locally. The app hosts a single
+/// main window, so `last_session` restores only the most recent workspace,
+/// like `last_workspace`.
+async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut gpui::AsyncApp) -> Result<()> {
+    let (restore_on_startup, db) = cx.update(|cx| {
+        (
+            WorkspaceSettings::get_global(cx).restore_on_startup,
+            WorkspaceDb::global(cx),
+        )
+    });
+    let recent = match restore_on_startup {
+        RestoreOnStartupBehavior::LastWorkspace | RestoreOnStartupBehavior::LastSession => {
+            workspace::last_opened_workspace_location(&db, app_state.fs.as_ref()).await
+        }
+        RestoreOnStartupBehavior::EmptyTab | RestoreOnStartupBehavior::Launchpad => None,
+    };
+    let serialized = recent.and_then(|(workspace_id, location, paths)| {
+        cx.update(|cx| {
+            workspace::read_serialized_multi_workspaces(
+                vec![SessionWorkspace {
+                    workspace_id,
+                    location,
+                    paths,
+                    window_id: None,
+                }],
+                cx,
+            )
+            .into_iter()
+            .next()
+        })
+    });
+
+    let mut failure = None;
+    if let Some(multi_workspace) = serialized {
+        let result = match &multi_workspace.active_workspace.location {
+            SerializedWorkspaceLocation::Local => {
+                workspace::restore_multiworkspace(multi_workspace, app_state.clone(), cx)
+                    .await
+                    .map(|_| ())
+            }
+            SerializedWorkspaceLocation::Remote(connection_options) => {
+                let mut connection_options = connection_options.clone();
+                if let remote::RemoteConnectionOptions::Ssh(options) = &mut connection_options {
+                    cx.update(|cx| {
+                        recent_projects::RemoteSettings::get_global(cx)
+                            .fill_connection_options_from_settings(options)
+                    });
+                }
+                let paths = multi_workspace
+                    .active_workspace
+                    .paths
+                    .paths()
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>();
+                let state = multi_workspace.state.clone();
+                async {
+                    let window = recent_projects::open_remote_project(
+                        connection_options,
+                        paths,
+                        app_state.clone(),
+                        OpenOptions::default(),
+                        cx,
+                    )
+                    .await?;
+                    workspace::apply_restored_multiworkspace_state(
+                        window,
+                        &state,
+                        app_state.fs.clone(),
+                        cx,
+                    )
+                    .await;
+                    anyhow::Ok(())
+                }
+                .await
+            }
+        };
+        match result {
+            // A remote connection the user cancelled returns Ok but closes
+            // its window, so check that something actually opened.
+            Ok(()) if cx.update(|cx| !cx.windows().is_empty()) => return Ok(()),
+            Ok(()) => {}
+            Err(error) => {
+                error!("zed_android: failed to restore the last workspace: {error:#}");
+                failure = Some("Failed to restore the last workspace. Check logs for details.");
+            }
+        }
+    }
+
+    cx.update(|cx| {
+        open_new(Default::default(), app_state, cx, move |workspace, _, cx| {
+            if let Some(message) = failure {
+                workspace.show_toast(Toast::new(NotificationId::unique::<()>(), message), cx);
+            }
+        })
+    })
+    .await?;
+    Ok(())
+}
+
+/// Adds the agent panel unless `disable_ai` is set, and removes it when the
+/// setting turns on. Mirrors `setup_or_teardown_ai_panel` in
+/// crates/zed/src/zed.rs, which the Android app doesn't link.
+fn ensure_agent_panel(
+    workspace: &mut Workspace,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<Workspace>,
+) -> gpui::Task<Result<()>> {
+    let disable_ai = project::DisableAiSettings::get_global(cx).disable_ai;
+    match (disable_ai, workspace.panel::<agent_ui::AgentPanel>(cx)) {
+        (false, None) => cx.spawn_in(window, async move |workspace, cx| {
+            let panel = agent_ui::AgentPanel::load(workspace.clone(), cx.clone()).await?;
+            workspace.update_in(cx, |workspace, window, cx| {
+                let disable_ai = project::DisableAiSettings::get_global(cx).disable_ai;
+                if !disable_ai && workspace.panel::<agent_ui::AgentPanel>(cx).is_none() {
+                    workspace.add_panel(panel, window, cx);
+                }
+            })
+        }),
+        (true, Some(panel)) => {
+            workspace.remove_panel(&panel, window, cx);
+            gpui::Task::ready(Ok(()))
+        }
+        _ => gpui::Task::ready(Ok(())),
+    }
+}
 
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
     gpui::WindowOptions::default()
@@ -177,6 +360,11 @@ fn android_main(app: AndroidApp) {
                     util::env::EnvOp::Remove => std::env::remove_var(key),
                 }
             }
+            // The app runs on the Dev channel, where zed_credentials_provider
+            // otherwise writes API keys and tokens to a plaintext JSON file.
+            // Use gpui's credential API instead, which gpui_android backs
+            // with the Android Keystore.
+            std::env::set_var("ZED_DEVELOPMENT_USE_KEYCHAIN", "1");
         }
         log::info!(
             "zed_android: PATH = {}; SHELL = {}",
@@ -630,8 +818,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         }
     }
 
-    release_channel::init(semver::Version::new(0, 1, 0), cx);
+    release_channel::init(zed_release_version(), cx);
     info!("zed_android: release_channel init");
+    migrate_development_credentials(cx);
 
     info!("zed_android: http client init");
     let http = ReqwestClient::user_agent("zed_android/0.1")?;
@@ -1088,13 +1277,15 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // Modal pickers / panels — mirror production zed/src/main.rs init order.
     // Each registers its own actions + a SettingsStore observer if needed.
     // Skipped from production (non-portable on Android): audio/call/livekit
-    // (collab), agent_ui/copilot/language_models (AI), debugger_ui/repl
-    // (DAP/Jupyter), auto_update (we self-distribute), telemetry/crashes,
-    // extension_host (deferred to L3).
+    // (collab), copilot/language_models (AI model providers; agent_ui is
+    // initialized below for ACP agents only), debugger_ui/repl (DAP/Jupyter),
+    // auto_update (we self-distribute), telemetry/crashes, extension_host
+    // (deferred to L3).
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
     outline::init(cx);
+    call_hierarchy::init(cx);
     project_symbols::init(cx);
     project_panel::init(cx);
     outline_panel::init(cx);
@@ -1108,6 +1299,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     encoding_selector::init(cx);
     language_selector::init(cx);
     line_ending_selector::init(cx);
+    lsp_command_selector::init(cx);
     toolchain_selector::init(cx);
     theme_selector::init(cx);
     settings_profile_selector::init(cx);
@@ -1119,6 +1311,26 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // panics at first paint with "no state of type
     // language_model::registry::GlobalLanguageModelRegistry exists".
     language_model::init(cx);
+    // Agent Panel for external ACP agents (Claude Code, Codex, ...), in the
+    // same order as crates/zed/src/main.rs. On remote projects the agent runs
+    // on the remote host through the remote server, so nothing agent-related
+    // is spawned on Android. language_models::init is deliberately skipped:
+    // with no model providers registered, Zed's built-in agent and the inline
+    // assistant have no model, and only ACP agents can run.
+    let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
+    project::AgentRegistryStore::init_global(
+        cx,
+        app_state.fs.clone(),
+        app_state.client.http_client(),
+    );
+    agent_ui::init(
+        app_state.fs.clone(),
+        prompt_builder,
+        app_state.languages.clone(),
+        false,
+        false,
+        cx,
+    );
     // Also covers the git graph (commit history) view: upstream folded
     // crates/git_graph into git_ui, so its serializable item, action
     // handlers, and database domain register here.
@@ -1207,6 +1419,26 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // action dispatcher — `hjkl`/`i`/`:w` etc. fire nothing.
     cx.observe_global::<settings::SettingsStore>(|cx| {
         reload_zdroid_keymaps(cx);
+    })
+    .detach();
+
+    // Mirror crates/zed's `initialize_workspace`: every MultiWorkspace gets
+    // the sidebar that lists projects and agent threads (closed by default).
+    cx.observe_new(|_: &mut MultiWorkspace, window, cx| {
+        let Some(window) = window else { return };
+        let window_handle = window.window_handle();
+        let multi_workspace_handle = cx.entity();
+        cx.defer(move |cx| {
+            window_handle
+                .update(cx, |_, window, cx| {
+                    let sidebar = cx
+                        .new(|cx| sidebar::Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
+                        multi_workspace.register_sidebar(sidebar, cx);
+                    });
+                })
+                .log_err();
+        });
     })
     .detach();
 
@@ -1474,6 +1706,18 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+
+        // Mirror crates/zed's `initialize_agent_panel`.
+        ensure_agent_panel(workspace, window, cx).detach_and_log_err(cx);
+        cx.observe_global_in::<SettingsStore>(window, |workspace, window, cx| {
+            ensure_agent_panel(workspace, window, cx).detach_and_log_err(cx);
+        })
+        .detach();
+        workspace
+            .register_action(agent_ui::AgentPanel::toggle_focus)
+            .register_action(agent_ui::AgentPanel::focus)
+            .register_action(agent_ui::AgentPanel::toggle)
+            .register_action(agent_ui::InlineAssistant::inline_assist);
     })
     .detach();
 
@@ -1626,14 +1870,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         onboarding::show_onboarding_view(app_state.clone(), cx)
             .detach_and_log_err(cx);
     } else {
-        info!("zed_android: returning launch → workspace::open_new");
-        workspace::open_new(
-            Default::default(),
-            app_state.clone(),
-            cx,
-            |_workspace, _window, _cx| {},
-        )
-        .detach_and_log_err(cx);
+        info!("zed_android: returning launch → restore_or_create_workspace");
+        cx.spawn(async move |cx| restore_or_create_workspace(app_state, cx).await)
+            .detach_and_log_err(cx);
     }
 
     Ok(())

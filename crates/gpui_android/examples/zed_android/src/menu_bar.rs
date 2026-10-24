@@ -18,19 +18,27 @@ use gpui::{
 };
 use ui::prelude::*;
 use ui::{ContextMenu, PopoverMenu, PopoverMenuHandle};
+use util::ResultExt as _;
 use workspace::Workspace;
 
 actions!(
     zed_android,
     [
         /// Toggles the always-on Android application menu bar.
-        ToggleAppMenuBar
+        ToggleAppMenuBar,
+        /// Keeps Zdroid running in the background behind an ongoing
+        /// notification, so terminal, SSH and agent sessions stay connected.
+        ToggleBackgroundMode
     ]
 );
 
 static ACTIVE_MENU_BAR: Mutex<Option<WeakEntity<MenuBar>>> = Mutex::new(None);
 
 pub fn register_actions(cx: &mut App) {
+    cx.on_action(|_: &ToggleBackgroundMode, _: &mut App| {
+        let enabled = !gpui_android::background_mode::is_enabled();
+        gpui_android::background_mode::set_enabled(enabled).log_err();
+    });
     cx.on_action(|_: &ToggleAppMenuBar, cx: &mut App| {
         let weak = ACTIVE_MENU_BAR.lock().ok().and_then(|g| g.clone());
         if let Some(weak) = weak {
@@ -252,6 +260,14 @@ fn zed_menu_items() -> Vec<MenuEntry> {
         MenuEntry::Action(
             "Extensions",
             Box::new(zed_actions::Extensions::default()),
+        ),
+        MenuEntry::Action(
+            if gpui_android::background_mode::is_enabled() {
+                "Stop Running in Background"
+            } else {
+                "Keep Running in Background"
+            },
+            Box::new(ToggleBackgroundMode),
         ),
         MenuEntry::Separator,
         MenuEntry::Action(
