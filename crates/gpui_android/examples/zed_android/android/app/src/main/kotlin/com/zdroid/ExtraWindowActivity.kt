@@ -635,9 +635,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 var sumRx = 0f
                 var sumRy = 0f
                 val limit = event.pointerCount
+                val rotation = displayRotation()
                 for (i in 0 until limit) {
-                    sumRx += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-                    sumRy += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+                    val (dx, dy) = capturedRelativeDelta(event, i, rotation)
+                    sumRx += dx
+                    sumRy += dy
                 }
                 val (maxX, maxY) = visibleBounds()
                 // Mouse-tuned pointer curve (shared accelerateMouse) so the
@@ -670,11 +672,13 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         val ys = FloatArray(n)
         val rxs = FloatArray(n)
         val rys = FloatArray(n)
+        val rotation = displayRotation()
         for (i in 0 until n) {
             xs[i] = event.getX(i)
             ys[i] = event.getY(i)
-            rxs[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-            rys[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+            val (dx, dy) = capturedRelativeDelta(event, i, rotation)
+            rxs[i] = dx
+            rys[i] = dy
         }
         val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
         val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)

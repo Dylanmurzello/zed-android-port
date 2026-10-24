@@ -1,6 +1,10 @@
 package com.zdroid
 
+import android.app.Activity
+import android.os.Build
+import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.Surface
 
 /// Sum all historical + current samples of a relative MotionEvent axis.
 /// `AXIS_RELATIVE_X` / `AXIS_RELATIVE_Y` are NOT accumulated across
@@ -16,6 +20,43 @@ internal fun sumRelativeAxis(event: MotionEvent, axis: Int, pointerIndex: Int): 
     }
     sum += event.getAxisValue(axis, pointerIndex)
     return sum
+}
+
+/// [sumRelativeAxis] for both axes, in screen orientation. Pointer
+/// capture hands over the kernel's axes without applying the display
+/// rotation. That suits a mouse, which the user holds in screen
+/// orientation, but the Samsung Book Cover trackpad reports in the
+/// panel's natural portrait frame, so in landscape every motion came
+/// out turned 90 degrees (moving right sent the cursor down).
+/// Finger-driven deltas therefore get the display rotation applied.
+internal fun capturedRelativeDelta(
+    event: MotionEvent,
+    pointerIndex: Int,
+    displayRotation: Int,
+): Pair<Float, Float> {
+    val dx = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, pointerIndex)
+    val dy = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, pointerIndex)
+    // The Book Cover trackpad sometimes reports SOURCE_MOUSE, but its
+    // tool type stays FINGER, unlike a real mouse.
+    val fromTrackpad = event.source and InputDevice.SOURCE_TOUCHPAD != 0 ||
+        event.getToolType(pointerIndex) == MotionEvent.TOOL_TYPE_FINGER
+    if (!fromTrackpad) return dx to dy
+    return when (displayRotation) {
+        Surface.ROTATION_90 -> dy to -dx
+        Surface.ROTATION_180 -> -dx to -dy
+        Surface.ROTATION_270 -> -dy to dx
+        else -> dx to dy
+    }
+}
+
+internal fun Activity.displayRotation(): Int {
+    val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        display
+    } else {
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay
+    }
+    return currentDisplay?.rotation ?: Surface.ROTATION_0
 }
 
 /// Mouse pointer-acceleration curve: base sensitivity multiplier plus a
