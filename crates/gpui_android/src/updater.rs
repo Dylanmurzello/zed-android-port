@@ -1,5 +1,5 @@
 //! In-app updater for the Zdroid Android port. Hits the GitHub Releases
-//! page for `Dylanmurzello/zed-android-port`, compares the latest tag
+//! page for [`RELEASE_REPO`], compares the latest tag
 //! against the running app's `versionName`, and (when newer) downloads
 //! the signed APK to the app's cache dir and hands it to Android's
 //! package installer via the `MainActivity.launchPackageInstaller` JNI
@@ -45,8 +45,14 @@ fn android_app() -> Result<&'static AndroidApp> {
 
 /// Repo we ship APK releases from. Kept here (not in a config file)
 /// so a malicious user-config tweak can't redirect the auto-updater
-/// at a third-party APK.
-pub const RELEASE_REPO: &str = "Dylanmurzello/zed-android-port";
+/// at a third-party APK. Forks that publish APKs signed with their own
+/// key set `ZDROID_RELEASE_REPO` at build time: Android refuses to
+/// install an update signed by a different key, so the updater has to
+/// follow the repo that signed the running build.
+pub const RELEASE_REPO: &str = match option_env!("ZDROID_RELEASE_REPO") {
+    Some(repo) => repo,
+    None => "Dylanmurzello/zed-android-port",
+};
 
 /// Asset name conventions the updater knows how to find. v0.2.0/v0.2.1
 /// shipped with `app-release.apk` (gradle's default release-output
