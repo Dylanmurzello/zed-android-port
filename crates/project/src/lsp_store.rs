@@ -515,38 +515,13 @@ impl LocalLspStore {
             });
         let update_binary_status = wait_until_worktree_trust.is_none();
 
-        // Android: allow_binary_download = true (was false earlier in the
-        // port). The original gate was written when ALL adapters were
-        // assumed to use GitHub-release downloads — those serve glibc-
-        // linked Linux binaries that don't run on bionic, so blocking
-        // them avoided 404 spam on every buffer open.
-        //
-        // That assumption was wrong for npm-based LSPs. TypeScript /
-        // JavaScript / Pyright / etc. install via Zed's internal
-        // `node_runtime::NodeRuntime::npm_install_packages` — the L3
-        // npm intercept architecture (project_l3_npm_intercept memory)
-        // makes that work on Android. The gate was blocking the install
-        // path for every JS/TS file open with no LSP-on-PATH, leaving
-        // the user with "downloading language servers disabled" and no
-        // way to recover short of a manual `pkg install` for whichever
-        // LSP happens to also be in Termux apt (most aren't).
-        //
-        // PATH-lookup via `check_if_user_installed` runs BEFORE the
-        // download path — apt-installed LSPs (rust-analyzer, etc.) are
-        // resolved without any download attempt. Download only fires as
-        // a fallback when PATH misses, which is exactly the case where
-        // we want the npm install to happen. Adapters that genuinely
-        // can't install on Android (rare GitHub-release ones with no
-        // npm fallback) will fail with adapter-specific download
-        // errors, not blanket "disabled".
-        let allow_binary_download = true;
         let binary = self.get_language_server_binary(
             worktree_abs_path.clone(),
             adapter.clone(),
             settings,
             toolchain.clone(),
             delegate.clone(),
-            allow_binary_download,
+            true,
             wait_until_worktree_trust,
             cx,
         );
