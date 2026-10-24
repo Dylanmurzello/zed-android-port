@@ -846,6 +846,9 @@ class MainActivity : GameActivity(), ImeHost {
             handleCapturedEvent(event)
             return true
         }
+        // Captured events above carry relative motion; only absolute hover
+        // and scroll positions are moved into surface space.
+        offsetEventToSurface(event)
         return super.onGenericMotionEvent(event)
     }
 
@@ -915,25 +918,25 @@ class MainActivity : GameActivity(), ImeHost {
             InputModality.setNonPointer()
             applyCursorVisibility()
         }
-        if (event != null) offsetEventToSurface(event)
         return super.dispatchTouchEvent(event)
     }
 
-    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        // Captured pointer events carry relative motion; only absolute
-        // hover and scroll positions need moving into surface space.
-        if (!window.decorView.hasPointerCapture()) offsetEventToSurface(event)
-        return super.dispatchGenericMotionEvent(event)
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        offsetEventToSurface(event)
+        return super.onTouchEvent(event)
     }
 
     private var lastSurfaceOffsetX = Int.MIN_VALUE
     private var lastSurfaceOffsetY = Int.MIN_VALUE
 
     /**
-     * GameActivity reports events in decor-view coordinates, while gpui
+     * GameActivity forwards input to gpui from the Activity-level
+     * onTouchEvent / onGenericMotionEvent, in window coordinates, while gpui
      * expects them relative to the SurfaceView. The two differ in DeX
      * freeform windows, which shifted every click and hover by the
-     * surface's offset.
+     * surface's offset. Applied only there, after the view tree has
+     * dispatched the event, so sibling views like the extras row still
+     * hit-test with their own coordinates.
      */
     private fun offsetEventToSurface(event: MotionEvent) {
         val surface = findSurfaceView(window.decorView) ?: return
