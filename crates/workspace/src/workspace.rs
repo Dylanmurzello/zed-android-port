@@ -16205,7 +16205,7 @@ mod tests {
         });
 
         workspace.update_in(cx, |workspace, window, cx| {
-            workspace.resize_left_dock(px(350.), window, cx);
+            workspace.resize_left_dock(px(350.), false, window, cx);
         });
 
         cx.run_until_parked();
@@ -16285,7 +16285,7 @@ mod tests {
                 dock.activate_panel(0, window, cx);
                 dock.set_open(true, window, cx);
             });
-            workspace.resize_left_dock(px(400.), window, cx);
+            workspace.resize_left_dock(px(400.), false, window, cx);
             (first_panel, second_panel)
         });
 
@@ -16304,7 +16304,7 @@ mod tests {
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.activate_panel(1, window, cx);
             });
-            workspace.resize_left_dock(px(450.), window, cx);
+            workspace.resize_left_dock(px(450.), false, window, cx);
         });
         cx.dispatch_action(ResetOpenDocksSize);
 
@@ -16320,7 +16320,7 @@ mod tests {
         first_panel.update(cx, |panel, _| panel.flexible = true);
         second_panel.update(cx, |panel, _| panel.flexible = true);
         workspace.update_in(cx, |workspace, window, cx| {
-            workspace.resize_left_dock(px(350.), window, cx);
+            workspace.resize_left_dock(px(350.), false, window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.reset_panel_sizes(window, cx);
             });
@@ -16351,7 +16351,7 @@ mod tests {
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.activate_panel(0, window, cx);
             });
-            workspace.resize_left_dock(px(400.), window, cx);
+            workspace.resize_left_dock(px(400.), false, window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.reset_panel_sizes(window, cx);
             });
@@ -16428,7 +16428,7 @@ mod tests {
                 dock.set_open(true, window, cx);
             });
 
-            workspace.resize_left_dock(px(450.0), window, cx);
+            workspace.resize_left_dock(px(450.0), false, window, cx);
 
             let dock = workspace.left_dock().read(cx);
             let fixed_panel_a_size = dock.stored_panel_size(&fixed_panel_a, window, cx);
@@ -16474,7 +16474,7 @@ mod tests {
                 dock.activate_panel(0, window, cx);
             });
 
-            workspace.resize_left_dock(px(450.), window, cx);
+            workspace.resize_left_dock(px(450.), false, window, cx);
         });
 
         cx.dispatch_action(ResetOpenDocksSize);
