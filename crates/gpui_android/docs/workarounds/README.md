@@ -107,6 +107,7 @@ patches.
 | [`activate()` via `AppTask.moveToFront`](activate-extra-activity-move-to-front.md) | Active | `Window::activate_window()` was a no-op stub on Android; settings_ui's existing-window dedup needed it to surface a backgrounded Settings instead of re-opening |
 | [`ZedDocumentsProvider` exposes `~` as a SAF root](zed-documents-provider.md) | Active | Other apps couldn't browse / share files from `/data/data/<pkg>/files/home` via the system picker; ported Termux's provider shape with custom dev MIME map + search skip list + provider-pre-Activity `mkdirs` guard |
 | [Notify `on_active_status_change` for cursor blink](notify-active-status-change.md) | Active | Editor's `cx.observe_window_activation` observer must fire to call `BlinkManager::enable`, otherwise search-bar cursor renders statically until first input |
+| [No default focus highlight on extra-window surfaces](extra-window-focus-highlight.md) | Active | Android's keyboard-focus highlight covered the whole focusable surface as a whitish tint |
 
 ## Build / packaging
 
