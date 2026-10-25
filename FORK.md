@@ -52,6 +52,7 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```
 
 - When sweeping upstream's `.github/workflows` files, keep `zdroid_apk.yml`.
+- Keep upstream's README review-banner rule out of `.rules` (the line starting `* HARD RULE: When modifying any source files`). It makes agents add a banner to `README.md` that only a human may delete, which suits Zed's own pull requests but means a manual edit on every pull request here. If the merge conflicts on that line, resolve it by keeping the line deleted.
 - Reseed the Android app's lockfile from the root one before the `cargo ndk` check. A stale example lock can resolve mismatched versions of crates that upstream bumped together (2026-10: `merman` vs `merman-render`):
 
   ```sh
