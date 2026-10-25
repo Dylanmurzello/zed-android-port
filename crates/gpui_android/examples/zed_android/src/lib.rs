@@ -1143,40 +1143,53 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // adapter via `RuntimeProvider::terminal_shell` so flipping the
     // adapter actually changes where the integrated terminal lands.
     //
-    // Why overwrite even when the user already has a shell set: the
-    // picker IS the user's terminal-target choice in this app —
-    // picking chroot means "I want the terminal in the chroot's bash".
-    // Honoring a stale settings.shell from a prior adapter would
-    // silently contradict the picker. A user who wants something
-    // custom inside the chroot configures it inside the chroot (their
-    // `$SHELL`, `chsh`, etc.), not at the alacritty entry point.
-    //
     // alacritty's `pw_shell` lookup on Android returns /system/bin/sh
     // (the parody) so this explicit Shell::Program is what makes any
     // useful terminal work at all.
+    //
+    // It goes into Zed's default settings, not the user's settings.json.
+    // Zed sends user settings to remote servers, and since Zed 1.25 a
+    // remote terminal runs the `terminal.shell` it finds there, so an
+    // Android path in settings.json broke every SSH terminal
+    // (`env: '.../usr/bin/bash': No such file or directory`). Defaults
+    // stay on the device and rank below settings.json, so remote
+    // terminals fall back to the remote's own shell.
     let provider = active_provider(data_path);
     let shell_path = provider
         .terminal_shell(data_path)
         .unwrap_or_else(|| data_path.join("usr/bin/bash"));
     if shell_path.is_file() {
-        let shell_str = shell_path.to_string_lossy().to_string();
-        let fs_for_settings = app_state.fs.clone();
-        cx.global::<settings::SettingsStore>().update_settings_file(
-            fs_for_settings,
-            move |content, _cx| {
-                let terminal = content
+        let shell = settings::Shell::Program(shell_path.to_string_lossy().to_string());
+        SettingsStore::update_global(cx, |store, cx| {
+            store.update_default_settings(cx, |defaults| {
+                defaults
                     .terminal
-                    .get_or_insert_with(settings::TerminalSettingsContent::default);
-                let new_shell = settings::Shell::Program(shell_str.clone());
-                let prev = terminal.project.shell.clone();
-                terminal.project.shell = Some(new_shell);
-                log::info!(
-                    "zed_android: terminal.shell -> {} (was {:?}, adapter-derived)",
-                    shell_str,
-                    prev,
-                );
-            },
-        );
+                    .get_or_insert_with(settings::TerminalSettingsContent::default)
+                    .project
+                    .shell = Some(shell.clone());
+            });
+        });
+        info!("zed_android: default terminal.shell -> {}", shell_path.display());
+
+        // Earlier versions wrote this value into settings.json, where it
+        // outranks the default and still reaches remotes.
+        let user_has_adapter_shell = cx
+            .global::<SettingsStore>()
+            .raw_user_settings()
+            .and_then(|user_settings| user_settings.content.terminal.as_ref())
+            .is_some_and(|terminal| terminal.project.shell.as_ref() == Some(&shell));
+        if user_has_adapter_shell {
+            cx.global::<SettingsStore>().update_settings_file(
+                app_state.fs.clone(),
+                move |content, _cx| {
+                    if let Some(terminal) = content.terminal.as_mut()
+                        && terminal.project.shell.as_ref() == Some(&shell)
+                    {
+                        terminal.project.shell = None;
+                    }
+                },
+            );
+        }
     } else {
         log::warn!(
             "zed_android: adapter-derived shell {} missing on disk; \
