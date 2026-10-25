@@ -14,7 +14,6 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
@@ -101,29 +100,6 @@ pub enum UpdateCheck {
         latest: String,
         download_urls: Vec<String>,
     },
-}
-
-static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
-
-/// Take ownership of the in-progress flag so two simultaneous update
-/// attempts can't tangle (e.g. user clicks the menu entry while the
-/// startup auto-check is mid-download). Drop the guard to release.
-pub struct UpdateGuard;
-
-impl UpdateGuard {
-    pub fn try_acquire() -> Option<Self> {
-        if UPDATE_IN_PROGRESS.swap(true, Ordering::AcqRel) {
-            None
-        } else {
-            Some(UpdateGuard)
-        }
-    }
-}
-
-impl Drop for UpdateGuard {
-    fn drop(&mut self) {
-        UPDATE_IN_PROGRESS.store(false, Ordering::Release);
-    }
 }
 
 /// Resolve the latest release tag via the static redirect at
@@ -280,8 +256,14 @@ pub fn check_for_update() -> Result<UpdateCheck> {
 /// is how the updater absorbs asset-name drift between releases
 /// (see [`candidate_asset_names`] for the why). Returns an error only
 /// when ALL candidate URLs have failed. Streams the response body so
-/// we don't hold the full ~225 MB APK in memory.
-pub fn download_apk(tag: &str, urls: &[String]) -> Result<PathBuf> {
+/// we don't hold the full ~225 MB APK in memory. `on_progress` gets the
+/// downloaded fraction each time the whole percentage changes, or `None`
+/// when the server sends no length.
+pub fn download_apk(
+    tag: &str,
+    urls: &[String],
+    mut on_progress: impl FnMut(Option<f32>),
+) -> Result<PathBuf> {
     if urls.is_empty() {
         return Err(anyhow!("download_apk: no candidate URLs"));
     }
@@ -342,9 +324,11 @@ pub fn download_apk(tag: &str, urls: &[String]) -> Result<PathBuf> {
                 continue;
             }
         };
-        if let Some(length) = resp
+        let total_bytes = resp
             .header("Content-Length")
             .and_then(|value| value.parse::<u64>().ok())
+            .filter(|length| *length > 0);
+        if let Some(length) = total_bytes
             && length > MAX_APK_BYTES
         {
             last_err = Some(anyhow!(
@@ -352,11 +336,13 @@ pub fn download_apk(tag: &str, urls: &[String]) -> Result<PathBuf> {
             ));
             continue;
         }
+        on_progress(total_bytes.map(|_| 0.0));
         let mut reader = resp.into_reader();
         let mut file = std::fs::File::create(&dest)
             .with_context(|| format!("create {}", dest.display()))?;
         let mut buf = vec![0u8; 64 * 1024];
         let mut total: u64 = 0;
+        let mut last_reported_percent = None;
         let read_result = (|| -> Result<()> {
             loop {
                 let n = reader.read(&mut buf).context("read response body")?;
@@ -370,6 +356,14 @@ pub fn download_apk(tag: &str, urls: &[String]) -> Result<PathBuf> {
                     return Err(anyhow!(
                         "update APK exceeded the {MAX_APK_BYTES}-byte safety limit"
                     ));
+                }
+                if let Some(total_bytes) = total_bytes {
+                    let fraction = (total as f32 / total_bytes as f32).clamp(0.0, 1.0);
+                    let percent = (fraction * 100.0) as u8;
+                    if last_reported_percent != Some(percent) {
+                        last_reported_percent = Some(percent);
+                        on_progress(Some(fraction));
+                    }
                 }
             }
             Ok(())
@@ -392,6 +386,17 @@ pub fn download_apk(tag: &str, urls: &[String]) -> Result<PathBuf> {
     }
     Err(last_err
         .unwrap_or_else(|| anyhow!("download_apk: all candidate URLs failed without errors")))
+}
+
+/// Delete the APKs `download_apk` left in the app cache.
+pub fn remove_downloaded_apks() -> Result<()> {
+    let cache_dir = system_cache_dir(android_app()?)?.join(CACHE_SUBDIR);
+    match std::fs::remove_dir_all(&cache_dir) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            Err(anyhow::Error::new(err).context(format!("remove {}", cache_dir.display())))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// JNI into `MainActivity.launchPackageInstaller` to hand the

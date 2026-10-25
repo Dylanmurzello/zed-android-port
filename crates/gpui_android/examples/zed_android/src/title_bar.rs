@@ -3,7 +3,8 @@
 //! and the settings/menu chevron whose tap toggles the menu bar
 //! above and whose right-click / two-finger-tap opens the same
 //! dropdown production puts in its application_menu (Settings,
-//! Keymap, Themes, Icon Themes, Extensions).
+//! Keymap, Themes, Icon Themes, Extensions). Left of the chevron, as
+//! on desktop, sits the update button from `app_updater`.
 //!
 //! We render this inside the workspace's single `titlebar_item` slot
 //! by stacking on top of the menu bar — see `header.rs`.
@@ -29,6 +30,7 @@ use ui::{
 use workspace::Workspace;
 use zed_actions::OpenRemote;
 
+use crate::app_updater::{self, AppUpdater};
 use crate::menu_bar::MenuBar;
 use crate::noexec_modal::NoexecMoveModal;
 
@@ -52,6 +54,9 @@ impl TitleBar {
         menu_bar: WeakEntity<MenuBar>,
         cx: &mut Context<Self>,
     ) -> Self {
+        if let Some(updater) = AppUpdater::global(cx) {
+            cx.observe(&updater, |_, _, cx| cx.notify()).detach();
+        }
         Self {
             workspace,
             menu_bar,
@@ -364,6 +369,7 @@ impl Render for TitleBar {
         let noexec = self.render_noexec_banner(cx);
         let remote_pill = self.render_remote_project_connection(cx);
         let project_name = self.render_project_name(cx);
+        let update_button = app_updater::render_update_button(cx);
         let chevron = self.render_chevron(cx);
 
         h_flex()
@@ -378,6 +384,7 @@ impl Render for TitleBar {
             .children(remote_pill)
             .children(project_name)
             .child(div().flex_1())
+            .children(update_button)
             .child(chevron)
             .when_some(
                 self.settings_menu
