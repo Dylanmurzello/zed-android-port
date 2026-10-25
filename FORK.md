@@ -103,6 +103,8 @@ APKs from this repo are signed with this fork's own key, not Dylan's. Android wo
    The key alias defaults to `zdroid`. Override it with an Actions variable named `ZDROID_KEY_ALIAS`.
 3. Make sure Actions are enabled under the repository's **Actions** tab.
 
+Only the workflow's **Sign APK** job gets the key. The **Build APK** job builds an unsigned APK, and the sign job signs it with `apksigner`, so the key is never on disk while crate build scripts and Gradle plugins run. A wrong or badly pasted secret therefore fails at the end of the build, not the start.
+
 The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA256` in `zdroid_apk.yml`. If you ever change keys, update that value too.
 
 ### Each release
@@ -122,7 +124,7 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 
 ### Testing a pull request
 
-Pull requests from this repository build an APK signed with the release key, named `Zdroid-X.Y.Z-<commit>.apk`. Pull requests from forks never get the key, so their APKs are unsigned and won't install.
+Pull requests from this repository build an APK signed with the release key, named `Zdroid-X.Y.Z-<commit>.apk`. Pull requests from forks never get the key, so they only produce the unsigned `zdroid-apk-unsigned` artifact, which won't install.
 
 1. Open the pull request's **Checks** tab, open the **Zdroid APK** run, and download the `zdroid-apk` artifact. GitHub delivers it as a `.zip`; unzip it to get the APK.
 2. Install it over the current release. Same package and key means it installs as an update and keeps your data.
