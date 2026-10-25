@@ -16,8 +16,11 @@ android_logger = "0.13"
 anyhow = "1"
 jni = "0.21"
 agent_ui = { path = "../../../agent_ui" }
+acp_tools = { path = "../../../acp_tools" }
+activity_indicator = { path = "../../../activity_indicator" }
 askpass = { path = "../../../askpass" }
 assets = { path = "../../../assets" }
+breadcrumbs = { path = "../../../breadcrumbs" }
 call_hierarchy = { path = "../../../call_hierarchy" }
 client = { path = "../../../client" }
 command_palette = { path = "../../../command_palette" }
@@ -35,6 +38,9 @@ extension = { path = "../../../extension" }
 extension_host = { path = "../../../extension_host" }
 extensions_ui = { path = "../../../extensions_ui" }
 git_ui = { path = "../../../git_ui" }
+git = { path = "../../../git" }
+git_hosting_providers = { path = "../../../git_hosting_providers" }
+git_ui_core = { path = "../../../git_ui_core" }
 language_extension = { path = "../../../language_extension" }
 go_to_line = { path = "../../../go_to_line" }
 gpui = { path = "../../../gpui" }
@@ -49,6 +55,7 @@ language_model = { path = "../../../language_model" }
 language_selector = { path = "../../../language_selector" }
 language_tools = { path = "../../../language_tools" }
 lsp_command_selector = { path = "../../../lsp_command_selector" }
+lsp_locations = { path = "../../../lsp_locations" }
 languages = { path = "../../../languages", features = ["load-grammars"] }
 line_ending_selector = { path = "../../../line_ending_selector" }
 markdown_preview = { path = "../../../markdown_preview" }
