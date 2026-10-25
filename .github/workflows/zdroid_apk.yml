@@ -35,7 +35,7 @@ env:
   ANDROID_PLATFORM: "26"
   BUILD_TOOLS_VERSION: 35.0.0
   CARGO_NDK_VERSION: 4.1.2
-  GRADLE_VERSION: 8.14.3
+  GRADLE_VERSION: 8.14.6
   SCCACHE_VERSION: v0.18.0
   # Certificate of the key stored in ZDROID_KEYSTORE_BASE64. Every release
   # must be signed by it, otherwise installed copies can't upgrade in place.
