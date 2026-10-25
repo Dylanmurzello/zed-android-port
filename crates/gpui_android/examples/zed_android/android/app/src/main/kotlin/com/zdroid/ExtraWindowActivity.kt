@@ -233,6 +233,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             // grant focus on its own.
             isFocusable = true
             isFocusableInTouchMode = true
+            // After keyboard, mouse or trackpad input, Android draws a
+            // translucent highlight over the focused view. This view
+            // fills the window, so the highlight was the whitish tint
+            // these windows still showed after the OPAQUE change above.
+            defaultFocusHighlightEnabled = false
             // Captured-pointer events arrive via the Activity-level
             // `onGenericMotionEvent` override below — same pattern as
             // MainActivity. We don't install an
