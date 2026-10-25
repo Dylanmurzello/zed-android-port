@@ -13759,6 +13759,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_prompt"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "markdown",
+ "menu",
+ "settings",
+ "theme",
+ "theme_settings",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "unicase"
 version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16236,6 +16250,7 @@ dependencies = [
  "theme_settings",
  "toolchain_selector",
  "ui",
+ "ui_prompt",
  "util",
  "uuid",
  "vim",
@@ -16245,6 +16260,8 @@ dependencies = [
  "workspace",
  "zdroid_runtime",
  "zed_actions",
+ "zlog",
+ "zlog_settings",
 ]
 
 [[package]]
@@ -16437,6 +16454,16 @@ dependencies = [
  "chrono",
  "collections",
  "log",
+]
+
+[[package]]
+name = "zlog_settings"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "gpui",
+ "settings",
+ "zlog",
 ]
 
 [[package]]

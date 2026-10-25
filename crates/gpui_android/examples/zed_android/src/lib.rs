@@ -5,6 +5,7 @@
 
 mod app_updater;
 mod header;
+mod logging;
 mod menu_bar;
 mod noexec_modal;
 mod runtime_picker;
@@ -357,26 +358,7 @@ const BUNDLED_FONTS: &[&[u8]] = &[
 
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("zed_android")
-            // android-activity 0.6.1 hard-codes an `error!` log for
-            // "Spurious ALOOPER_POLL_CALLBACK from ALooper_pollOnce()
-            // (ignored)" every time the looper dispatches our
-            // Choreographer FD callback — which is once per vsync, so
-            // 120 lines/sec of logcat noise on Tab S9. The upstream
-            // comment says the NDK docs claim this can't happen; it
-            // does on real hardware. Silencing the module entirely
-            // because nothing else useful comes out of it. If
-            // android-activity upgrades and starts surfacing real
-            // input/lifecycle errors there, revisit.
-            .with_filter(
-                android_logger::FilterBuilder::new()
-                    .parse("info,android_activity::activity_impl=off")
-                    .build(),
-            ),
-    );
+    logging::init_logger();
     info!("zed_android: android_main entry");
 
     let data_path = app
@@ -731,6 +713,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             error!("zed_android: create_dir_all({}): {err:#}", path.display());
         }
     }
+    logging::init_log_file();
     // Termux-style ~/storage/* curated symlinks into shared storage. Lets
     // users browse / open / save individual files from /sdcard via
     // ~/storage/{shared,downloads,dcim,...} without ever treating those
@@ -768,6 +751,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     info!("zed_android: settings + theme + editor init");
     settings::init(cx);
+    zlog_settings::init(cx);
     // `gpui_tokio::init` registers the global Tokio runtime that wasmtime's
     // async support taps into for extension epoch interruption + WASI
     // async tasks. Production calls this at zed/src/main.rs:462. Without
@@ -1209,6 +1193,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     diagnostics::init(cx);
     workspace::init(app_state.clone(), cx);
+    ui_prompt::init(cx);
     command_palette::init(cx);
     search::init(cx);
     lsp_locations::init(cx);
@@ -1352,6 +1337,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     settings_ui::init(cx);
     workspace::init_settings_file_actions(cx);
+    logging::init(cx);
     editor::init_bundled_file_actions(cx);
     terminal_view::init(cx);
     // Onboarding reads `AllAgentServersSettings` from the SettingsStore;
