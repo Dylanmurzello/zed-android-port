@@ -12,10 +12,12 @@ import androidx.core.content.ContextCompat
 
 /**
  * Opt-in background mode. While it runs, the process holds foreground
- * service priority, so Android is far less likely to kill Zdroid while it
- * sits in the background and SSH or agent sessions survive the screen
- * turning off. It holds no wake lock; the notification's Stop action
- * turns the mode off.
+ * service priority, so Android is far less likely to freeze or kill Zdroid
+ * while it sits in the background, and SSH or agent sessions keep running
+ * when the user switches apps. It holds no wake lock, so with the screen
+ * off battery optimization can still cut the network; setting the app's
+ * battery usage to Unrestricted avoids that. The notification's Stop
+ * action turns the mode off.
  *
  * The service lives in the app process, so quitting Zdroid ends it too.
  * The user's choice is persisted and re-applied on the next launch.
