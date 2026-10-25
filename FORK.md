@@ -52,11 +52,18 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```
 
 - When sweeping upstream's `.github/workflows` files, keep `zdroid_apk.yml`.
-- Keep upstream's README review-banner rule out of `.rules` (the line starting `* HARD RULE: When modifying any source files`). It makes agents add a banner to `README.md` that only a human may delete, which suits Zed's own pull requests but means a manual edit on every pull request here. If the merge conflicts on that line, resolve it by keeping the line deleted.
+- `.rules` is upstream's file for AI agents (`CLAUDE.md`, `AGENTS.md` and `GEMINI.md` link to it), with two fork changes to keep when the merge touches it:
+  - The **Zdroid fork** section at the top, the fork's rules for agents. Edit fork rules there, not in tool-specific files, so every agent reads them.
+  - Upstream's README review-banner rule (the line starting `* HARD RULE: When modifying any source files`) stays deleted. It makes agents add a banner to `README.md` that only a human may delete, which suits Zed's own pull requests but means a manual edit on every pull request here.
 - Reseed the Android app's lockfile from the root one before the `cargo ndk` check. A stale example lock can resolve mismatched versions of crates that upstream bumped together (2026-10: `merman` vs `merman-render`):
 
   ```sh
   cp Cargo.lock crates/gpui_android/examples/zed_android/Cargo.lock
+  ```
+- List the upstream files the fork still changes, and drop any patch the new release made unnecessary, for example because upstream fixed the same bug. Each one can conflict again on the next sync:
+
+  ```sh
+  git diff --stat v1.25.3 HEAD -- . ':!crates/gpui_android' ':!crates/zdroid_runtime' ':!.github' ':!*.md' ':!Cargo.lock'
   ```
 - Push the sync branch and open a pull request into `zdroid`. The **Zdroid APK** check builds the full APK. It covers the `cargo ndk` gate, Gradle, and the bundled helper binaries.
 - Never `git push --tags`. A local clone carries every Zed `v1.x.y` tag, and those match the release trigger.
