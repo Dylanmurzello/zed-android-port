@@ -3,5 +3,15 @@
 # being on by default, and `gemm-f16` (pulled in via candle → audio → call →
 # git_ui → project_panel) refuses to assemble its `fmla *.8h` SIMD path
 # without it.
+#
+# The rest shrinks the `.so`. Like Zed's `script/bundle-linux`, the linker
+# folds functions that compile to identical code; `-addrsig` records which
+# functions have their address taken, so folding them can't change behavior.
+# Packed relocations need Android 6, below the app's minSdk 26.
 [target.aarch64-linux-android]
-rustflags = ["-C", "target-feature=+fp16"]
+rustflags = [
+    "-C", "target-feature=+fp16",
+    "-C", "llvm-args=-addrsig",
+    "-C", "link-arg=-Wl,--icf=safe",
+    "-C", "link-arg=-Wl,--pack-dyn-relocs=android",
+]
