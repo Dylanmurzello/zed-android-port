@@ -4,7 +4,8 @@
 //! Zdroid runs as. This mirrors its states, hourly polling, the
 //! `auto_update` setting, the title bar's `UpdateButton` and the "Updated
 //! to …" notification, on top of `gpui_android::updater`, which checks this
-//! fork's GitHub releases and hands the APK to Android's installer.
+//! fork's GitHub releases and installs the APK through an Android install
+//! session.
 //!
 //! One deliberate difference: an automatic check only offers the update,
 //! and the ~170 MB download starts on click, because the device may be on
@@ -18,7 +19,7 @@ use futures::StreamExt as _;
 use gpui::{
     AnyElement, App, AppContext as _, Context, DismissEvent, Entity, Global, PromptLevel, Task,
 };
-use gpui_android::updater::{self, UpdateCheck};
+use gpui_android::updater::{self, InstallOutcome, UpdateCheck};
 use log::{error, info};
 use settings::SettingsStore;
 use ui::{IconName, UpdateButton, prelude::*};
@@ -42,9 +43,15 @@ enum Status {
         version: String,
         progress: Option<f32>,
     },
-    /// Handed to Android's installer. Clicking the button reopens it in
-    /// case the user backed out of the installer's prompt.
+    /// Downloaded, waiting for a click, e.g. after the user declined
+    /// Android's install prompt.
     ReadyToInstall {
+        version: String,
+        apk_path: PathBuf,
+    },
+    /// In an install session, while Android asks the user to confirm.
+    /// Installing kills the app, so this only ends on cancel or failure.
+    Installing {
         version: String,
         apk_path: PathBuf,
     },
@@ -202,6 +209,19 @@ impl AppUpdater {
         if self.pending.is_some() {
             return;
         }
+        // Ask for "Install unknown apps" before spending ~170 MB on an APK
+        // Android wouldn't let us install.
+        match updater::can_install_updates() {
+            Ok(true) => {}
+            Ok(false) => {
+                self.request_install_permission(version, download_urls, cx);
+                return;
+            }
+            Err(error) => {
+                self.fail("checking the install permission", error, cx);
+                return;
+            }
+        }
         self.dismissed = None;
         self.status = Status::Downloading {
             version: version.clone(),
@@ -253,17 +273,79 @@ impl AppUpdater {
         }));
     }
 
+    fn request_install_permission(
+        &mut self,
+        version: String,
+        download_urls: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let permission = match updater::request_install_permission() {
+            Ok(permission) => permission,
+            Err(error) => {
+                self.fail("opening the install permission settings", error, cx);
+                return;
+            }
+        };
+        self.pending = Some(cx.spawn(async move |this, cx| {
+            let granted = permission.await.unwrap_or(false);
+            this.update(cx, |this, cx| {
+                this.pending = None;
+                if granted {
+                    this.download(version, download_urls, cx);
+                } else {
+                    info!("zed_android: update not downloaded, installing apps isn't allowed");
+                }
+            })
+            .ok();
+        }));
+    }
+
     fn install(&mut self, cx: &mut Context<Self>) {
-        let Status::ReadyToInstall { apk_path, .. } = &self.status else {
+        if self.pending.is_some() {
+            return;
+        }
+        let Status::ReadyToInstall { version, apk_path } = self.status.clone() else {
             return;
         };
-        if let Err(error) = updater::launch_installer(apk_path) {
-            error!("zed_android: launching the installer failed: {error:#}");
-            self.status = Status::Errored {
-                error: format!("{error:#}"),
+        self.status = Status::Installing {
+            version: version.clone(),
+            apk_path: apk_path.clone(),
+        };
+        cx.notify();
+
+        let session = cx.background_spawn({
+            let apk_path = apk_path.clone();
+            async move { updater::install_update(&apk_path) }
+        });
+        self.pending = Some(cx.spawn(async move |this, cx| {
+            let outcome = match session.await {
+                Ok(outcome) => outcome.await.ok(),
+                Err(error) => Some(InstallOutcome::Failed(format!("{error:#}"))),
             };
-            cx.notify();
-        }
+            this.update(cx, |this, cx| {
+                this.pending = None;
+                match outcome {
+                    Some(InstallOutcome::Failed(error)) => {
+                        error!("zed_android: installing the update failed: {error}");
+                        this.status = Status::Errored { error };
+                    }
+                    // Declined in Android's prompt: offer the install again.
+                    Some(InstallOutcome::Cancelled) | None => {
+                        this.status = Status::ReadyToInstall { version, apk_path };
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn fail(&mut self, action: &str, error: anyhow::Error, cx: &mut Context<Self>) {
+        error!("zed_android: {action} failed: {error:#}");
+        self.status = Status::Errored {
+            error: format!("{error:#}"),
+        };
+        cx.notify();
     }
 
     fn dismiss(&mut self, cx: &mut Context<Self>) {
@@ -324,6 +406,12 @@ pub fn render_update_button(cx: &App) -> Option<AnyElement> {
                 .tooltip(UpdateButton::downloading_tooltip_message(
                     version, *progress,
                 ))
+                .disabled(true)
+        }
+        Status::Installing { version, .. } => {
+            UpdateButton::new(IconName::LoadCircle, "Installing Zdroid Update…")
+                .icon_animate(true)
+                .tooltip(UpdateButton::version_tooltip_message(version))
                 .disabled(true)
         }
         Status::ReadyToInstall { version, .. } => {

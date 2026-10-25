@@ -1,9 +1,8 @@
 //! In-app updater for the Zdroid Android port. Hits the GitHub Releases
 //! page for [`RELEASE_REPO`], compares the latest tag
 //! against the running app's `versionName`, and (when newer) downloads
-//! the signed APK to the app's cache dir and hands it to Android's
-//! package installer via the `MainActivity.launchPackageInstaller` JNI
-//! method.
+//! the signed APK to the app's cache dir and installs it through a
+//! PackageInstaller session (`MainActivity.installUpdate`).
 //!
 //! Why ureq instead of reqwest: matches the existing
 //! `bootstrap_install.rs` pattern (same crate transitively), avoids
@@ -13,13 +12,15 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
+use futures::channel::oneshot;
 use jni::{
-    JavaVM,
+    JNIEnv, JavaVM,
     objects::{JObject, JString, JValue},
+    sys::jboolean,
 };
 
 /// Process-global AndroidApp handle. Set once at boot via
@@ -78,11 +79,12 @@ fn candidate_asset_names(version: &str) -> [String; 2] {
 /// redirect endpoint to behave correctly.
 const USER_AGENT: &str = "zdroid-updater";
 
-/// Where in the app cache dir we drop downloaded APKs. Matches the
-/// `<cache-path name="updater_cache" path="updater/">` whitelist in
-/// `res/xml/updater_file_paths.xml` so FileProvider can hand the
-/// resulting URI to the system installer.
+/// Where in the app cache dir we drop downloaded APKs.
 const CACHE_SUBDIR: &str = "updater";
+
+/// `PackageInstaller.STATUS_FAILURE_ABORTED`: the user declined Android's
+/// install prompt.
+const STATUS_FAILURE_ABORTED: i32 = 3;
 
 /// Result of a "check for updates" call.
 #[derive(Debug, Clone)]
@@ -193,10 +195,6 @@ fn query_current_version(android_app: &AndroidApp) -> Result<String> {
 /// `AndroidApp::internal_data_path()` accessor on android-activity 0.6
 /// only exposes the FILES dir; there is no cache-dir accessor, so we
 /// reach through to the Activity (which inherits the Context method).
-/// The returned path is the same one that the FileProvider's
-/// `<cache-path>` declaration resolves against, which is the load-
-/// bearing invariant for `launchPackageInstaller` to find a configured
-/// root for the downloaded APK.
 fn system_cache_dir(android_app: &AndroidApp) -> Result<PathBuf> {
     let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
     let mut env = vm.attach_current_thread()?;
@@ -271,15 +269,9 @@ pub fn download_apk(
     // Use Context.getCacheDir() via JNI. `android_app.internal_data_path()`
     // returns the FILES dir (`getFilesDir()`); the OS cache dir is its
     // sibling, NOT a `cache/` subdirectory of files. Pre-v0.3.1 the
-    // updater wrote to `<filesDir>/cache/updater/` which doesn't match
-    // the FileProvider's `<cache-path>` declaration, so even successful
-    // downloads failed with `Failed to find configured root that
-    // contains …` when handing off to the system installer. The XML
-    // (res/xml/updater_file_paths.xml) maps `<cache-path path="updater/">`
-    // to `getCacheDir()+"/updater/"`, which is what this path now
-    // resolves to. One-time migration: if the old wrong directory
-    // exists from a previous failed attempt, wipe it so stale 225 MB
-    // APKs don't sit on disk forever.
+    // updater wrote to `<filesDir>/cache/updater/`. One-time migration:
+    // if that directory exists from a previous attempt, wipe it so stale
+    // 225 MB APKs don't sit on disk forever.
     let cache_root = system_cache_dir(android_app)
         .context("query Context.getCacheDir() via JNI")?;
     let stale_dir = android_app
@@ -399,31 +391,123 @@ pub fn remove_downloaded_apks() -> Result<()> {
     }
 }
 
-/// JNI into `MainActivity.launchPackageInstaller` to hand the
-/// downloaded APK to Android's system installer. The installer opens
-/// its own UI; this call returns as soon as the intent is dispatched.
-pub fn launch_installer(apk_path: &Path) -> Result<()> {
+/// How an install session ended, when it didn't replace the app.
+#[derive(Debug)]
+pub enum InstallOutcome {
+    /// The user declined Android's install prompt.
+    Cancelled,
+    Failed(String),
+}
+
+static INSTALL_RESULT: Mutex<Option<oneshot::Sender<InstallOutcome>>> = Mutex::new(None);
+static INSTALL_PERMISSION_RESULT: Mutex<Option<oneshot::Sender<bool>>> = Mutex::new(None);
+
+fn replace_sender<T>(slot: &Mutex<Option<oneshot::Sender<T>>>, sender: Option<oneshot::Sender<T>>) {
+    match slot.lock() {
+        Ok(mut guard) => *guard = sender,
+        Err(poisoned) => *poisoned.into_inner() = sender,
+    }
+}
+
+fn take_sender<T>(slot: &Mutex<Option<oneshot::Sender<T>>>) -> Option<oneshot::Sender<T>> {
+    match slot.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    }
+}
+
+/// Whether Android lets Zdroid install APKs ("Install unknown apps").
+pub fn can_install_updates() -> Result<bool> {
     let android_app = android_app()?;
-    let path_str = apk_path
-        .to_str()
-        .ok_or_else(|| anyhow!("non-UTF8 APK path: {}", apk_path.display()))?;
     let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
     let mut env = vm.attach_current_thread()?;
     let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let path_jstr = env.new_string(path_str)?;
-    let result = env.call_method(
-        &activity,
-        "launchPackageInstaller",
-        "(Ljava/lang/String;)Z",
-        &[JValue::Object(&path_jstr.into())],
-    )?;
-    if result.z()? {
-        Ok(())
+    Ok(env
+        .call_method(&activity, "canInstallUpdates", "()Z", &[])?
+        .z()?)
+}
+
+/// Opens Zdroid's "Install unknown apps" settings page. The receiver
+/// resolves with whether the user allowed it once they come back.
+pub fn request_install_permission() -> Result<oneshot::Receiver<bool>> {
+    let (sender, receiver) = oneshot::channel();
+    replace_sender(&INSTALL_PERMISSION_RESULT, Some(sender));
+    let android_app = android_app()?;
+    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
+    let mut env = vm.attach_current_thread()?;
+    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
+    if let Err(err) = env.call_method(&activity, "requestInstallPermission", "()V", &[]) {
+        replace_sender(&INSTALL_PERMISSION_RESULT, None);
+        return Err(err.into());
+    }
+    Ok(receiver)
+}
+
+/// Installs the downloaded APK through a PackageInstaller session, which
+/// asks the user to confirm and then replaces the running app. Blocks
+/// while the APK is copied into the session, so call it off the gpui
+/// thread. The receiver resolves only if the session ends without
+/// installing; on success Android kills the app instead.
+pub fn install_update(apk_path: &Path) -> Result<oneshot::Receiver<InstallOutcome>> {
+    let path = apk_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 APK path: {}", apk_path.display()))?;
+    let (sender, receiver) = oneshot::channel();
+    replace_sender(&INSTALL_RESULT, Some(sender));
+    let android_app = android_app()?;
+    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
+    let mut env = vm.attach_current_thread()?;
+    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
+    let path = env.new_string(path)?;
+    let error = env
+        .call_method(
+            &activity,
+            "installUpdate",
+            "(Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&path.into())],
+        )?
+        .l()?;
+    if !error.is_null() {
+        replace_sender(&INSTALL_RESULT, None);
+        let error: String = env.get_string(&JString::from(error))?.into();
+        return Err(anyhow!("{error}"));
+    }
+    Ok(receiver)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnUpdateInstallResult<'local>(
+    mut env: JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    status: i32,
+    message: JString<'local>,
+) {
+    let message: Option<String> = if message.is_null() {
+        None
     } else {
-        Err(anyhow!(
-            "MainActivity.launchPackageInstaller returned false for {}",
-            apk_path.display()
-        ))
+        env.get_string(&message).ok().map(Into::into)
+    };
+    log::info!("updater: install session ended with status {status} ({message:?})");
+    let outcome = if status == STATUS_FAILURE_ABORTED {
+        InstallOutcome::Cancelled
+    } else {
+        InstallOutcome::Failed(
+            message.unwrap_or_else(|| format!("Android's installer failed with status {status}")),
+        )
+    };
+    if let Some(sender) = take_sender(&INSTALL_RESULT) {
+        sender.send(outcome).ok();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnInstallPermissionResult<'local>(
+    _env: JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    granted: jboolean,
+) {
+    if let Some(sender) = take_sender(&INSTALL_PERMISSION_RESULT) {
+        sender.send(granted != 0).ok();
     }
 }
 

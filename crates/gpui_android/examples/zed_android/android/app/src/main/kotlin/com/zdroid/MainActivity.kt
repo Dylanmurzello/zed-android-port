@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.graphics.drawable.Animatable
 import android.net.ConnectivityManager
@@ -14,6 +15,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -26,7 +28,6 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -1219,45 +1220,75 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    /// Hand a downloaded APK to Android's package installer. Rust
-    /// calls this after the updater finishes writing the APK to
-    /// `cacheDir/updater/zdroid-<tag>.apk`. We wrap the path in a
-    /// FileProvider content:// URI (per the manifest provider
-    /// declaration at `.updater.fileprovider`) so the installer can
-    /// read across the app-private boundary; FLAG_GRANT_READ_URI_PERMISSION
-    /// is what makes that grant explicit.
-    ///
-    /// Returns true on a successful intent dispatch (the installer UI
-    /// will then take over and prompt the user). Returns false if the
-    /// file is missing or the installer can't be started — Rust logs
-    /// the failure but doesn't retry.
+    /// Whether Android lets Zdroid install APKs ("Install unknown apps").
     @Suppress("unused") // called from Rust via JNI
-    fun launchPackageInstaller(apkPath: String): Boolean {
+    fun canInstallUpdates(): Boolean = packageManager.canRequestPackageInstalls()
+
+    /// Opens Zdroid's "Install unknown apps" settings page. When the user
+    /// comes back, `onActivityResult` reports whether they allowed it.
+    @Suppress("unused") // called from Rust via JNI
+    fun requestInstallPermission() {
+        runOnUiThread {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName"),
+            )
+            try {
+                startActivityForResult(intent, REQ_INSTALL_PERMISSION)
+            } catch (t: Throwable) {
+                Log.e(TAG_UPDATE, "Couldn't open the install permission settings", t)
+                NativeBridge.nativeOnInstallPermissionResult(false)
+            }
+        }
+    }
+
+    /// Installs a downloaded update with a PackageInstaller session, which
+    /// Android recommends over handing the APK to the installer in an
+    /// intent. [UpdateInstallReceiver] gets the outcome: Android asks the
+    /// user to confirm, then replaces the app or says why it couldn't.
+    /// Returns null once the session is committed, or why it couldn't be.
+    /// Copies the APK, so Rust calls it off the UI thread.
+    @Suppress("unused") // called from Rust via JNI
+    fun installUpdate(apkPath: String): String? {
         val file = File(apkPath)
         if (!file.exists()) {
-            Log.e(TAG_UPDATE, "launchPackageInstaller: APK missing at $apkPath")
-            return false
+            return "The downloaded APK is missing"
         }
         if (!isTrustedUpdateApk(file)) {
-            Log.e(TAG_UPDATE, "launchPackageInstaller: rejected untrusted APK at $apkPath")
-            return false
+            return "The downloaded APK isn't Zdroid signed with this build's key"
         }
-        return try {
-            val uri = FileProvider.getUriForFile(
-                this,
-                "com.zdroid.updater.fileprovider",
-                file,
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val installer = packageManager.packageInstaller
+        // An earlier attempt's session still holds its copy of the APK.
+        installer.mySessions.forEach { installer.abandonSession(it.sessionId) }
+        val params = PackageInstaller.SessionParams(
+            PackageInstaller.SessionParams.MODE_FULL_INSTALL
+        ).apply {
+            setAppPackageName(packageName)
+            setSize(file.length())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE)
             }
-            startActivity(intent)
-            true
+        }
+        var sessionId: Int? = null
+        return try {
+            val id = installer.createSession(params)
+            sessionId = id
+            installer.openSession(id).use { session ->
+                file.inputStream().use { input ->
+                    session.openWrite("zdroid.apk", 0, file.length()).use { output ->
+                        input.copyTo(output)
+                        session.fsync(output)
+                    }
+                }
+                UpdateInstallReceiver.setUpdating(this, true)
+                session.commit(UpdateInstallReceiver.statusSender(this, id))
+            }
+            null
         } catch (t: Throwable) {
-            Log.e(TAG_UPDATE, "launchPackageInstaller dispatch failed", t)
-            false
+            Log.e(TAG_UPDATE, "installUpdate failed", t)
+            UpdateInstallReceiver.setUpdating(this, false)
+            sessionId?.let { id -> runCatching { installer.abandonSession(id) } }
+            t.message ?: t.toString()
         }
     }
 
@@ -1350,6 +1381,11 @@ class MainActivity : GameActivity(), ImeHost {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_INSTALL_PERMISSION) {
+            // The settings page always returns RESULT_CANCELED; ask again.
+            NativeBridge.nativeOnInstallPermissionResult(packageManager.canRequestPackageInstalls())
+            return
+        }
         if (requestCode != REQ_OPEN_TREE && requestCode != REQ_CREATE_DOCUMENT) {
             return
         }
@@ -1382,6 +1418,7 @@ class MainActivity : GameActivity(), ImeHost {
         private const val REQ_OPEN_TREE = 0xA1
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3
+        private const val REQ_INSTALL_PERMISSION = 0xA4
         /// Software cursor side length in dp. Scaled by display
         /// density at instantiation time to give the sprite a
         /// consistent visual size across devices.

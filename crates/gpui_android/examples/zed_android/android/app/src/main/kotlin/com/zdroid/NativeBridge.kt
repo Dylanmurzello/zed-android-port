@@ -223,4 +223,12 @@ object NativeBridge {
     /// `Window::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)
+
+    /// Posted by [UpdateInstallReceiver] when an update session ends
+    /// without installing: cancelled in Android's prompt or failed.
+    external fun nativeOnUpdateInstallResult(status: Int, message: String?)
+
+    /// Posted when the user returns from Zdroid's "Install unknown apps"
+    /// settings page, which [MainActivity.requestInstallPermission] opens.
+    external fun nativeOnInstallPermissionResult(granted: Boolean)
 }
