@@ -1,17 +1,3 @@
-# Zdroid fork
-
-This repository is Zdroid, a fork of Dylanmurzello/zed-android-port that follows Zed release tags. This section is the fork's own; the rest of the file is upstream Zed's. The full procedures are in `FORK.md`.
-
-* Work lands on `zdroid`, the default branch, through pull requests. `main` mirrors Dylan's repository: never commit to it.
-* Put changes in fork-owned code (`crates/gpui_android`, `crates/zdroid_runtime`, the Android app under `crates/gpui_android/examples/zed_android`). When an upstream Zed file has to change, keep the edit small, gate it with `cfg(target_os = "android")`, and explain why in a comment.
-* `crates/zed/RELEASE_CHANNEL` must stay `dev`. Zed release tags set it to `stable`, and merging a tag takes that without a conflict.
-* Keep `merge.ours.driver` unset. Enable it only for the Zed tag merge itself (`git -c merge.ours.driver=true merge vX.Y.Z`); during rebases, cherry-picks and merges from Dylan it silently keeps one side and drops the other's changes.
-* After a Zed merge, reseed the Android app's lockfile: `cp Cargo.lock crates/gpui_android/examples/zed_android/Cargo.lock`.
-* The Android app is a separate Cargo workspace, so a root `cargo check` doesn't cover it. Run `cargo ndk -t arm64-v8a -P 26 check` in `crates/gpui_android/examples/zed_android`; the pull request's **Zdroid APK** build is the full check. Local Gradle builds overwrite the tracked `android/app/src/main/assets/zed-askpass-helper`, so restore it before committing.
-* Bump `versionCode` and `versionName` in `android/app/build.gradle.kts` in the pull request that changes the app.
-* Never `git push --tags`: the clone carries every Zed tag, and `v*.*.*` tags start the release workflow. Push a single tag by name.
-* Don't add AI attribution (`Co-Authored-By` trailers, "Generated with" lines) to commits, tags or pull requests.
-
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
