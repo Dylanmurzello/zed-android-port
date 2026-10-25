@@ -102,22 +102,15 @@
             </intent-filter>
         </provider>
 
-        <!-- FileProvider that whitelists the cache dir so the in-app
-             updater can hand a content:// URI for the downloaded APK
-             to Android's package installer via ACTION_VIEW. The
-             installer can't read app-private file:// paths directly,
-             but FileProvider mediates the grant. Authority namespaced
-             under .updater so it doesn't collide with the
-             DocumentsProvider above. -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="com.zdroid.updater.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/updater_file_paths"/>
-        </provider>
+        <!-- The in-app updater's install session reports here, and so does
+             MY_PACKAGE_REPLACED once the update has installed. -->
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".KeepAliveService"
