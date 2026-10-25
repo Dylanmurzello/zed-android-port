@@ -19,7 +19,17 @@ To get notified when Dylan pushes, **Watch** his repository on GitHub (Custom â†
 
 ```sh
 git remote add upstream https://github.com/zed-industries/zed
+git config remote.upstream.tagOpt --no-tags
 git remote add dylan https://github.com/Dylanmurzello/zed-android-port
+```
+
+`--no-tags` keeps Zed's tags out of the clone, because Zed's own 0.x tags from before Zed 1.0 reuse this fork's version names: a local copy of Zed's `v0.8.0` blocked tagging Zdroid 0.8.0. Fetch the Zed release you sync by name instead, as in the steps below. GitHub never has Zed's tags, so this only concerns local clones.
+
+A clone that already fetched them lists Zed's `v0.*` tags next to this fork's. Delete the local copies that match Zed's, by name and commit, so this fork's own and Dylan's stay:
+
+```sh
+git ls-remote --tags upstream 'v0.*' | grep -v '\^{}$' | awk '{print $2" "$1}' | sed 's#refs/tags/##' | sort > /tmp/zed-v0-tags
+git for-each-ref --format='%(refname:short) %(objectname)' 'refs/tags/v0.*' | sort | comm -12 - /tmp/zed-v0-tags | cut -d' ' -f1 | xargs -r git tag -d
 ```
 
 ## The `ours` merge driver
@@ -117,6 +127,8 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
    git tag -a v0.4.1 --cleanup=whitespace -F /path/to/notes.md
    git push origin v0.4.1
    ```
+
+   If `git tag` says the tag already exists and it isn't this fork's, it's a local copy of Zed's: remove those as described under [Remotes](#remotes-one-time-per-clone).
 
 3. The workflow builds the APK, attests its provenance, and publishes a **pre-release** with `Zdroid-X.Y.Z.apk` attached. A tag that doesn't match `versionName` fails right away.
 4. Install the pre-release on a device and run the smoke checklist in RELEASING.md.
