@@ -58,6 +58,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "acp_tools"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "agent_servers",
+ "agent_ui",
+ "collections",
+ "gpui",
+ "language",
+ "markdown",
+ "project",
+ "serde_json",
+ "settings",
+ "theme_settings",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "action_log"
 version = "0.1.0"
 dependencies = [
@@ -75,6 +95,26 @@ dependencies = [
  "text",
  "util",
  "watch",
+]
+
+[[package]]
+name = "activity_indicator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auto_update",
+ "editor",
+ "extension_host",
+ "fs",
+ "futures",
+ "gpui",
+ "language",
+ "project",
+ "proto",
+ "smallvec",
+ "ui",
+ "util",
+ "workspace",
 ]
 
 [[package]]
@@ -7334,6 +7374,29 @@ dependencies = [
  "project",
  "serde_json",
  "ui",
+ "workspace",
+]
+
+[[package]]
+name = "lsp_locations"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "collections",
+ "editor",
+ "file_icons",
+ "fuzzy",
+ "gpui",
+ "language",
+ "log",
+ "picker",
+ "picker_preview",
+ "project",
+ "settings",
+ "text",
+ "theme_settings",
+ "ui",
+ "util",
  "workspace",
 ]
 
@@ -16083,6 +16146,8 @@ dependencies = [
 name = "zed_android"
 version = "0.1.0"
 dependencies = [
+ "acp_tools",
+ "activity_indicator",
  "agent_ui",
  "android-activity",
  "android_logger",
@@ -16090,6 +16155,7 @@ dependencies = [
  "askpass",
  "assets",
  "auto_update",
+ "breadcrumbs",
  "call_hierarchy",
  "client",
  "command_palette",
@@ -16105,7 +16171,10 @@ dependencies = [
  "file_finder",
  "fs",
  "futures",
+ "git",
+ "git_hosting_providers",
  "git_ui",
+ "git_ui_core",
  "go_to_line",
  "gpui",
  "gpui_android",
@@ -16124,6 +16193,7 @@ dependencies = [
  "line_ending_selector",
  "log",
  "lsp_command_selector",
+ "lsp_locations",
  "markdown_preview",
  "menu",
  "multi_buffer",

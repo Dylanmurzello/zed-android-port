@@ -220,6 +220,77 @@ fn ensure_agent_panel(
     }
 }
 
+/// Mirrors `initialize_pane` in crates/zed/src/zed.rs. Several views draw
+/// their controls in these toolbar items (project search's query field, the
+/// language server log's server picker, Keep and Reject for agent edits), so
+/// a missing item leaves its view without them. Left out are the items from
+/// crates the app doesn't build: the quick action bar, the settings
+/// migration banner, the debugger and telemetry logs, and the basedpyright
+/// banner.
+fn initialize_pane(
+    workspace: &Workspace,
+    pane: &gpui::Entity<workspace::Pane>,
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<Workspace>,
+) {
+    pane.update(cx, |pane, cx| {
+        pane.toolbar().update(cx, |toolbar, cx| {
+            let multibuffer_hint =
+                cx.new(|_| onboarding::multibuffer_hint::MultibufferHint::new());
+            toolbar.add_item(multibuffer_hint, window, cx);
+            let solo_diff_style_toolbar =
+                cx.new(git_ui::solo_diff_view::SoloDiffStyleToolbar::new);
+            toolbar.add_item(solo_diff_style_toolbar, window, cx);
+            let file_diff_style_toolbar =
+                cx.new(git_ui_core::file_diff_view::FileDiffStyleToolbar::new);
+            toolbar.add_item(file_diff_style_toolbar, window, cx);
+            let breadcrumbs = cx.new(|_| breadcrumbs::Breadcrumbs::new());
+            toolbar.add_item(breadcrumbs, window, cx);
+            let buffer_search_bar = cx.new(|cx| {
+                search::BufferSearchBar::new(
+                    Some(workspace.project().read(cx).languages().clone()),
+                    window,
+                    cx,
+                )
+            });
+            toolbar.add_item(buffer_search_bar, window, cx);
+            let diagnostic_editor_controls = cx.new(|_| diagnostics::ToolbarControls::new());
+            toolbar.add_item(diagnostic_editor_controls, window, cx);
+            let project_search_bar = cx.new(|_| search::project_search::ProjectSearchBar::new());
+            toolbar.add_item(project_search_bar, window, cx);
+            let lsp_log_item =
+                cx.new(|_| language_tools::lsp_log_view::LspLogToolbarItemView::new());
+            toolbar.add_item(lsp_log_item, window, cx);
+            let acp_tools_item = cx.new(|_| acp_tools::AcpToolsToolbarItemView::new());
+            toolbar.add_item(acp_tools_item, window, cx);
+            let syntax_tree_item = cx.new(|_| language_tools::SyntaxTreeToolbarItemView::new());
+            toolbar.add_item(syntax_tree_item, window, cx);
+            let highlights_tree_item =
+                cx.new(|_| language_tools::HighlightsTreeToolbarItemView::new());
+            toolbar.add_item(highlights_tree_item, window, cx);
+            let project_diff_toolbar =
+                cx.new(|cx| git_ui::project_diff::ProjectDiffToolbar::new(workspace, cx));
+            toolbar.add_item(project_diff_toolbar, window, cx);
+            let staged_diff_toolbar =
+                cx.new(|cx| git_ui::staged_diff::StagedDiffToolbar::new(workspace, cx));
+            toolbar.add_item(staged_diff_toolbar, window, cx);
+            let unstaged_diff_toolbar =
+                cx.new(|cx| git_ui::unstaged_diff::UnstagedDiffToolbar::new(workspace, cx));
+            toolbar.add_item(unstaged_diff_toolbar, window, cx);
+            let branch_diff_toolbar = cx.new(git_ui::branch_diff::BranchDiffToolbar::new);
+            toolbar.add_item(branch_diff_toolbar, window, cx);
+            let solo_diff_git_toolbar = cx.new(git_ui::solo_diff_view::SoloDiffGitToolbar::new);
+            toolbar.add_item(solo_diff_git_toolbar, window, cx);
+            let commit_view_toolbar = cx.new(|_| git_ui::commit_view::CommitViewToolbar::new());
+            toolbar.add_item(commit_view_toolbar, window, cx);
+            let agent_diff_toolbar = cx.new(agent_ui::AgentDiffToolbar::new);
+            toolbar.add_item(agent_diff_toolbar, window, cx);
+            let image_view_toolbar = cx.new(|_| image_viewer::ImageViewToolbarControls::new());
+            toolbar.add_item(image_view_toolbar, window, cx);
+        })
+    });
+}
+
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
     gpui::WindowOptions::default()
 }
@@ -1270,6 +1341,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     workspace::init(app_state.clone(), cx);
     command_palette::init(cx);
     search::init(cx);
+    lsp_locations::init(cx);
     // Mirror production zed/src/main.rs:710. setup_search_bar is fired
     // from `terminal_panel.rs::TerminalPanel::new` ONLY — i.e. when the
     // terminal panel adds its own internal buffer search. It is NOT
@@ -1344,10 +1416,15 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         false,
         cx,
     );
+    acp_tools::init(cx);
     // Also covers the git graph (commit history) view: upstream folded
     // crates/git_graph into git_ui, so its serializable item, action
     // handlers, and database domain register here.
     git_ui::init(cx);
+    // Desktop creates the registry at startup; `git_hosting_providers::init`
+    // reads it with `global`, which panics when it doesn't exist yet.
+    git::GitHostingProviderRegistry::default_global(cx);
+    git_hosting_providers::init(cx);
     // Production zed/src/main.rs:741. Registers the workspace observer
     // that handles `zed_actions::Extensions::default()` — opens the
     // browse/install/manage pane (an `ExtensionsPage` workspace item).
@@ -1540,14 +1617,14 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             }
         });
 
-        // Status bar items, mirroring production zed/src/zed.rs:537-586.
-        // Skipped: edit_prediction_ui (AI), activity_indicator (collab),
-        // merge_conflict_indicator (git_ui — pulls collab), image_info
-        // (image-viewer specific). The rest are plumbed identically.
+        // Status bar items, mirroring production zed/src/zed.rs, minus
+        // edit_prediction_ui: the app registers no AI model providers.
         let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
         let diagnostic_summary =
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
         let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
+        let activity_indicator =
+            activity_indicator::ActivityIndicator::new(workspace, window, cx);
         let active_buffer_encoding =
             cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
         let active_buffer_language =
@@ -1555,10 +1632,14 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         let active_toolchain_language =
             cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
         let vim_mode_indicator = cx.new(|cx| vim::ModeIndicator::new(window, cx));
+        let pending_keystrokes_indicator =
+            cx.new(|cx| which_key::PendingKeystrokesIndicator::new(window, cx));
+        let image_info = cx.new(|_| image_viewer::ImageInfo::new(workspace));
         let cursor_position =
             cx.new(|_| go_to_line::cursor_position::CursorPosition::new(workspace));
         let line_ending_indicator =
             cx.new(|_| line_ending_selector::LineEndingIndicator::default());
+        let git_blame_status = cx.new(|_| git_ui::GitBlameStatus::default());
         let merge_conflict_indicator =
             cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
 
@@ -1585,70 +1666,25 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             status_bar.add_left_item(lsp_button, window, cx);
             status_bar.add_left_item(diagnostic_summary, window, cx);
             status_bar.add_left_item(active_file_name, window, cx);
+            status_bar.add_left_item(git_blame_status, window, cx);
             status_bar.add_left_item(merge_conflict_indicator, window, cx);
+            status_bar.add_left_item(activity_indicator, window, cx);
             status_bar.add_right_item(active_buffer_encoding, window, cx);
             status_bar.add_right_item(active_buffer_language, window, cx);
             status_bar.add_right_item(active_toolchain_language, window, cx);
             status_bar.add_right_item(line_ending_indicator, window, cx);
-            status_bar.add_right_item(vim_mode_indicator, window, cx);
             status_bar.add_right_item(cursor_position, window, cx);
+            status_bar.add_right_item(image_info, window, cx);
+            status_bar.add_right_item(vim_mode_indicator, window, cx);
+            status_bar.add_right_item(pending_keystrokes_indicator, window, cx);
         });
 
-        // Per-pane toolbar items. Mirrors production
-        // zed/src/zed.rs::initialize_pane (zed.rs:1234) which production
-        // invokes from a workspace observer at zed.rs:444-451 for the
-        // initial active pane and on every PaneAdded event.
-        //
-        //   - BufferSearchBar — the in-editor Ctrl-F find/replace bar.
-        //     Already registered for terminal panels via the global
-        //     PaneSearchBarCallbacks above; production registers a SECOND
-        //     instance on each editor pane's toolbar (different toolbar,
-        //     different visibility scope), and we mirror that here.
-        //
-        //   - ProjectSearchBar — the toolbar that holds the actual query
-        //     input field, regex/case/whole-word toggles, replace UI,
-        //     and match navigation for the Project Search view.
-        //     ProjectSearchView's render() draws only the results body;
-        //     the input field lives in this toolbar item. Without it
-        //     registered on the pane's toolbar, the project-search view
-        //     shows the empty-state heading but no input field, and the
-        //     toolbar slot stays in a half-rendered state — visible as
-        //     a flickering tab at vsync rate.
-        //
-        // Subscribe to PaneAdded so split panes get the same setup.
-        let toolbar_languages = observe_app_state.languages.clone();
         let active_pane = workspace.active_pane().clone();
-        active_pane.update(cx, |pane, cx| {
-            pane.toolbar().update(cx, |toolbar, cx| {
-                let buffer_search_bar = cx.new(|cx| {
-                    search::BufferSearchBar::new(
-                        Some(toolbar_languages.clone()),
-                        window,
-                        cx,
-                    )
-                });
-                toolbar.add_item(buffer_search_bar, window, cx);
-                let project_search_bar =
-                    cx.new(|_| search::project_search::ProjectSearchBar::new());
-                toolbar.add_item(project_search_bar, window, cx);
-            });
-        });
+        initialize_pane(workspace, &active_pane, window, cx);
         let workspace_handle = cx.entity();
-        let pane_added_languages = observe_app_state.languages.clone();
-        cx.subscribe_in(&workspace_handle, window, move |_, _, event, window, cx| {
+        cx.subscribe_in(&workspace_handle, window, |workspace, _, event, window, cx| {
             if let workspace::Event::PaneAdded(pane) = event {
-                let languages = pane_added_languages.clone();
-                pane.update(cx, |pane, cx| {
-                    pane.toolbar().update(cx, |toolbar, cx| {
-                        let buffer_search_bar = cx.new(|cx| {
-                            search::BufferSearchBar::new(Some(languages), window, cx)
-                        });
-                        toolbar.add_item(buffer_search_bar, window, cx);
-                        let project_search_bar = cx
-                            .new(|_| search::project_search::ProjectSearchBar::new());
-                        toolbar.add_item(project_search_bar, window, cx);
-                    });
-                });
+                initialize_pane(workspace, pane, window, cx);
             }
         })
         .detach();

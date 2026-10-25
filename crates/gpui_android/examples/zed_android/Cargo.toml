@@ -16,8 +16,11 @@ android_logger = "0.13"
 anyhow = "1"
 jni = "0.21"
 agent_ui = { path = "../../../agent_ui" }
+acp_tools = { path = "../../../acp_tools" }
+activity_indicator = { path = "../../../activity_indicator" }
 askpass = { path = "../../../askpass" }
 assets = { path = "../../../assets" }
+breadcrumbs = { path = "../../../breadcrumbs" }
 call_hierarchy = { path = "../../../call_hierarchy" }
 client = { path = "../../../client" }
 command_palette = { path = "../../../command_palette" }
@@ -35,6 +38,9 @@ extension = { path = "../../../extension" }
 extension_host = { path = "../../../extension_host" }
 extensions_ui = { path = "../../../extensions_ui" }
 git_ui = { path = "../../../git_ui" }
+git = { path = "../../../git" }
+git_hosting_providers = { path = "../../../git_hosting_providers" }
+git_ui_core = { path = "../../../git_ui_core" }
 language_extension = { path = "../../../language_extension" }
 go_to_line = { path = "../../../go_to_line" }
 gpui = { path = "../../../gpui" }
@@ -49,6 +55,7 @@ language_model = { path = "../../../language_model" }
 language_selector = { path = "../../../language_selector" }
 language_tools = { path = "../../../language_tools" }
 lsp_command_selector = { path = "../../../lsp_command_selector" }
+lsp_locations = { path = "../../../lsp_locations" }
 languages = { path = "../../../languages", features = ["load-grammars"] }
 line_ending_selector = { path = "../../../line_ending_selector" }
 markdown_preview = { path = "../../../markdown_preview" }
@@ -151,10 +158,211 @@ scratch = { path = "../../../../tooling/corgi/patches/scratch" }
 debug = "line-tables-only"
 strip = "debuginfo"
 
-# Release: workspace already pins `lto = "thin"` + `codegen-units = 1` for
-# perf. Override `debug` and `strip` here so the release `.so` ships without
-# any debug section at all — the workspace default keeps "limited" debug
-# info which inflates the binary by ~40%.
+# Release: this is its own workspace, so the root workspace's release profile
+# (thin LTO, one codegen unit, "limited" debug info) doesn't apply. Ship the
+# `.so` without debug info or symbols.
 [profile.release]
 debug = false
 strip = "symbols"
+opt-level = "z"
+
+# Like Zed's release bundles (`.cargo/bundle-config.toml`), build Zed's crates
+# for size and keep third-party crates and the hot Zed crates at full speed.
+# Zed's crates are path dependencies here, not workspace members, so they're
+# listed by name. Left out, as upstream: editor, gpui and its platform crates
+# (plus gpui_android), language, multi_buffer, project, rope, scheduler,
+# sum_tree and text. A crate missing from the list builds at full speed. List
+# the Zed crates with:
+#   cargo metadata --format-version 1 --filter-platform aarch64-linux-android \
+#     | jq -r '.packages[] | select(.source == null) | .name'
+[profile.release.package]
+"*" = { opt-level = 3 }
+acp_thread = { opt-level = "z" }
+acp_tools = { opt-level = "z" }
+action_log = { opt-level = "z" }
+activity_indicator = { opt-level = "z" }
+agent = { opt-level = "z" }
+agent_servers = { opt-level = "z" }
+agent_settings = { opt-level = "z" }
+agent_skills = { opt-level = "z" }
+agent_ui = { opt-level = "z" }
+ai_onboarding = { opt-level = "z" }
+anthropic = { opt-level = "z" }
+askpass = { opt-level = "z" }
+assets = { opt-level = "z" }
+audio = { opt-level = "z" }
+auto_update = { opt-level = "z" }
+aws_http_client = { opt-level = "z" }
+bedrock = { opt-level = "z" }
+breadcrumbs = { opt-level = "z" }
+buffer_diff = { opt-level = "z" }
+call_hierarchy = { opt-level = "z" }
+channel = { opt-level = "z" }
+client = { opt-level = "z" }
+clock = { opt-level = "z" }
+cloud_api_client = { opt-level = "z" }
+cloud_api_types = { opt-level = "z" }
+cloud_llm_client = { opt-level = "z" }
+codestral = { opt-level = "z" }
+collections = { opt-level = "z" }
+command_palette = { opt-level = "z" }
+command_palette_hooks = { opt-level = "z" }
+component = { opt-level = "z" }
+context_server = { opt-level = "z" }
+copilot = { opt-level = "z" }
+copilot_chat = { opt-level = "z" }
+copilot_ui = { opt-level = "z" }
+credentials_provider = { opt-level = "z" }
+dap = { opt-level = "z" }
+db = { opt-level = "z" }
+debug_adapter_extension = { opt-level = "z" }
+deepseek = { opt-level = "z" }
+derive_refineable = { opt-level = "z" }
+dev_container = { opt-level = "z" }
+diagnostics = { opt-level = "z" }
+edit_prediction = { opt-level = "z" }
+edit_prediction_context = { opt-level = "z" }
+edit_prediction_metrics = { opt-level = "z" }
+edit_prediction_types = { opt-level = "z" }
+edit_prediction_ui = { opt-level = "z" }
+encoding_selector = { opt-level = "z" }
+env_var = { opt-level = "z" }
+extension = { opt-level = "z" }
+extension_host = { opt-level = "z" }
+extension_suggest = { opt-level = "z" }
+extensions_ui = { opt-level = "z" }
+feature_flags = { opt-level = "z" }
+feature_flags_macros = { opt-level = "z" }
+feedback = { opt-level = "z" }
+file_content = { opt-level = "z" }
+file_finder = { opt-level = "z" }
+file_icons = { opt-level = "z" }
+fs = { opt-level = "z" }
+fuzzy = { opt-level = "z" }
+fuzzy_nucleo = { opt-level = "z" }
+git = { opt-level = "z" }
+git_hosting_providers = { opt-level = "z" }
+git_ui = { opt-level = "z" }
+git_ui_core = { opt-level = "z" }
+go_to_line = { opt-level = "z" }
+google_ai = { opt-level = "z" }
+gpui_macros = { opt-level = "z" }
+gpui_tokio = { opt-level = "z" }
+grammars = { opt-level = "z" }
+html_to_markdown = { opt-level = "z" }
+http_client = { opt-level = "z" }
+http_client_tls = { opt-level = "z" }
+http_proxy = { opt-level = "z" }
+icons = { opt-level = "z" }
+image_viewer = { opt-level = "z" }
+inspector_ui = { opt-level = "z" }
+json_schema_store = { opt-level = "z" }
+keymap_editor = { opt-level = "z" }
+language_core = { opt-level = "z" }
+language_detection = { opt-level = "z" }
+language_extension = { opt-level = "z" }
+language_model = { opt-level = "z" }
+language_model_core = { opt-level = "z" }
+language_models = { opt-level = "z" }
+language_models_cloud = { opt-level = "z" }
+language_selector = { opt-level = "z" }
+language_tools = { opt-level = "z" }
+languages = { opt-level = "z" }
+line_ending_selector = { opt-level = "z" }
+llama_cpp = { opt-level = "z" }
+lmstudio = { opt-level = "z" }
+lsp = { opt-level = "z" }
+lsp_command_selector = { opt-level = "z" }
+lsp_locations = { opt-level = "z" }
+markdown = { opt-level = "z" }
+markdown_preview = { opt-level = "z" }
+menu = { opt-level = "z" }
+mermaid_render = { opt-level = "z" }
+migrator = { opt-level = "z" }
+mistral = { opt-level = "z" }
+net = { opt-level = "z" }
+node_runtime = { opt-level = "z" }
+notifications = { opt-level = "z" }
+oauth_callback_server = { opt-level = "z" }
+ollama = { opt-level = "z" }
+onboarding = { opt-level = "z" }
+open_ai = { opt-level = "z" }
+open_path_prompt = { opt-level = "z" }
+open_router = { opt-level = "z" }
+openai_subscribed = { opt-level = "z" }
+opencode = { opt-level = "z" }
+outline = { opt-level = "z" }
+outline_panel = { opt-level = "z" }
+path = { opt-level = "z" }
+paths = { opt-level = "z" }
+picker = { opt-level = "z" }
+picker_preview = { opt-level = "z" }
+platform_title_bar = { opt-level = "z" }
+prettier = { opt-level = "z" }
+project_panel = { opt-level = "z" }
+project_symbols = { opt-level = "z" }
+prompt_store = { opt-level = "z" }
+proto = { opt-level = "z" }
+proxy_handshake = { opt-level = "z" }
+recent_projects = { opt-level = "z" }
+refineable = { opt-level = "z" }
+release_channel = { opt-level = "z" }
+remote = { opt-level = "z" }
+remote_connection = { opt-level = "z" }
+reqwest_client = { opt-level = "z" }
+rpc = { opt-level = "z" }
+sandbox = { opt-level = "z" }
+search = { opt-level = "z" }
+session = { opt-level = "z" }
+settings = { opt-level = "z" }
+settings_content = { opt-level = "z" }
+settings_json = { opt-level = "z" }
+settings_macros = { opt-level = "z" }
+settings_profile_selector = { opt-level = "z" }
+settings_ui = { opt-level = "z" }
+shell_command_parser = { opt-level = "z" }
+sidebar = { opt-level = "z" }
+snippet = { opt-level = "z" }
+snippet_provider = { opt-level = "z" }
+snippets_ui = { opt-level = "z" }
+sqlez = { opt-level = "z" }
+sqlez_macros = { opt-level = "z" }
+streaming_diff = { opt-level = "z" }
+svg_preview = { opt-level = "z" }
+syntax_theme = { opt-level = "z" }
+system_specs = { opt-level = "z" }
+tab_switcher = { opt-level = "z" }
+tabular_data_preview = { opt-level = "z" }
+task = { opt-level = "z" }
+tasks_ui = { opt-level = "z" }
+telemetry = { opt-level = "z" }
+telemetry_events = { opt-level = "z" }
+terminal = { opt-level = "z" }
+terminal_view = { opt-level = "z" }
+theme = { opt-level = "z" }
+theme_extension = { opt-level = "z" }
+theme_selector = { opt-level = "z" }
+theme_settings = { opt-level = "z" }
+time_format = { opt-level = "z" }
+toolchain_selector = { opt-level = "z" }
+ui = { opt-level = "z" }
+ui_input = { opt-level = "z" }
+ui_macros = { opt-level = "z" }
+util = { opt-level = "z" }
+vim = { opt-level = "z" }
+vim_mode_setting = { opt-level = "z" }
+watch = { opt-level = "z" }
+web_search = { opt-level = "z" }
+which_key = { opt-level = "z" }
+workspace = { opt-level = "z" }
+worktree = { opt-level = "z" }
+x_ai = { opt-level = "z" }
+x_ai_subscribed = { opt-level = "z" }
+zdroid_runtime = { opt-level = "z" }
+zed_actions = { opt-level = "z" }
+zed_credentials_provider = { opt-level = "z" }
+zed_env_vars = { opt-level = "z" }
+zeta_prompt = { opt-level = "z" }
+zlog = { opt-level = "z" }
+ztracing = { opt-level = "z" }
+ztracing_macro = { opt-level = "z" }
