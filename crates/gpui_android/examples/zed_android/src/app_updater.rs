@@ -39,6 +39,11 @@ enum Status {
         version: String,
         download_urls: Vec<String>,
     },
+    /// The user hasn't allowed Zdroid to install apps.
+    NeedsPermission {
+        version: String,
+        download_urls: Vec<String>,
+    },
     Downloading {
         version: String,
         progress: Option<f32>,
@@ -49,9 +54,14 @@ enum Status {
         version: String,
         apk_path: PathBuf,
     },
-    /// In an install session, while Android asks the user to confirm.
-    /// Installing kills the app, so this only ends on cancel or failure.
+    /// Copying the APK into an Android install session.
     Installing {
+        version: String,
+        apk_path: PathBuf,
+    },
+    /// The session is committed and Android asks the user to confirm.
+    /// Installing kills the app, so this only ends on cancel or failure.
+    AwaitingConfirmation {
         version: String,
         apk_path: PathBuf,
     },
@@ -68,6 +78,9 @@ pub struct AppUpdater {
     pending: Option<Task<()>>,
     polling: Option<Task<()>>,
     up_to_date_timer: Option<Task<()>>,
+    /// Removes APKs left from an earlier run. A download waits for it, so
+    /// the cleanup can't delete the new APK.
+    cleanup: Option<Task<()>>,
 }
 
 struct GlobalAppUpdater(Entity<AppUpdater>);
@@ -86,16 +99,19 @@ pub fn init(cx: &mut App) {
             pending: None,
             polling: None,
             up_to_date_timer: None,
+            // An APK only waits for the installer while the app runs, so
+            // any left in the cache from an earlier run is stale.
+            cleanup: Some(cx.background_spawn(async {
+                if let Err(error) = updater::remove_downloaded_apks() {
+                    error!("zed_android: removing old update APKs failed: {error:#}");
+                }
+            })),
         };
         this.update_polling(cx);
         this
     });
     cx.set_global(GlobalAppUpdater(updater));
     notify_if_app_was_updated(cx);
-    // An APK only waits for the installer while the app runs, so any left
-    // in the cache from an earlier run is stale.
-    cx.background_spawn(async { updater::remove_downloaded_apks() })
-        .detach_and_log_err(cx);
 }
 
 impl AppUpdater {
@@ -128,6 +144,10 @@ impl AppUpdater {
     pub fn check(&mut self, manual: bool, cx: &mut Context<Self>) {
         if manual {
             self.dismissed = None;
+            if let Status::AwaitingConfirmation { .. } = self.status {
+                self.confirm(cx);
+                return;
+            }
         }
         if self.pending.is_some() {
             self.manual |= manual;
@@ -166,27 +186,37 @@ impl AppUpdater {
                             Status::ReadyToInstall { version, apk_path } if version == latest => {
                                 Status::ReadyToInstall { version, apk_path }
                             }
+                            Status::NeedsPermission {
+                                version,
+                                download_urls,
+                            } if version == latest => Status::NeedsPermission {
+                                version,
+                                download_urls,
+                            },
                             _ => Status::Available {
                                 version: latest,
                                 download_urls,
                             },
                         };
-                        if this.manual {
-                            this.download_or_install(cx);
+                    }
+                    // A failed check keeps a downloaded update. Otherwise it
+                    // reports the error if the user asked, and stays quiet
+                    // when the check was automatic, e.g. while offline.
+                    Err(error) => {
+                        let downloaded = matches!(previous_status, Status::ReadyToInstall { .. });
+                        if this.manual && !downloaded {
+                            error!("zed_android: update check failed: {error:#}");
+                            this.status = Status::Errored {
+                                error: format!("{error:#}"),
+                            };
+                        } else {
+                            info!("zed_android: update check failed: {error:#}");
+                            this.status = previous_status;
                         }
                     }
-                    Err(error) if this.manual => {
-                        error!("zed_android: update check failed: {error:#}");
-                        this.status = Status::Errored {
-                            error: format!("{error:#}"),
-                        };
-                    }
-                    // Stay quiet when an automatic check fails, e.g. while
-                    // offline, and keep showing what an earlier check found.
-                    Err(error) => {
-                        info!("zed_android: automatic update check failed: {error:#}");
-                        this.status = previous_status;
-                    }
+                }
+                if this.manual {
+                    this.download_or_install(cx);
                 }
                 cx.notify();
             })
@@ -195,8 +225,18 @@ impl AppUpdater {
     }
 
     fn download_or_install(&mut self, cx: &mut Context<Self>) {
+        if self.pending.is_some() {
+            // An automatic check is running: act on its result as if the
+            // user had started it.
+            self.manual = true;
+            return;
+        }
         match self.status.clone() {
             Status::Available {
+                version,
+                download_urls,
+            }
+            | Status::NeedsPermission {
                 version,
                 download_urls,
             } => self.download(version, download_urls, cx),
@@ -230,9 +270,13 @@ impl AppUpdater {
         cx.notify();
 
         let (progress_tx, mut progress_rx) = futures::channel::mpsc::unbounded();
+        let cleanup = self.cleanup.take();
         let download = cx.background_spawn({
             let version = version.clone();
             async move {
+                if let Some(cleanup) = cleanup {
+                    cleanup.await;
+                }
                 updater::download_apk(&version, &download_urls, move |progress| {
                     progress_tx.unbounded_send(progress).ok();
                 })
@@ -287,13 +331,24 @@ impl AppUpdater {
             }
         };
         self.pending = Some(cx.spawn(async move |this, cx| {
-            let granted = permission.await.unwrap_or(false);
+            // A dropped sender says nothing about the permission, so ask.
+            let granted = match permission.await {
+                Ok(granted) => granted,
+                Err(_) => updater::can_install_updates().unwrap_or_else(|error| {
+                    error!("zed_android: checking the install permission failed: {error:#}");
+                    false
+                }),
+            };
             this.update(cx, |this, cx| {
                 this.pending = None;
                 if granted {
                     this.download(version, download_urls, cx);
                 } else {
-                    info!("zed_android: update not downloaded, installing apps isn't allowed");
+                    this.status = Status::NeedsPermission {
+                        version,
+                        download_urls,
+                    };
+                    cx.notify();
                 }
             })
             .ok();
@@ -319,7 +374,19 @@ impl AppUpdater {
         });
         self.pending = Some(cx.spawn(async move |this, cx| {
             let outcome = match session.await {
-                Ok(outcome) => outcome.await.ok(),
+                Ok(outcome) => {
+                    this.update(cx, |this, cx| {
+                        if let Status::Installing { version, apk_path } = &this.status {
+                            this.status = Status::AwaitingConfirmation {
+                                version: version.clone(),
+                                apk_path: apk_path.clone(),
+                            };
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                    outcome.await.ok()
+                }
                 Err(error) => Some(InstallOutcome::Failed(format!("{error:#}"))),
             };
             this.update(cx, |this, cx| {
@@ -338,6 +405,24 @@ impl AppUpdater {
             })
             .ok();
         }));
+    }
+
+    /// Brings Android's install prompt back, or starts a new session if
+    /// Android has no prompt to show.
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        let Status::AwaitingConfirmation { version, apk_path } = self.status.clone() else {
+            return;
+        };
+        match updater::show_install_prompt() {
+            Ok(true) => return,
+            Ok(false) => info!("zed_android: no install prompt to show, starting a new session"),
+            Err(error) => error!("zed_android: showing the install prompt failed: {error:#}"),
+        }
+        // Dropping the task stops waiting on the old session, which
+        // `install_update` abandons.
+        self.pending = None;
+        self.status = Status::ReadyToInstall { version, apk_path };
+        self.install(cx);
     }
 
     fn fail(&mut self, action: &str, error: anyhow::Error, cx: &mut Context<Self>) {
@@ -414,13 +499,34 @@ pub fn render_update_button(cx: &App) -> Option<AnyElement> {
                 .tooltip(UpdateButton::version_tooltip_message(version))
                 .disabled(true)
         }
+        // Android's prompt is usually on screen already; the button brings
+        // it back if it ended up behind other apps.
+        Status::AwaitingConfirmation { version, .. } => {
+            let updater = updater.clone();
+            UpdateButton::new(IconName::Download, "Confirm Update")
+                .tooltip(UpdateButton::version_tooltip_message(version))
+                .on_click(move |_, _, cx| {
+                    updater.update(cx, |this, cx| this.confirm(cx));
+                })
+        }
+        Status::NeedsPermission { .. } => {
+            let updater = updater.clone();
+            UpdateButton::new(IconName::Warning, "Allow Updates")
+                .icon_color(Color::Warning)
+                .tooltip("Allow Zdroid to install apps in Settings")
+                .with_dismiss()
+                .on_click(move |_, _, cx| {
+                    updater.update(cx, |this, cx| this.download_or_install(cx));
+                })
+                .on_dismiss(dismiss)
+        }
         Status::ReadyToInstall { version, .. } => {
             let updater = updater.clone();
             UpdateButton::new(IconName::Download, "Install Update")
                 .tooltip(UpdateButton::version_tooltip_message(version))
                 .with_dismiss()
                 .on_click(move |_, _, cx| {
-                    updater.update(cx, |this, cx| this.install(cx));
+                    updater.update(cx, |this, cx| this.download_or_install(cx));
                 })
                 .on_dismiss(dismiss)
         }

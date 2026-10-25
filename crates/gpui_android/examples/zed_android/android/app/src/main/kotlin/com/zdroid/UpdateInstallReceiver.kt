@@ -24,7 +24,8 @@ import androidx.core.app.NotificationCompat
 class UpdateInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
-            if (takeUpdating(context)) {
+            if (activeSessionId(context) != null) {
+                end(context)
                 showUpdatedNotification(context)
             }
             return
@@ -34,12 +35,24 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             PackageInstaller.EXTRA_STATUS,
             PackageInstaller.STATUS_FAILURE,
         )
+        // Abandoning an earlier session reports it as aborted, possibly
+        // after the next session has started.
+        val sessionId = intent.getIntExtra(EXTRA_UPDATE_SESSION, -1)
+        if (sessionId != activeSessionId(context)) {
+            Log.i(TAG, "Ignoring status $status of earlier update session $sessionId")
+            return
+        }
         when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 @Suppress("DEPRECATION")
                 val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                 if (confirm != null) {
-                    context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    // Kept so the title bar can show the prompt again if it
+                    // ends up behind other apps or Android blocks it because
+                    // Zdroid went to the background.
+                    confirmation = confirm
+                    context.startActivity(confirm)
                     return
                 }
             }
@@ -47,7 +60,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_SUCCESS -> return
         }
 
-        takeUpdating(context)
+        end(context)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         try {
             NativeBridge.nativeOnUpdateInstallResult(status, message)
@@ -59,12 +72,23 @@ class UpdateInstallReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "zed_android_update"
+        private const val EXTRA_UPDATE_SESSION = "com.zdroid.extra.UPDATE_SESSION"
         private const val PREFS_NAME = "zdroid-updater"
-        private const val KEY_UPDATING = "updating"
+        private const val KEY_SESSION = "session"
         private const val CHANNEL_ID = "zdroid-updates"
         private const val NOTIFICATION_ID = 0x5a55
 
-        fun statusSender(context: Context, sessionId: Int): IntentSender {
+        @Volatile
+        private var confirmation: Intent? = null
+
+        /**
+         * Makes [sessionId] the session whose results count, which also
+         * marks the next `MY_PACKAGE_REPLACED` as an in-app update, and
+         * returns where Android should report the session's status.
+         */
+        fun begin(context: Context, sessionId: Int): IntentSender {
+            setActiveSessionId(context, sessionId)
+            confirmation = null
             // Android adds the status extras, so the intent must stay mutable.
             val mutable = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_MUTABLE
@@ -74,27 +98,37 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             return PendingIntent.getBroadcast(
                 context,
                 sessionId,
-                Intent(context, UpdateInstallReceiver::class.java),
+                Intent(context, UpdateInstallReceiver::class.java)
+                    .putExtra(EXTRA_UPDATE_SESSION, sessionId),
                 PendingIntent.FLAG_UPDATE_CURRENT or mutable,
             ).intentSender
         }
 
-        /** Marks the next `MY_PACKAGE_REPLACED` as an in-app update. */
-        fun setUpdating(context: Context, updating: Boolean) {
-            // `commit`, not `apply`: Android kills the app soon after.
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean(KEY_UPDATING, updating)
-                .commit()
+        /** Forgets the session in flight, so its results no longer count. */
+        fun end(context: Context) {
+            setActiveSessionId(context, null)
+            confirmation = null
         }
 
-        private fun takeUpdating(context: Context): Boolean {
+        /** Android's prompt for the session in flight, once it has asked. */
+        fun confirmation(): Intent? = confirmation
+
+        // Stored rather than kept in memory: the session's result, and
+        // MY_PACKAGE_REPLACED, can arrive in a new process.
+        private fun activeSessionId(context: Context): Int? {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val updating = prefs.getBoolean(KEY_UPDATING, false)
-            if (updating) {
-                prefs.edit().remove(KEY_UPDATING).apply()
+            return if (prefs.contains(KEY_SESSION)) prefs.getInt(KEY_SESSION, -1) else null
+        }
+
+        private fun setActiveSessionId(context: Context, sessionId: Int?) {
+            val editor = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            if (sessionId == null) {
+                editor.remove(KEY_SESSION)
+            } else {
+                editor.putInt(KEY_SESSION, sessionId)
             }
-            return updating
+            // `commit`, not `apply`: Android kills the app soon after.
+            editor.commit()
         }
 
         private fun showUpdatedNotification(context: Context) {

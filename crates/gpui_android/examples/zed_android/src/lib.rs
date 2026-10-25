@@ -830,7 +830,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     unsafe {
         std::env::set_var(
             "ZED_UPDATE_EXPLANATION",
-            "Updates ship via the APK; reinstall to upgrade.",
+            "Zdroid updates itself: use Zdroid → Check for Updates.",
         );
     }
 

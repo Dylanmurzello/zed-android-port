@@ -1258,19 +1258,20 @@ class MainActivity : GameActivity(), ImeHost {
             return "The downloaded APK isn't Zdroid signed with this build's key"
         }
         val installer = packageManager.packageInstaller
-        // An earlier attempt's session still holds its copy of the APK.
-        installer.mySessions.forEach { installer.abandonSession(it.sessionId) }
-        val params = PackageInstaller.SessionParams(
-            PackageInstaller.SessionParams.MODE_FULL_INSTALL
-        ).apply {
-            setAppPackageName(packageName)
-            setSize(file.length())
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE)
-            }
-        }
         var sessionId: Int? = null
         return try {
+            // An earlier attempt's session still holds its copy of the APK.
+            UpdateInstallReceiver.end(this)
+            installer.mySessions.forEach { installer.abandonSession(it.sessionId) }
+            val params = PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL
+            ).apply {
+                setAppPackageName(packageName)
+                setSize(file.length())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE)
+                }
+            }
             val id = installer.createSession(params)
             sessionId = id
             installer.openSession(id).use { session ->
@@ -1280,15 +1281,28 @@ class MainActivity : GameActivity(), ImeHost {
                         session.fsync(output)
                     }
                 }
-                UpdateInstallReceiver.setUpdating(this, true)
-                session.commit(UpdateInstallReceiver.statusSender(this, id))
+                session.commit(UpdateInstallReceiver.begin(this, id))
             }
             null
         } catch (t: Throwable) {
             Log.e(TAG_UPDATE, "installUpdate failed", t)
-            UpdateInstallReceiver.setUpdating(this, false)
+            UpdateInstallReceiver.end(this)
             sessionId?.let { id -> runCatching { installer.abandonSession(id) } }
             t.message ?: t.toString()
+        }
+    }
+
+    /// Shows Android's prompt for the update session in flight again.
+    /// Returns false if there's no prompt to show or it couldn't start.
+    @Suppress("unused") // called from Rust via JNI
+    fun showUpdatePrompt(): Boolean {
+        val confirmation = UpdateInstallReceiver.confirmation() ?: return false
+        return try {
+            startActivity(confirmation)
+            true
+        } catch (t: Throwable) {
+            Log.e(TAG_UPDATE, "Couldn't show the update prompt", t)
+            false
         }
     }
 

@@ -18,10 +18,12 @@ use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
 use futures::channel::oneshot;
 use jni::{
-    JNIEnv, JavaVM,
+    JNIEnv,
     objects::{JObject, JString, JValue},
     sys::jboolean,
 };
+
+use crate::credentials::with_activity;
 
 /// Process-global AndroidApp handle. Set once at boot via
 /// [`register_android_app`] by `gpui_android::run`; read by the public
@@ -183,12 +185,11 @@ pub fn current_version() -> String {
 }
 
 fn query_current_version(android_app: &AndroidApp) -> Result<String> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let result = env.call_method(&activity, "appVersionName", "()Ljava/lang/String;", &[])?;
-    let s: JString = result.l()?.into();
-    Ok(env.get_string(&s)?.into())
+    with_activity(android_app, |env, activity| {
+        let result = env.call_method(activity, "appVersionName", "()Ljava/lang/String;", &[])?;
+        let s: JString = result.l()?.into();
+        Ok(env.get_string(&s)?.into())
+    })
 }
 
 /// `Context.getCacheDir().getAbsolutePath()` via JNI. The
@@ -196,17 +197,15 @@ fn query_current_version(android_app: &AndroidApp) -> Result<String> {
 /// only exposes the FILES dir; there is no cache-dir accessor, so we
 /// reach through to the Activity (which inherits the Context method).
 fn system_cache_dir(android_app: &AndroidApp) -> Result<PathBuf> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let file = env
-        .call_method(&activity, "getCacheDir", "()Ljava/io/File;", &[])?
-        .l()?;
-    let path_value =
-        env.call_method(&file, "getAbsolutePath", "()Ljava/lang/String;", &[])?;
-    let s: JString = path_value.l()?.into();
-    let path: String = env.get_string(&s)?.into();
-    Ok(PathBuf::from(path))
+    with_activity(android_app, |env, activity| {
+        let file = env
+            .call_method(activity, "getCacheDir", "()Ljava/io/File;", &[])?
+            .l()?;
+        let path_value = env.call_method(&file, "getAbsolutePath", "()Ljava/lang/String;", &[])?;
+        let s: JString = path_value.l()?.into();
+        let path: String = env.get_string(&s)?.into();
+        Ok(PathBuf::from(path))
+    })
 }
 
 /// Top-level check-for-update entry. Resolves the latest tag, compares
@@ -418,27 +417,26 @@ fn take_sender<T>(slot: &Mutex<Option<oneshot::Sender<T>>>) -> Option<oneshot::S
 
 /// Whether Android lets Zdroid install APKs ("Install unknown apps").
 pub fn can_install_updates() -> Result<bool> {
-    let android_app = android_app()?;
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    Ok(env
-        .call_method(&activity, "canInstallUpdates", "()Z", &[])?
-        .z()?)
+    with_activity(android_app()?, |env, activity| {
+        Ok(env
+            .call_method(activity, "canInstallUpdates", "()Z", &[])?
+            .z()?)
+    })
 }
 
 /// Opens Zdroid's "Install unknown apps" settings page. The receiver
 /// resolves with whether the user allowed it once they come back.
 pub fn request_install_permission() -> Result<oneshot::Receiver<bool>> {
+    let android_app = android_app()?;
     let (sender, receiver) = oneshot::channel();
     replace_sender(&INSTALL_PERMISSION_RESULT, Some(sender));
-    let android_app = android_app()?;
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    if let Err(err) = env.call_method(&activity, "requestInstallPermission", "()V", &[]) {
+    let result = with_activity(android_app, |env, activity| {
+        env.call_method(activity, "requestInstallPermission", "()V", &[])?;
+        Ok(())
+    });
+    if let Err(error) = result {
         replace_sender(&INSTALL_PERMISSION_RESULT, None);
-        return Err(err.into());
+        return Err(error);
     }
     Ok(receiver)
 }
@@ -452,27 +450,41 @@ pub fn install_update(apk_path: &Path) -> Result<oneshot::Receiver<InstallOutcom
     let path = apk_path
         .to_str()
         .ok_or_else(|| anyhow!("non-UTF8 APK path: {}", apk_path.display()))?;
+    let android_app = android_app()?;
     let (sender, receiver) = oneshot::channel();
     replace_sender(&INSTALL_RESULT, Some(sender));
-    let android_app = android_app()?;
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let path = env.new_string(path)?;
-    let error = env
-        .call_method(
-            &activity,
-            "installUpdate",
-            "(Ljava/lang/String;)Ljava/lang/String;",
-            &[JValue::Object(&path.into())],
-        )?
-        .l()?;
-    if !error.is_null() {
-        replace_sender(&INSTALL_RESULT, None);
+    let result = with_activity(android_app, |env, activity| {
+        let path = env.new_string(path)?;
+        let error = env
+            .call_method(
+                activity,
+                "installUpdate",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&path.into())],
+            )?
+            .l()?;
+        if error.is_null() {
+            return Ok(());
+        }
         let error: String = env.get_string(&JString::from(error))?.into();
-        return Err(anyhow!("{error}"));
+        Err(anyhow!("{error}"))
+    });
+    if let Err(error) = result {
+        replace_sender(&INSTALL_RESULT, None);
+        return Err(error);
     }
     Ok(receiver)
+}
+
+/// Shows Android's prompt for the install session in flight again, in
+/// case it ended up behind other apps. Returns false if Android hasn't
+/// asked yet.
+pub fn show_install_prompt() -> Result<bool> {
+    with_activity(android_app()?, |env, activity| {
+        Ok(env
+            .call_method(activity, "showUpdatePrompt", "()Z", &[])?
+            .z()?)
+    })
 }
 
 #[unsafe(no_mangle)]
