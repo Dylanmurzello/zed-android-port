@@ -795,7 +795,7 @@ impl AndroidPlatform {
                 if crate::ime::on_screen_keyboard_enabled() {
                     crate::ime::show_keyboard(&app, extra_window_id);
                 } else {
-                    log::info!(
+                    log::debug!(
                         "ime::reconcile auto-show suppressed by android_input.on_screen_keyboard=false"
                     );
                 }
@@ -1288,16 +1288,18 @@ impl Platform for AndroidPlatform {
                 // poller dismiss its window. Idempotent atomic swap on
                 // the inside; safe to call every frame.
                 crate::splash::mark_zed_ready();
-            }
 
-            // Reconcile IME visibility against each window's
-            // `input_handler` presence. Edge-triggered at frame
-            // boundaries — gpui's take/set oscillation within each
-            // paint can't leak through because we're sampling between
-            // ticks, not inside set/take callbacks. After the frame, so
-            // an input handler gpui set while painting is seen without
-            // waiting for the next tick.
-            self.reconcile_ime_visibility();
+                // Reconcile IME visibility against each window's
+                // `input_handler` presence. Edge-triggered at frame
+                // boundaries — gpui's take/set oscillation within each
+                // paint can't leak through because we're sampling after
+                // it, not inside set/take callbacks. Only after a frame:
+                // gpui sets input handlers while painting, and anything
+                // that moves the selection or composition repaints, so an
+                // idle tick has nothing new to push, and each check calls
+                // into the focused editor three times.
+                self.reconcile_ime_visibility();
+            }
         }
 
         log::info!("AndroidPlatform::run: exiting event loop");

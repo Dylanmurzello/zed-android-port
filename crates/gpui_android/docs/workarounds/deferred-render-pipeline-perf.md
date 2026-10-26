@@ -83,10 +83,12 @@ mouse / stylus / trackpad should feel desktop-class, not VNC-tier.
   6px. Double-click in the editor on a hardware mouse should now
   feel ~200ms faster.
 - **Verification log**: `touch::next_click_count` logs
-  `multi_click: source=… count=N window=… slop=…` whenever count > 1.
-  Plug in a Bluetooth mouse, double-click a word in the editor, then
-  `adb logcat -s zed_android | grep multi_click`. Expected output
-  for mouse: `source=Mouse count=2 window=300ms slop=3 button=Left`.
+  `multi_click: source=… count=N window=… slop=…` at debug level
+  whenever count > 1. Turn on `"log": {"gpui_android": "debug"}`,
+  plug in a Bluetooth mouse, double-click a word in the editor, then
+  look for `multi_click` in `zed: open log`; logcat stops at info.
+  Expected output for mouse:
+  `source=Mouse count=2 window=300ms slop=3 button=Left`.
   Synthetic `adb shell input mouse tap` works but the device must be
   unlocked + Zdroid focused; locked-device synthetic taps go to the
   lockscreen window, not us. Real-mouse verification on device still

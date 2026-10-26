@@ -421,7 +421,7 @@ pub(crate) fn translate(
                     .map(|t| now.duration_since(t) <= DRAG_LOCK_TIMEOUT)
                     .unwrap_or(false);
                 if drag_lock_active {
-                    log::info!(
+                    log::debug!(
                         "drag_lock: RESUME elapsed_ms={}",
                         state.drag_lock_pending_at
                             .map(|t| now.duration_since(t).as_millis())
@@ -444,7 +444,7 @@ pub(crate) fn translate(
                     return out;
                 }
                 if state.drag_active || state.button_held.is_some() {
-                    log::info!(
+                    log::debug!(
                         "captured_pointer: stale drag state cleared on DOWN \
                          (drag_active={} button_held={:?} hold_drag_cursor={} \
                          drag_lock_pending={})",
@@ -514,7 +514,7 @@ pub(crate) fn translate(
                 if state.drag_active && state.hold_drag_cursor.is_some() {
                     // Already in hold-drag — finger 2 contact wavered
                     // and re-landed. Keep going, don't re-emit.
-                    log::info!(
+                    log::debug!(
                         "hold_drag: CONTINUE (finger re-landed during drag, \
                          drag_cursor=({:.0},{:.0}))",
                         f32::from(
@@ -534,7 +534,7 @@ pub(crate) fn translate(
                     && stationary_for >= HOLD_DRAG_STATIONARY
                     && !state.drag_active
                 {
-                    log::info!(
+                    log::debug!(
                         "hold_drag: ENGAGED anchor=({:.0},{:.0}) hold_ms={} stationary_ms={}",
                         f32::from(cursor.x),
                         f32::from(cursor.y),
@@ -554,7 +554,7 @@ pub(crate) fn translate(
                         first_mouse: false,
                     }));
                 } else {
-                    log::info!(
+                    log::debug!(
                         "hold_drag: SKIPPED hold_ms={} stationary_ms={} \
                          drag_active={} button_held={:?} (scroll path)",
                         hold_elapsed.as_millis(),
@@ -574,7 +574,7 @@ pub(crate) fn translate(
                     // scroll is independent of the firmware-emitted
                     // click.
                     if let Some(button) = state.button_held.take() {
-                        log::info!(
+                        log::debug!(
                             "hold_drag: releasing inherited BUTTON_PRESS before scroll \
                              (button={:?})",
                             button,
@@ -673,7 +673,7 @@ pub(crate) fn translate(
                         && state.motion_accum > TAP_DRAG_SLOP_PX
                         && state.button_held.is_none()
                     {
-                        log::info!(
+                        log::debug!(
                             "tap_drag: ENGAGED anchor=({:.0},{:.0}) cursor=({:.0},{:.0})",
                             f32::from(state.last_tap_position.x),
                             f32::from(state.last_tap_position.y),
@@ -734,7 +734,7 @@ pub(crate) fn translate(
                         // drag.
                         if let Some(button) = state.button_held.take() {
                             let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
-                            log::info!(
+                            log::debug!(
                                 "drag_lock: ENDED by tap at ({:.0},{:.0}) tap_ms={}",
                                 f32::from(cursor.x),
                                 f32::from(cursor.y),
@@ -757,7 +757,7 @@ pub(crate) fn translate(
                     }
                     // Swipe (with motion) — keep drag alive and
                     // re-arm the lock so another swipe can continue.
-                    log::info!(
+                    log::debug!(
                         "drag_lock: RE-ARM after swipe (motion_px={:.1})",
                         state.motion_accum,
                     );
@@ -775,7 +775,7 @@ pub(crate) fn translate(
                     let is_tap_tap_drag =
                         state.drag_active && state.hold_drag_cursor.is_none();
                     if is_tap_tap_drag {
-                        log::info!(
+                        log::debug!(
                             "drag_lock: ARMED at ({:.0},{:.0})",
                             f32::from(cursor.x),
                             f32::from(cursor.y),

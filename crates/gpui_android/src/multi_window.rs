@@ -709,7 +709,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<
     height: i32,
 ) {
     let window_id = window_id as u64;
-    log::info!("multi_window: nativeOnExtraSurfaceChanged windowId={window_id} {width}x{height}");
+    log::debug!("multi_window: nativeOnExtraSurfaceChanged windowId={window_id} {width}x{height}");
     dispatch_event(ExtraWindowEvent::Resized {
         window_id,
         width: width.max(1) as u32,
@@ -747,7 +747,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     pointer_ids: JIntArray<'local>,
 ) {
     let window_id = window_id as u64;
-    log::info!(
+    log::debug!(
         "multi_window: nativeOnExtraTouchEvent windowId={window_id} action={action_masked}"
     );
     let positions = match read_pointers(&mut env, &xs, &ys, &pointer_ids) {

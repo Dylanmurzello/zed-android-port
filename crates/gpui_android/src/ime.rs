@@ -268,7 +268,7 @@ pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<(u64, ImeEvent)> {
 }
 
 fn dispatch_event(window_id: u64, event: ImeEvent) {
-    log::info!("ime::dispatch_event w={window_id} {}", debug_event(&event));
+    log::debug!("ime::dispatch_event w={window_id} {}", debug_event(&event));
     let guard = EVENT_TX.lock().unwrap();
     let Some(tx) = guard.as_ref() else {
         log::warn!("ime: event arrived before init_event_channel");
@@ -594,7 +594,7 @@ fn call_activity_update_text_state(
 }
 
 fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
-    log::info!("ime::apply_event {:?}", debug_event(&event));
+    log::debug!("ime::apply_event {:?}", debug_event(&event));
     let needs_mirror_push = match event {
         ImeEvent::CommitText { text, .. } => {
             commit_composition(window_ptr, Some(&text));
@@ -667,7 +667,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             // regardless of how the IME delivers it; gpui routes the Enter
             // to the focused element (newline in the editor, run in the
             // terminal, confirm in a picker).
-            log::info!("ime::editor_action {action_id} -> Enter");
+            log::debug!("ime::editor_action {action_id} -> Enter");
             const ACTION_DOWN: i32 = 0;
             const ACTION_UP: i32 = 1;
             const KEYCODE_ENTER: u32 = 66;
