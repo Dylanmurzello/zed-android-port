@@ -41,12 +41,14 @@ const OFF_IP_HI: u32 = 12;
 const OFF_ARG0_LO: u32 = 16;
 const OFF_ARG0_HI: u32 = 20;
 
-/// Trap `nr` only when argument `arg` equals one of `values`.
+/// Trap `nr` only when argument `arg` equals one of `values`, or, with
+/// `unless`, only when it equals none of them.
 #[derive(Debug, Clone, Copy)]
 pub struct ArgTrap<'a> {
     pub nr: u32,
     pub arg: u8,
     pub values: &'a [u64],
+    pub unless: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,23 +179,29 @@ pub fn build(spec: &FilterSpec) -> Result<Program, BpfError> {
     insns[14] = ret(SECCOMP_RET_ALLOW);
     insns[15] = ld(OFF_NR);
 
-    // Each block: `jeq nr` else skip the block; per value `ld lo; jne ->
-    // next value; ld hi; jeq -> TRAP`; the block ends by reloading nr for
-    // whatever follows (the accumulator held an argument word).
+    // Each block: `jeq nr` else skip the block (the accumulator still
+    // holds nr); per value `ld lo; jne -> next value; ld hi; jeq -> TRAP`
+    // (or -> ALLOW for an `unless` block); a plain block ends by reloading
+    // nr for whatever follows, an `unless` block by trapping.
     let mut index = PROLOGUE;
     for trap in spec.arg_traps {
         let block_end = index + 2 + 4 * trap.values.len();
-        insns[index] = jeq(trap.nr, 0, distance(index, block_end - 1));
+        insns[index] = jeq(trap.nr, 0, distance(index, block_end));
         index += 1;
+        let on_match = if trap.unless { allow_index } else { trap_index };
         for &value in trap.values {
             let next_value = index + 4;
             insns[index] = ld(arg_offset(trap.arg));
             insns[index + 1] = jeq(value as u32, 0, distance(index + 1, next_value));
             insns[index + 2] = ld(arg_offset(trap.arg) + 4);
-            insns[index + 3] = jeq((value >> 32) as u32, distance(index + 3, trap_index), 0);
+            insns[index + 3] = jeq((value >> 32) as u32, distance(index + 3, on_match), 0);
             index = next_value;
         }
-        insns[index] = ld(OFF_NR);
+        insns[index] = if trap.unless {
+            ret(SECCOMP_RET_TRAP | u32::from(spec.path_tag))
+        } else {
+            ld(OFF_NR)
+        };
         index += 1;
         debug_assert_eq!(index, block_end);
     }
@@ -261,7 +269,49 @@ mod tests {
         nr: nr::IOCTL,
         arg: 1,
         values: crate::sysno::ioctl::TERMIOS2_REQUESTS,
+        unless: false,
     }];
+
+    #[test]
+    fn clone3_traps_unless_the_struct_is_ver0_sized() {
+        use crate::sysno::clone;
+        const TRAPS: &[ArgTrap<'static>] = &[
+            IOCTL_TRAPS[0],
+            ArgTrap {
+                nr: nr::CLONE3,
+                arg: 1,
+                values: clone::PASSED_SIZES,
+                unless: true,
+            },
+        ];
+        let program = build(&FilterSpec {
+            trapped: TRAP_TABLE_CHUNK1,
+            arg_traps: TRAPS,
+            window_start: LOADER_IMAGE_BASE,
+            window_end: LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE,
+            probe_nr: nr::GETPID,
+            probe_magic: PROBE_MAGIC,
+            path_tag: TAG_PATH,
+            probe_tag: TAG_PROBE,
+        })
+        .unwrap();
+        let trap = SECCOMP_RET_TRAP | u32::from(TAG_PATH);
+        let mut call = data(nr::CLONE3, GUEST_IP, 0x1000);
+        for size in [88, 80, 65, 4096, clone::CLONE_ARGS_SIZE_VER0 | (1 << 32)] {
+            call.args[1] = size;
+            assert_eq!(evaluate(&program, &call), trap, "{size:#x}");
+        }
+        call.args[1] = clone::CLONE_ARGS_SIZE_VER0;
+        assert_eq!(evaluate(&program, &call), SECCOMP_RET_ALLOW);
+        call.instruction_pointer = LOADER_IMAGE_BASE + 0x100;
+        call.args[1] = 88;
+        assert_eq!(evaluate(&program, &call), SECCOMP_RET_ALLOW);
+        let mut ioctl = data(nr::IOCTL, GUEST_IP, 0);
+        ioctl.args[1] = crate::sysno::ioctl::TCGETS2;
+        assert_eq!(evaluate(&program, &ioctl), trap);
+        assert_eq!(evaluate(&program, &data(nr::OPENAT, GUEST_IP, 0)), trap);
+        assert_eq!(evaluate(&program, &data(nr::READ, GUEST_IP, 0)), SECCOMP_RET_ALLOW);
+    }
 
     fn program() -> Program {
         build(&FilterSpec {

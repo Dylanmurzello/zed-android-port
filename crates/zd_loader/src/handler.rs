@@ -16,7 +16,7 @@ use zd_engine_core::compat::{self, Response};
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
 use zd_engine_core::sysno::{
     MAX_TRAPPED, PROBE_ACK, PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE, TRAP_TABLE_FAKE_ROOT,
-    ioctl, is_engine_tag, nr, socket as socket_traps,
+    clone as clone_traps, ioctl, is_engine_tag, name as syscall_name, nr, socket as socket_traps,
 };
 use zd_engine_core::translate::{ProcExe, Translated, Translator};
 use zd_engine_core::{LOADER_IMAGE_BASE, LOADER_WINDOW_SIZE};
@@ -166,11 +166,19 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
                 nr: nr::IOCTL,
                 arg: 1,
                 values: ioctl::TERMIOS2_REQUESTS,
+                unless: false,
             },
             ArgTrap {
                 nr: nr::SOCKET,
                 arg: 0,
                 values: socket_traps::TRAPPED_FAMILIES,
+                unless: false,
+            },
+            ArgTrap {
+                nr: nr::CLONE3,
+                arg: 1,
+                values: clone_traps::PASSED_SIZES,
+                unless: true,
             },
         ],
         window_start: LOADER_IMAGE_BASE,
@@ -232,16 +240,18 @@ pub extern "C" fn sigsys(_signal: i32, info: *mut SigInfo, context: *mut UContex
         uc_mcontext,
         ..
     } = context;
-    let regs = &mut uc_mcontext.regs;
+    let SigContext { regs, pc, .. } = uc_mcontext;
     if tag == TAG_PROBE {
         regs[0] = PROBE_ACK;
         return;
     }
     if !is_engine_tag(tag) {
         compat_trap(number, regs);
+        census(number, regs, false);
         return;
     }
-    dispatch(number, regs, uc_sigmask);
+    dispatch(number, regs, uc_sigmask, pc);
+    census(number, regs, true);
 }
 
 /// Android's filter trapped a syscall bionic never makes.
@@ -273,6 +283,92 @@ fn log_unknown(number: u32) {
         line.push_u64(u64::from(number));
         line.push(b"; returned ENOSYS\n");
         log::append_to_log_file(line.as_bytes());
+    }
+}
+
+/// A refusal the guest will actually see. The engine absorbs the ones it
+/// knows (a copy for a refused hard link, a classic ioctl for a termios2
+/// one); whatever still reaches the guest as EACCES or EPERM is a sandbox
+/// rule nothing emulates yet, and the symptom never names the syscall,
+/// so this line does. ENOSYS counts only for engine traps, where it means
+/// a trapped syscall the handler did not serve.
+fn census(number: u32, regs: &[u64; 31], engine_trap: bool) {
+    let errno = if regs[0] == sys::neg_errno(sys::EACCES) {
+        sys::EACCES
+    } else if regs[0] == sys::neg_errno(sys::EPERM) {
+        sys::EPERM
+    } else if engine_trap && regs[0] == sys::neg_errno(sys::ENOSYS) {
+        sys::ENOSYS
+    } else {
+        return;
+    };
+    if config::get().log.is_empty() {
+        return;
+    }
+    log_refusal(number, errno, regs);
+}
+
+#[inline(never)]
+fn log_refusal(number: u32, errno: i32, regs: &[u64; 31]) {
+    let mut line = log::Line::new();
+    line.push(b"zdload: refused exe=");
+    line.push(config::get().guest_exe.as_bytes());
+    line.push(b" syscall=");
+    match syscall_name(number) {
+        Some(name) => line.push(name.as_bytes()),
+        None => line.push_u64(u64::from(number)),
+    }
+    line.push(b" errno=");
+    line.push_u64(errno as u64);
+    if errno != sys::ENOSYS {
+        // Only a syscall the kernel answered has had its pointers validated.
+        for index in guest_path_args(number).into_iter().flatten() {
+            let Some(path) = (unsafe { cstr_bounded(regs[index] as *const u8, MAX_PATH) }) else {
+                continue;
+            };
+            line.push(b" path=");
+            line.push(path);
+        }
+    }
+    line.push(b"\n");
+    log::append_to_log_file(line.as_bytes());
+}
+
+/// Registers holding the guest's path arguments.
+fn guest_path_args(number: u32) -> [Option<usize>; 2] {
+    match number {
+        nr::SETXATTR
+        | nr::LSETXATTR
+        | nr::GETXATTR
+        | nr::LGETXATTR
+        | nr::LISTXATTR
+        | nr::LLISTXATTR
+        | nr::REMOVEXATTR
+        | nr::LREMOVEXATTR
+        | nr::STATFS
+        | nr::TRUNCATE
+        | nr::CHDIR
+        | nr::CHROOT
+        | nr::EXECVE => [Some(0), None],
+        nr::INOTIFY_ADD_WATCH
+        | nr::MKNODAT
+        | nr::MKDIRAT
+        | nr::UNLINKAT
+        | nr::FACCESSAT
+        | nr::FCHMODAT
+        | nr::FCHOWNAT
+        | nr::OPENAT
+        | nr::OPENAT2
+        | nr::FACCESSAT2
+        | nr::READLINKAT
+        | nr::NEWFSTATAT
+        | nr::UTIMENSAT
+        | nr::NAME_TO_HANDLE_AT
+        | nr::STATX
+        | nr::EXECVEAT => [Some(1), None],
+        nr::SYMLINKAT => [Some(2), None],
+        nr::LINKAT | nr::RENAMEAT | nr::RENAMEAT2 => [Some(1), Some(3)],
+        _ => [None, None],
     }
 }
 
@@ -330,8 +426,9 @@ fn is_self(who: ProcExe) -> bool {
 }
 
 /// `blocked` is the frame's `uc_sigmask`: the interrupted thread's signal
-/// mask, which `rt_sigreturn` reinstalls when this handler returns.
-fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64) {
+/// mask, which `rt_sigreturn` reinstalls when this handler returns. `pc`
+/// is where the guest resumes: the instruction after its `svc`.
+fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) {
     let Some(translator) = config::translator() else {
         regs[0] = sys::neg_errno(sys::ENOSYS);
         return;
@@ -373,6 +470,7 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64) {
         nr::RT_SIGPROCMASK => sigprocmask(regs, blocked),
         nr::IOCTL => termios2(regs),
         nr::SOCKET => socket(regs),
+        nr::CLONE3 => clone3(regs, pc),
         nr::FSTAT => {
             regs[0] = issue(number, &args_of(regs));
             fixup_stat(regs[0], regs[1] as *mut u8, false);
@@ -577,6 +675,53 @@ fn device_placeholder(dirfd: isize, path: *const u8, mode: u32) -> u64 {
         }
         Err(errno) => sys::neg_errno(errno),
     }
+}
+
+/// `clone3(args, size)` with a size other than VER0's. glibc's
+/// posix_spawn passes `CLONE_CLEAR_SIGHAND`, which resets every handler in
+/// the vfork child, this one included; the child's first trapped syscall
+/// then kills it and, through the shared address space, the parent and
+/// all its threads. The flag is cleared in the guest's struct and the
+/// `svc` is re-executed with the VER0 size, which the filter lets through,
+/// so the child inherits this handler the way a `vfork` child does.
+/// Nothing is issued from here: a syscall that returns twice has to
+/// return into the guest, not into this handler.
+fn clone3(regs: &mut [u64; 31], pc: &mut u64) {
+    let args = regs[0] as *mut u8;
+    let size = regs[1] as usize;
+    let ver0 = clone_traps::CLONE_ARGS_SIZE_VER0 as usize;
+    if args.is_null() {
+        regs[0] = sys::neg_errno(sys::EFAULT);
+        return;
+    }
+    if size < ver0 {
+        regs[0] = sys::neg_errno(sys::EINVAL);
+        return;
+    }
+    if size > 4096 {
+        regs[0] = sys::neg_errno(sys::E2BIG);
+        return;
+    }
+    // The shorter form drops set_tid and cgroup; refuse rather than lose
+    // them (nothing an IDE runs sets either).
+    for offset in ver0..size {
+        // SAFETY: a guest `struct clone_args` of `size` bytes, as handed
+        // to the kernel.
+        if unsafe { args.add(offset).read() } != 0 {
+            regs[0] = sys::neg_errno(sys::EINVAL);
+            return;
+        }
+    }
+    let flags = args as *mut u64;
+    // SAFETY: as above; `flags` is the first field.
+    unsafe {
+        let value = flags.read_unaligned();
+        if value & clone_traps::CLONE_CLEAR_SIGHAND != 0 {
+            flags.write_unaligned(value & !clone_traps::CLONE_CLEAR_SIGHAND);
+        }
+    }
+    regs[1] = clone_traps::CLONE_ARGS_SIZE_VER0;
+    *pc -= 4;
 }
 
 /// `socket(AF_NETLINK, type, protocol)`: see `sysno::socket`.
@@ -917,7 +1062,7 @@ fn termios2(regs: &mut [u64; 31]) {
             )
         };
         if result != 0 {
-            regs[0] = result as u64;
+            regs[0] = not_a_tty(result as u64);
             return;
         }
         let speed = speed_of(classic.cflag);
@@ -959,7 +1104,7 @@ fn termios2(regs: &mut [u64; 31]) {
         line: extended.line,
         cc: extended.cc,
     };
-    regs[0] = unsafe {
+    regs[0] = not_a_tty(unsafe {
         sys::syscall6(
             nr::IOCTL,
             fd,
@@ -969,7 +1114,18 @@ fn termios2(regs: &mut [u64; 31]) {
             0,
             0,
         ) as u64
-    };
+    });
+}
+
+/// A terminal request the sandbox refuses on a socket (its ioctl
+/// allowlist answers EACCES) is, to the guest, a request on something
+/// that is not a terminal.
+fn not_a_tty(result: u64) -> u64 {
+    if result == sys::neg_errno(sys::EACCES) {
+        sys::neg_errno(sys::ENOTTY)
+    } else {
+        result
+    }
 }
 
 /// `rt_sigprocmask(how, set, oldset, sigsetsize)`, applied to the signal

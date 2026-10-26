@@ -113,6 +113,7 @@ pub mod nr {
     pub const FSCONFIG: u32 = 431;
     pub const FSMOUNT: u32 = 432;
     pub const FSPICK: u32 = 433;
+    pub const CLONE3: u32 = 435;
     pub const CLOSE_RANGE: u32 = 436;
     pub const OPENAT2: u32 = 437;
     pub const FACCESSAT2: u32 = 439;
@@ -232,6 +233,17 @@ pub mod socket {
     pub const TRAPPED_FAMILIES: &[u64] = &[AF_NETLINK];
 }
 
+/// `clone3` is trapped unless its size argument is the VER0 struct size.
+/// glibc's posix_spawn passes `CLONE_CLEAR_SIGHAND`, which would reset
+/// the engine's own SIGSYS handler in the vfork child; the handler clears
+/// the flag in the guest's struct and re-executes the call in the VER0
+/// form, which the filter lets through.
+pub mod clone {
+    pub const CLONE_CLEAR_SIGHAND: u64 = 0x1_0000_0000;
+    pub const CLONE_ARGS_SIZE_VER0: u64 = 64;
+    pub const PASSED_SIZES: &[u64] = &[CLONE_ARGS_SIZE_VER0];
+}
+
 /// Upper bound on the trapped set, for the loader's stack array.
 pub const MAX_TRAPPED: usize = TRAP_TABLE.len() + TRAP_TABLE_FAKE_ROOT.len();
 
@@ -245,9 +257,147 @@ pub fn is_engine_tag(data: u16) -> bool {
     data & 0xFF00 == TAG_BASE
 }
 
+/// Linux name of a syscall the engine knows, for log lines.
+pub fn name(number: u32) -> Option<&'static str> {
+    Some(match number {
+        nr::SETXATTR => "setxattr",
+        nr::LSETXATTR => "lsetxattr",
+        nr::GETXATTR => "getxattr",
+        nr::LGETXATTR => "lgetxattr",
+        nr::LISTXATTR => "listxattr",
+        nr::LLISTXATTR => "llistxattr",
+        nr::REMOVEXATTR => "removexattr",
+        nr::LREMOVEXATTR => "lremovexattr",
+        nr::GETCWD => "getcwd",
+        nr::FCNTL => "fcntl",
+        nr::INOTIFY_ADD_WATCH => "inotify_add_watch",
+        nr::IOCTL => "ioctl",
+        nr::MKNODAT => "mknodat",
+        nr::MKDIRAT => "mkdirat",
+        nr::UNLINKAT => "unlinkat",
+        nr::SYMLINKAT => "symlinkat",
+        nr::LINKAT => "linkat",
+        nr::RENAMEAT => "renameat",
+        nr::UMOUNT2 => "umount2",
+        nr::MOUNT => "mount",
+        nr::PIVOT_ROOT => "pivot_root",
+        nr::STATFS => "statfs",
+        nr::TRUNCATE => "truncate",
+        nr::FACCESSAT => "faccessat",
+        nr::CHDIR => "chdir",
+        nr::CHROOT => "chroot",
+        nr::FCHMOD => "fchmod",
+        nr::FCHMODAT => "fchmodat",
+        nr::FCHOWNAT => "fchownat",
+        nr::FCHOWN => "fchown",
+        nr::OPENAT => "openat",
+        nr::CLOSE => "close",
+        nr::LSEEK => "lseek",
+        nr::READ => "read",
+        nr::WRITE => "write",
+        nr::PREAD64 => "pread64",
+        nr::SENDFILE => "sendfile",
+        nr::READLINKAT => "readlinkat",
+        nr::NEWFSTATAT => "newfstatat",
+        nr::FSTAT => "fstat",
+        nr::UTIMENSAT => "utimensat",
+        nr::ACCT => "acct",
+        nr::CAPGET => "capget",
+        nr::CAPSET => "capset",
+        nr::EXIT => "exit",
+        nr::EXIT_GROUP => "exit_group",
+        nr::UNSHARE => "unshare",
+        nr::SET_ROBUST_LIST => "set_robust_list",
+        nr::INIT_MODULE => "init_module",
+        nr::CLOCK_SETTIME => "clock_settime",
+        nr::CLOCK_GETTIME => "clock_gettime",
+        nr::RT_SIGACTION => "rt_sigaction",
+        nr::RT_SIGPROCMASK => "rt_sigprocmask",
+        nr::RT_SIGRETURN => "rt_sigreturn",
+        nr::REBOOT => "reboot",
+        nr::SETREGID => "setregid",
+        nr::SETGID => "setgid",
+        nr::SETREUID => "setreuid",
+        nr::SETUID => "setuid",
+        nr::SETRESUID => "setresuid",
+        nr::GETRESUID => "getresuid",
+        nr::SETRESGID => "setresgid",
+        nr::GETRESGID => "getresgid",
+        nr::SETFSUID => "setfsuid",
+        nr::SETFSGID => "setfsgid",
+        nr::GETGROUPS => "getgroups",
+        nr::SETGROUPS => "setgroups",
+        nr::UNAME => "uname",
+        nr::SETHOSTNAME => "sethostname",
+        nr::SETDOMAINNAME => "setdomainname",
+        nr::PRCTL => "prctl",
+        nr::SETTIMEOFDAY => "settimeofday",
+        nr::ADJTIMEX => "adjtimex",
+        nr::GETPID => "getpid",
+        nr::GETUID => "getuid",
+        nr::GETEUID => "geteuid",
+        nr::GETGID => "getgid",
+        nr::GETEGID => "getegid",
+        nr::SOCKET => "socket",
+        nr::BIND => "bind",
+        nr::CONNECT => "connect",
+        nr::SENDTO => "sendto",
+        nr::RECVFROM => "recvfrom",
+        nr::MUNMAP => "munmap",
+        nr::CLONE => "clone",
+        nr::EXECVE => "execve",
+        nr::MMAP => "mmap",
+        nr::SWAPON => "swapon",
+        nr::SWAPOFF => "swapoff",
+        nr::MPROTECT => "mprotect",
+        nr::NAME_TO_HANDLE_AT => "name_to_handle_at",
+        nr::CLOCK_ADJTIME => "clock_adjtime",
+        nr::SETNS => "setns",
+        nr::FINIT_MODULE => "finit_module",
+        nr::RENAMEAT2 => "renameat2",
+        nr::SECCOMP => "seccomp",
+        nr::MEMFD_CREATE => "memfd_create",
+        nr::EXECVEAT => "execveat",
+        nr::USERFAULTFD => "userfaultfd",
+        nr::STATX => "statx",
+        nr::RSEQ => "rseq",
+        nr::IO_URING_SETUP => "io_uring_setup",
+        nr::IO_URING_ENTER => "io_uring_enter",
+        nr::IO_URING_REGISTER => "io_uring_register",
+        nr::OPEN_TREE => "open_tree",
+        nr::MOVE_MOUNT => "move_mount",
+        nr::FSOPEN => "fsopen",
+        nr::FSCONFIG => "fsconfig",
+        nr::FSMOUNT => "fsmount",
+        nr::FSPICK => "fspick",
+        nr::CLOSE_RANGE => "close_range",
+        nr::OPENAT2 => "openat2",
+        nr::FACCESSAT2 => "faccessat2",
+        nr::MOUNT_SETATTR => "mount_setattr",
+        nr::FUTEX_WAITV => "futex_waitv",
+        nr::FCHMODAT2 => "fchmodat2",
+        nr::CLONE3 => "clone3",
+        _ => return None,
+    })
+}
+
 /// `getpid()` with this value in x0 is the filter-presence probe: the
 /// filter traps it with [`TAG_PROBE`] and the handler returns
 /// [`PROBE_ACK`]. A real `getpid()` never carries an argument, so the
 /// kernel path is unaffected when no filter is installed.
 pub const PROBE_MAGIC: u64 = 0x5A44_4C4F_4144_0001;
 pub const PROBE_ACK: u64 = 0x5A44_0001;
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn every_trapped_syscall_has_a_name() {
+        for number in TRAP_TABLE.iter().chain(TRAP_TABLE_FAKE_ROOT) {
+            assert!(name(*number).is_some(), "syscall {number} has no name");
+        }
+        assert_eq!(name(nr::LINKAT), Some("linkat"));
+        assert_eq!(name(9999), None);
+    }
+}

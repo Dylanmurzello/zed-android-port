@@ -74,6 +74,8 @@ pub const ERANGE: i32 = 34;
 pub const ENAMETOOLONG: i32 = 36;
 pub const ENOSYS: i32 = 38;
 pub const EPROTONOSUPPORT: i32 = 93;
+pub const E2BIG: i32 = 7;
+pub const ENOTTY: i32 = 25;
 
 #[inline(always)]
 pub unsafe fn syscall6(
