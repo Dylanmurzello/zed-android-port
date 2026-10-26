@@ -82,6 +82,11 @@ tasks.register<Exec>("buildZdExec") {
         "zdroid_runtime",
         "--bin",
         "zd-exec",
+        // Zed's release profile keeps limited debug info, which made up
+        // about 15 MB of this 18.7 MB helper. The app copies it out of the
+        // APK and compares it with the installed copy on every launch.
+        "--config",
+        "profile.release.strip=\"debuginfo\"",
     )
 
     // Honor whatever the developer's `cargo ndk` lib build uses.
