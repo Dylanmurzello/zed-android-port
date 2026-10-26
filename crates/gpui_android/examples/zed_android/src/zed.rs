@@ -1421,6 +1421,10 @@ fn reload_keymaps(cx: &mut App, mut user_key_bindings: Vec<KeyBinding>) {
 }
 
 pub fn load_default_keymap(cx: &mut App) {
+    // Android: the app's own menu bar shortcut, bound even with no base
+    // keymap, since the menu bar is the app's only menu.
+    cx.bind_keys(crate::menu_bar::key_bindings());
+
     let base_keymap = *BaseKeymap::get_global(cx);
     if base_keymap == BaseKeymap::None {
         return;
@@ -1453,9 +1457,6 @@ pub fn load_default_keymap(cx: &mut App) {
         )
         .unwrap(),
     );
-
-    // Android: the app's own menu bar shortcut.
-    cx.bind_keys(crate::menu_bar::key_bindings());
 }
 
 /// `KeymapFile::load_asset`, but keeping the bindings that load when others
