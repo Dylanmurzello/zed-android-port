@@ -122,8 +122,9 @@ fn main() -> ExitCode {
 }
 
 fn build_provider() -> anyhow::Result<Box<dyn zdroid_runtime::port::RuntimeProvider>> {
-    match RuntimeState::load(Path::new(DEFAULT_DATA_PATH)) {
-        RuntimeState::Configured(resolved) => adapters::for_config(&resolved),
+    let data_path = Path::new(DEFAULT_DATA_PATH);
+    match RuntimeState::load(data_path) {
+        RuntimeState::Configured(resolved) => adapters::for_config(&resolved, data_path),
         RuntimeState::NotConfigured(reason) => anyhow::bail!(
             "no runtime configured ({reason}). Open Zdroid and pick a runtime in Settings first."
         ),

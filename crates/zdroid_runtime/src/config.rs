@@ -5,13 +5,13 @@
 //!
 //! ```toml
 //! [runtime]
-//! type = "chroot"
+//! type = "rootfs"
 //!
-//! [chroot]
-//! root = "/data/local/nhsystem/kali-arm64"
-//! home_bind = "/zed"
-//! spawnd_socket = "/data/data/com.zdroid/files/run/zd-spawn"
-//! su_path = "/product/bin/su"
+//! [rootfs]
+//! rootfs_dir = "/data/user/0/com.zdroid/files/rootfs"
+//! image_url = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04.1-base-arm64.tar.gz"
+//! sha256sums_url = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/SHA256SUMS"
+//! image_name = "ubuntu-base-26.04.1-base-arm64.tar.gz"
 //! ```
 //!
 //! The file lives at `<data>/files/etc/zd-runtime.toml`. Earlier releases
@@ -46,6 +46,27 @@ pub fn data_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_PATH))
 }
 
+static NAMESERVERS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Public resolvers used when the platform has not reported any.
+pub const FALLBACK_NAMESERVERS: &[&str] = &["1.1.1.1", "8.8.8.8"];
+
+/// Record the device's active DNS servers (from the platform bridge)
+/// so the rootfs installer can seed the guest's `/etc/resolv.conf`.
+pub fn set_nameservers(servers: Vec<String>) {
+    if NAMESERVERS.set(servers).is_err() {
+        log::debug!("zdroid_runtime: nameservers already set; ignoring re-set");
+    }
+}
+
+/// The recorded nameservers, or the public fallback. Never empty.
+pub fn nameservers() -> Vec<String> {
+    match NAMESERVERS.get() {
+        Some(servers) if !servers.is_empty() => servers.clone(),
+        _ => FALLBACK_NAMESERVERS.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
 pub fn runtime_toml_path(data_path: &Path) -> PathBuf {
     data_path.join("etc/zd-runtime.toml")
 }
@@ -61,6 +82,7 @@ pub fn legacy_runtime_toml_path(data_path: &Path) -> PathBuf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeId {
+    Rootfs,
     Chroot,
 }
 
@@ -70,6 +92,7 @@ impl RuntimeId {
     /// existing configs.
     pub fn display_name(self) -> &'static str {
         match self {
+            Self::Rootfs => "Ubuntu rootfs",
             Self::Chroot => "Chroot rootfs",
         }
     }
@@ -92,6 +115,9 @@ pub struct RuntimeFile {
     pub runtime: RuntimeSelection,
 
     #[serde(default)]
+    pub rootfs: Option<RootfsConfig>,
+
+    #[serde(default)]
     pub chroot: Option<ChrootConfig>,
 }
 
@@ -99,6 +125,36 @@ pub struct RuntimeFile {
 pub struct RuntimeSelection {
     #[serde(rename = "type")]
     pub kind: RuntimeKind,
+}
+
+/// Rootfs-adapter config. Deserialized from `[rootfs]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootfsConfig {
+    /// Host directory holding the extracted rootfs.
+    pub rootfs_dir: PathBuf,
+    /// Tarball to download.
+    pub image_url: String,
+    /// `SHA256SUMS` file published next to the tarball.
+    pub sha256sums_url: String,
+    /// File name as it appears in `SHA256SUMS`.
+    pub image_name: String,
+}
+
+impl RootfsConfig {
+    pub const DEFAULT_RELEASE_DIR: &'static str =
+        "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release";
+    pub const DEFAULT_IMAGE_NAME: &'static str = "ubuntu-base-26.04.1-base-arm64.tar.gz";
+
+    /// On-device defaults: the Ubuntu 26.04.1 base image under
+    /// `<data>/files/rootfs`.
+    pub fn defaults(data_path: &Path) -> Self {
+        Self {
+            rootfs_dir: data_path.join("rootfs"),
+            image_url: format!("{}/{}", Self::DEFAULT_RELEASE_DIR, Self::DEFAULT_IMAGE_NAME),
+            sha256sums_url: format!("{}/SHA256SUMS", Self::DEFAULT_RELEASE_DIR),
+            image_name: Self::DEFAULT_IMAGE_NAME.to_string(),
+        }
+    }
 }
 
 /// Chroot-adapter config. Deserialized from `[chroot]`.
@@ -124,6 +180,7 @@ pub struct ChrootConfig {
 /// code never has to ask "which kind is this".
 #[derive(Debug, Clone)]
 pub enum ResolvedConfig {
+    Rootfs(RootfsConfig),
     Chroot(ChrootConfig),
 }
 
@@ -131,6 +188,7 @@ impl ResolvedConfig {
     /// Identifier for the active adapter.
     pub fn id(&self) -> RuntimeId {
         match self {
+            Self::Rootfs(_) => RuntimeId::Rootfs,
             Self::Chroot(_) => RuntimeId::Chroot,
         }
     }
@@ -242,13 +300,19 @@ impl RuntimeFile {
     /// `id` and whose only populated section is the matching one,
     /// using on-device defaults. Used by the picker UI to write a
     /// fresh config when the user selects an adapter.
-    pub fn with_defaults(id: RuntimeId) -> Self {
+    pub fn with_defaults(id: RuntimeId, data_path: &Path) -> Self {
         let runtime = RuntimeSelection {
             kind: RuntimeKind::Known(id),
         };
         match id {
+            RuntimeId::Rootfs => Self {
+                runtime,
+                rootfs: Some(RootfsConfig::defaults(data_path)),
+                chroot: None,
+            },
             RuntimeId::Chroot => Self {
                 runtime,
+                rootfs: None,
                 chroot: Some(ChrootConfig {
                     root: PathBuf::from("/data/local/nhsystem/kali-arm64"),
                     home_bind: PathBuf::from("/zed"),
@@ -289,6 +353,10 @@ impl RuntimeFile {
     /// matching section is missing.
     pub fn resolve(self) -> anyhow::Result<ResolvedConfig> {
         match self.runtime.kind {
+            RuntimeKind::Known(RuntimeId::Rootfs) => self
+                .rootfs
+                .map(ResolvedConfig::Rootfs)
+                .ok_or_else(|| anyhow::anyhow!("runtime.type = rootfs but no [rootfs] section")),
             RuntimeKind::Known(RuntimeId::Chroot) => self
                 .chroot
                 .map(ResolvedConfig::Chroot)

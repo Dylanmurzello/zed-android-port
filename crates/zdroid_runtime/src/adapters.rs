@@ -2,25 +2,26 @@
 //! [`crate::port::RuntimeProvider`] and is selected at runtime via
 //! [`crate::config::ResolvedConfig`].
 //!
-//! Module layout:
-//!
-//! - [`chroot`] — talks to `zd-spawnd` over a Unix socket, fastest path,
-//!   needs the Magisk module installed.
+//! - [`rootfs`]: a stock Ubuntu rootfs run through the engine loader.
+//! - [`chroot`]: talks to `zd-spawnd` over a Unix socket; needs root and
+//!   the Magisk module, kept until the rootfs adapter carries the daily
+//!   workload.
 
 pub mod chroot;
+pub mod rootfs;
+pub mod rootfs_install;
+
+use std::path::Path;
 
 use crate::config::ResolvedConfig;
 use crate::port::RuntimeProvider;
 
-/// Factory: pick the right adapter for the resolved config. Returns
-/// the boxed trait object the rest of the system uses.
-///
-/// Adapters that haven't been implemented yet return a deliberate
-/// "not yet implemented" error — settings UI surfaces this as a
-/// greyed-out option with a tooltip, rather than crashing.
-pub fn for_config(config: &ResolvedConfig) -> anyhow::Result<Box<dyn RuntimeProvider>> {
+/// Pick the adapter for the resolved config. `data_path` is the app
+/// files dir; adapters derive every host-side location from it.
+pub fn for_config(config: &ResolvedConfig, data_path: &Path) -> anyhow::Result<Box<dyn RuntimeProvider>> {
     match config {
         ResolvedConfig::Chroot(cfg) => chroot::ChrootAdapter::new(cfg.clone()).map(box_it),
+        ResolvedConfig::Rootfs(cfg) => Ok(box_it(rootfs::RootfsAdapter::new(cfg.clone(), data_path))),
     }
 }
 

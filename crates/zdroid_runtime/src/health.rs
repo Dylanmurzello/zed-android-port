@@ -72,6 +72,12 @@ pub trait ProgressSink: Send {
     /// mismatch on optional asset, falling back to source build").
     /// Surfaces in the install dialog's expandable "Details" section.
     fn warn(&mut self, message: &str);
+
+    /// Polled by long operations between chunks; `true` makes the
+    /// install stop and clean up its staging state.
+    fn is_cancelled(&self) -> bool {
+        false
+    }
 }
 
 /// No-op `ProgressSink` for unit tests and headless invocations.

@@ -24,10 +24,14 @@ path = "src/bin/zd-exec.rs"
 
 [dependencies]
 anyhow.workspace = true
+flate2.workspace = true
 log.workspace = true
 serde.workspace = true
+sha2.workspace = true
+tar.workspace = true
 toml.workspace = true
 util.workspace = true
+zd_engine_core.workspace = true
 
 # Adapter installers download their userland on demand. `ureq` is a
 # tiny sync HTTPS client (rustls TLS stack, webpki-roots bundled, no

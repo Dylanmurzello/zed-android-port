@@ -13584,6 +13584,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -17167,13 +17178,17 @@ name = "zdroid_runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "libc",
  "log",
  "nix 0.29.0",
  "serde",
+ "sha2 0.10.9",
+ "tar",
  "toml 0.8.23",
  "ureq",
  "util",
+ "zd_engine_core",
 ]
 
 [[package]]
