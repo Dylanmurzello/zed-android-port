@@ -478,13 +478,6 @@ actions!(
         ToggleRightDock,
         /// Toggles zoom on the active pane.
         ToggleZoom,
-        /// Toggles the Android on-screen keyboard. No-op on other
-        /// platforms. The pane tab bar exposes this as a button on
-        /// Android because the IME auto-show logic suppresses
-        /// further auto-shows once the user dismisses the keyboard,
-        /// so a manual toggle is needed to bring it back without
-        /// re-focusing a different text target.
-        ToggleSoftKeyboard,
         /// Toggles maximizing the active editor pane within the center area,
         /// hiding other split panes but leaving docks/panels unaffected.
         ToggleEditorZoom,

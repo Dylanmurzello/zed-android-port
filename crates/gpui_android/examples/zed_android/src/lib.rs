@@ -5,6 +5,7 @@
 
 mod app_updater;
 mod header;
+mod input_buttons;
 mod logging;
 mod menu_bar;
 mod noexec_modal;
@@ -1063,44 +1064,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     .detach();
     info!("zed_android: android_input atomics observer registered");
 
-    // Drive the vim-mode soft-keyboard routing gate. In a vim command
-    // mode (Normal / Visual / operator-pending / Helix) soft-keyboard
-    // text has to arrive as key *events* so vim's keymap reads `j`/`d`/
-    // `w` as motions and operators; only Insert and Replace insert the
-    // literal characters. Replace is the trap — it feels like a command
-    // mode but is text entry, so it routes as text like Insert.
-    //
-    // Mirrors `vim::ModeIndicator`: a holder entity keeps a single
-    // subscription to the *focused* vim, swapped out on each `Focused`
-    // event, so an unfocused split-pane editor flipping its own mode
-    // can't clobber the gate. The holder is owned by the detached
-    // `observe_new` closure, so it lives for the whole process. Desktop
-    // never reaches this — it has no soft keyboard — which is why the
-    // mode read sits behind the tiny `Vim::mode()` accessor.
-    struct VimImeRouter {
-        focused_vim: Option<gpui::Subscription>,
-    }
-    fn push_vim_route(mode: vim::Mode) {
-        let route_as_keys = !matches!(mode, vim::Mode::Insert | vim::Mode::Replace);
-        gpui_android::set_ime_route_as_keys(route_as_keys);
-    }
-    let vim_ime_router = cx.new(|_| VimImeRouter { focused_vim: None });
-    cx.observe_new::<vim::Vim>(move |_, _window, cx| {
-        let vim = cx.entity();
-        vim_ime_router.update(cx, |_, cx| {
-            cx.subscribe(&vim, |router: &mut VimImeRouter, vim, event, cx| match event {
-                vim::VimEvent::Focused => {
-                    push_vim_route(vim.read(cx).mode());
-                    router.focused_vim =
-                        Some(cx.observe(&vim, |_, vim, cx| push_vim_route(vim.read(cx).mode())));
-                }
-            })
-            .detach();
-        });
-    })
-    .detach();
-    info!("zed_android: vim-mode IME routing observer registered");
-
     load_embedded_fonts(cx);
 
     let mut language_registry =
@@ -1479,6 +1442,13 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         });
         let header = cx.new(|_| header::Header::new(menu_bar, title_bar));
         workspace.set_titlebar_item(header.into(), window, cx);
+
+        let soft_keyboard_button = cx.new(input_buttons::SoftKeyboardButton::new);
+        let trackpad_mode_button = cx.new(input_buttons::TrackpadModeButton::new);
+        workspace.status_bar().update(cx, |status_bar, cx| {
+            status_bar.add_right_item(soft_keyboard_button, window, cx);
+            status_bar.add_right_item(trackpad_mode_button, window, cx);
+        });
     })
     .detach();
 

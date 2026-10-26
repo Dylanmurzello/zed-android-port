@@ -272,7 +272,7 @@ pub(crate) struct AndroidCommon {
     /// Tracks whether the soft keyboard was visible last tick.
     /// When this disagrees with the atomic Kotlin pushes via
     /// `nativeSetSoftKeyboardVisible`, we force a `window.refresh()`
-    /// so the pane keyboard button re-renders with its updated
+    /// so the status bar keyboard button re-renders with its updated
     /// `toggle_state`. Without this, the atomic flips on each
     /// toggle but the UI keeps showing stale state until some
     /// other event triggers a paint — the user-visible bug where
@@ -576,6 +576,7 @@ impl AndroidPlatform {
         }
         for window_id in &closed {
             common.extra_windows.remove(window_id);
+            crate::ime::set_text_input_focused(*window_id, false);
         }
         if common
             .active_window
@@ -1032,7 +1033,7 @@ impl AndroidPlatform {
     }
 
     /// Detect changes to `SOFT_KEYBOARD_VISIBLE` and force a window
-    /// redraw so the pane keyboard button's `toggle_state` picks
+    /// redraw so the status bar keyboard button's `toggle_state` picks
     /// up the new value on the next paint. Runs every main-loop
     /// tick INDEPENDENTLY of input-handler visibility — the button
     /// is rendered on any focused pane (including those whose

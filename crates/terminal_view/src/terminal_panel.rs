@@ -219,84 +219,9 @@ impl TerminalPanel {
                                     cx,
                                 )
                             })
-                    });
-                // Android-only: terminal panel renders its own tab-bar
-                // buttons via `set_render_tab_bar_buttons`, which
-                // SKIPS the Android input toggles `workspace::pane`
-                // appends to the default render. Without these
-                // children here the bottom dock terminal (always
-                // visible, including on the welcome view before a
-                // project is opened) had no keyboard / crosshair
-                // toggles, which made the row of icons inconsistent
-                // across pane types and effectively absent before
-                // opening a project. Inlining the same logic keeps
-                // the affordances reachable from any terminal pane
-                // in the workspace.
-                #[cfg(target_os = "android")]
-                let right_children = {
-                    let android_input = workspace::AndroidInputSettings::get_global(cx);
-                    let on_screen_keyboard_enabled = android_input.on_screen_keyboard;
-                    let trackpad_master = android_input.trackpad_mode;
-                    let trackpad_active =
-                        trackpad_master && android_input.trackpad_mode_active;
-
-                    let right_children = if on_screen_keyboard_enabled {
-                        let keyboard_visible = window.soft_keyboard_visible();
-                        right_children.child(
-                            IconButton::new("toggle_soft_keyboard", IconName::Keyboard)
-                                .icon_size(IconSize::Small)
-                                .toggle_state(keyboard_visible)
-                                .on_click(|_, window, _| {
-                                    window.toggle_soft_keyboard();
-                                })
-                                .tooltip(move |_window, cx| {
-                                    Tooltip::for_action(
-                                        if keyboard_visible {
-                                            "Hide Keyboard"
-                                        } else {
-                                            "Show Keyboard"
-                                        },
-                                        &workspace::ToggleSoftKeyboard,
-                                        cx,
-                                    )
-                                }),
-                        )
-                    } else {
-                        right_children
-                    };
-
-                    if trackpad_master {
-                        right_children.child(
-                            IconButton::new("toggle_trackpad_mode", IconName::Crosshair)
-                                .icon_size(IconSize::Small)
-                                .toggle_state(trackpad_active)
-                                .on_click(cx.listener(|_pane, _, _window, cx| {
-                                    settings::update_settings_file(
-                                        <dyn Fs>::global(cx),
-                                        cx,
-                                        |content, _| {
-                                            let android_input =
-                                                content.android_input.get_or_insert_default();
-                                            let current = android_input
-                                                .trackpad_mode_active
-                                                .unwrap_or(false);
-                                            android_input.trackpad_mode_active =
-                                                Some(!current);
-                                        },
-                                    );
-                                }))
-                                .tooltip(Tooltip::text(if trackpad_active {
-                                    "Disable Trackpad Mode"
-                                } else {
-                                    "Enable Trackpad Mode (virtual mouse)"
-                                })),
-                        )
-                    } else {
-                        right_children
-                    }
-                };
-
-                let right_children = right_children.into_any_element().into();
+                    })
+                    .into_any_element()
+                    .into();
                 (None, right_children)
             });
         });

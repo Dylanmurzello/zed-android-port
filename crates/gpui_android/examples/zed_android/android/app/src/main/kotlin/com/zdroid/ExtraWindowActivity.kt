@@ -292,7 +292,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     }
 
     /// Update [imeShown] and push the value into Rust's
-    /// `SOFT_KEYBOARD_VISIBLE` mirror so the pane keyboard button's
+    /// `SOFT_KEYBOARD_VISIBLE` mirror so the status bar keyboard button's
     /// `toggle_state` highlight reflects this window's IME state.
     /// The global atomic represents whichever Activity most recently
     /// transitioned — only one IME can be up across the app at a time,
@@ -360,7 +360,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         }
     }
 
-    /// Toggle the IME — pane keyboard button entry point.
+    /// Toggle the IME — status bar keyboard button entry point.
     @Suppress("unused")
     fun toggleIme() {
         runOnUiThread {

@@ -20,8 +20,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Mirror of Kotlin's `imeShown` flag pushed via the
-/// `nativeSetSoftKeyboardVisible` JNI entry point. Read by
-/// `PlatformWindow::soft_keyboard_visible` so the pane keyboard
+/// `nativeSetSoftKeyboardVisible` JNI entry point. Read through
+/// `gpui_android::soft_keyboard_visible` so the status bar keyboard
 /// button can draw its lit-up `toggle_state`. Process-wide because
 /// the IME host is a single ImeHostView shared across all panes
 /// of the primary Activity.
@@ -84,20 +84,30 @@ pub(crate) fn invert_scroll_enabled() -> bool {
     INVERT_SCROLL.load(Ordering::Acquire)
 }
 
-/// Decision (not the mode itself) for whether soft-keyboard input should
-/// be delivered as key events instead of committed as text. True when the
-/// focused editor is in a vim COMMAND mode (Normal / Visual* / Helix*),
-/// where letters must reach vim's keymap as keystrokes so `j` means "down"
-/// rather than inserting "j". False in Insert / Replace and when vim is
-/// off, where `commitText` inserts text normally. Written by the app-side
-/// vim observer in `zed_android::lib`; read by Kotlin's `commitText` via
-/// the `nativeImeRouteAsKeys` JNI query, which then converts the text to
-/// KeyEvents via Android's KeyCharacterMap. gpui_android stays dumb about
-/// what "vim" is — it only carries the boolean.
-pub(crate) static IME_ROUTE_AS_KEYS: AtomicBool = AtomicBool::new(false);
+/// IME window ids (0 for the main window) whose focused text field accepts
+/// typed text, as gpui reports through `text_input_state_changed`. A focused
+/// field that doesn't, such as an editor in vim's normal or visual mode,
+/// gets soft-keyboard text as key events instead, so `j` moves down rather
+/// than inserting "j". Kotlin's `commitText` asks through
+/// `nativeImeRouteAsKeys` and converts the text with Android's
+/// KeyCharacterMap.
+static TEXT_INPUT_FOCUSED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
-pub(crate) fn ime_route_as_keys() -> bool {
-    IME_ROUTE_AS_KEYS.load(Ordering::Acquire)
+pub(crate) fn set_text_input_focused(ime_window_id: u64, focused: bool) {
+    let mut windows = TEXT_INPUT_FOCUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    windows.retain(|window_id| *window_id != ime_window_id);
+    if focused {
+        windows.push(ime_window_id);
+    }
+}
+
+fn route_as_keys(ime_window_id: u64) -> bool {
+    !TEXT_INPUT_FOCUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&ime_window_id)
 }
 
 /// Negate a scroll delta when `invert_scroll` is set. No-op otherwise, so
@@ -708,8 +718,8 @@ pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u6
     }
 }
 
-/// Toggle the soft keyboard. Called from the pane tab-bar
-/// keyboard-icon button (via `Window::toggle_soft_keyboard`).
+/// Toggle the soft keyboard on an explicit request (gpui's
+/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`).
 /// Inverts the current `imeShown` state on the target Activity — and,
 /// when showing, clears the user-dismissed flag so subsequent
 /// text-input focuses can auto-show again.
@@ -845,17 +855,16 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImeSendKeyEvent<'local
     );
 }
 
-/// Whether soft-keyboard input should be delivered as key events (the
-/// focused editor is in a vim command mode) instead of committed as text.
-/// Read by Kotlin's `commitText`. Global decision: only one editor is
-/// focused at a time and the app-side vim observer keeps the atomic in
-/// sync with it, so no window_id is needed.
+/// Whether soft-keyboard input for this IME window should be delivered as
+/// key events instead of committed as text; see [`TEXT_INPUT_FOCUSED`].
+/// Read by Kotlin's `commitText`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImeRouteAsKeys<'local>(
     _env: JNIEnv<'local>,
     _bridge: JObject<'local>,
+    window_id: i64,
 ) -> bool {
-    ime_route_as_keys()
+    route_as_keys(window_id as u64)
 }
 
 #[unsafe(no_mangle)]

@@ -211,19 +211,17 @@ object NativeBridge {
     /// target window.
     external fun nativeImePerformEditorAction(windowId: Long, actionId: Int)
 
-    /// Query the global vim-mode routing gate. True when the focused
-    /// editor is in a vim command mode, in which case soft-keyboard
-    /// text has to be re-delivered as key events (so vim reads `j`/`d`/
-    /// `w` as motions/operators) rather than inserted as literal text.
-    /// Driven Rust-side by the app's vim observer; no `windowId`
-    /// because only one editor is focused app-wide. False when vim is
-    /// off or the mode is Insert/Replace (plain text entry).
-    external fun nativeImeRouteAsKeys(): Boolean
+    /// Whether soft-keyboard text for this window has to be re-delivered
+    /// as key events rather than inserted as literal text: true when its
+    /// focused field doesn't accept typed text, as gpui reports, such as
+    /// an editor in vim's normal or visual mode (so vim reads `j`/`d`/`w`
+    /// as motions and operators).
+    external fun nativeImeRouteAsKeys(windowId: Long): Boolean
 
     /// Mirror Kotlin's `imeShown` flag into the Rust-side global
     /// `SOFT_KEYBOARD_VISIBLE` atomic. Pushed on every transition
     /// (showSoftInput / hideSoftInputFromWindow / WindowInsetsListener
-    /// edge). The pane keyboard button reads this via
+    /// edge). The status bar keyboard button reads this via
     /// `Window::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)

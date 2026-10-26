@@ -149,7 +149,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// Setter that wraps the `imeShown` mutation and ALSO pushes
     /// the value into Rust's `SOFT_KEYBOARD_VISIBLE` mirror. Every
     /// site that flips `imeShown` should go through here so the
-    /// pane keyboard button's `toggle_state` highlight stays
+    /// status bar keyboard button's `toggle_state` highlight stays
     /// synchronized with the OS-side IME visibility.
     private fun setImeShown(shown: Boolean) {
         if (imeShown != shown) {
@@ -214,8 +214,8 @@ class MainActivity : GameActivity(), ImeHost {
     /// a focus session does the real work; repeats are filtered.
     /// Suppressed entirely when the user has manually dismissed the
     /// IME (see [toggleIme] + the WindowInsets listener installed
-    /// in [onCreate]) — the user can re-summon via the pane keyboard
-    /// toggle button or by tapping into a different text target
+    /// in [onCreate]) — the user can re-summon via the status bar
+    /// keyboard button or by tapping into a different text target
     /// (which triggers `restartImeForTarget` and clears the flag).
     @Suppress("unused")
     fun showIme() {
@@ -274,7 +274,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// True when the user explicitly dismissed the IME (Back press,
     /// IME-bar swipe, etc.) and we should suppress the auto-show
     /// that fires on every text-input focus transition. Cleared by:
-    /// - [toggleIme] when the user taps the pane keyboard button
+    /// - [toggleIme] when the user taps the status bar keyboard button
     ///   to bring the IME back up,
     /// - any `restartImeForTarget` call (focus moved to a different
     ///   input target — fresh context, fresh auto-show budget).
