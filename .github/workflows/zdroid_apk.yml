@@ -324,6 +324,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write # create the release and upload the APK
+      pull-requests: read # read the Release Notes of merged pull requests
       id-token: write # sign the provenance attestation via OIDC
       attestations: write # store the provenance attestation
     steps:
@@ -344,6 +345,18 @@ jobs:
         with:
           subject-path: dist/${{ needs.sign.outputs.apk_name }}
 
+      - name: Check out the release notes script and texts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A subdirectory, because checkout cleans its path and dist/ holds
+          # the APK.
+          path: source
+          persist-credentials: false
+          sparse-checkout: |
+            .github/release
+            .github/scripts
+            script/lib
+
       - name: Write release notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -351,15 +364,18 @@ jobs:
           APK_NAME: ${{ needs.sign.outputs.apk_name }}
           APK_SHA256: ${{ needs.sign.outputs.apk_sha256 }}
         run: |
-          # The annotated tag's message (minus its subject line) is the
-          # hand-written part of the notes: Install, Highlights, Caveats.
+          # The annotated tag's message, minus its subject line, is an
+          # optional Highlights paragraph. The script builds the rest from
+          # .github/release and the merged pull requests' Release Notes.
           ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME")
           if [ "$(echo "$ref" | jq -r .object.type)" = tag ]; then
             gh api "repos/$GITHUB_REPOSITORY/git/tags/$(echo "$ref" | jq -r .object.sha)" --jq .message \
-              | sed '1d' | sed '/./,$!d' > notes.md
+              | sed '1d' | sed '/./,$!d' > highlights.md
           else
-            : > notes.md
+            : > highlights.md
           fi
+          node source/.github/scripts/zdroid-release-notes.js "$GITHUB_REF_NAME" \
+            --version "$VERSION" --highlights highlights.md > notes.md
           {
             echo
             echo "### Verification"

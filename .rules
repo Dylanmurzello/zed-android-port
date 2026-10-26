@@ -12,6 +12,7 @@ This repository is Zdroid, a fork of Dylanmurzello/zed-android-port that follows
 * After a Zed merge, reseed the Android app's lockfile: `cp Cargo.lock crates/gpui_android/examples/zed_android/Cargo.lock`.
 * The Android app is a separate Cargo workspace, so a root `cargo check` doesn't cover it. Run `cargo ndk -t arm64-v8a -P 26 check` in `crates/gpui_android/examples/zed_android`; the pull request's **Zdroid APK** build is the full check. Local Gradle builds overwrite the tracked `android/app/src/main/assets/zed-askpass-helper`, so restore it before committing.
 * Bump `versionCode` and `versionName` in `android/app/build.gradle.kts` in the pull request that changes the app.
+* Release notes are generated (see "Each release" in `FORK.md`). A pull request's `Release Notes:` bullets are published as written, so write them for users. A pull request that fixes or adds a known limitation also updates `.github/release/caveats.md`.
 * Never `git push --tags`: the clone carries every Zed tag, and `v*.*.*` tags start the release workflow. Push a single tag by name.
 * Don't add AI attribution (`Co-Authored-By` trailers, "Generated with" lines) to commits, tags or pull requests.
 

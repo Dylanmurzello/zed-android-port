@@ -120,12 +120,22 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 ### Each release
 
 1. Bump `versionCode` (+1) and `versionName` in `build.gradle.kts`, following the versioning rules in [RELEASING.md](RELEASING.md). Commit and push to `zdroid`.
-2. Write the release notes as an annotated tag. The first line is the subject (`Zdroid X.Y.Z`); the rest becomes the release body. Use the `Install`, `Highlights` (or `Fixes`), and `Caveats` sections from RELEASING.md. The workflow appends `Verification` (APK and certificate SHA-256, commit, provenance) itself.
+2. Tag the release. The workflow writes the whole release body, in this order:
+   - **Install** from `.github/release/install.md`, with the version filled in.
+   - **Highlights**, an optional paragraph: the annotated tag's message after its subject line (`Zdroid X.Y.Z`). Leave it out for most releases.
+   - **Changes**: the `Release Notes:` bullets of the pull requests merged into `zdroid` since the previous release, each linked to its pull request, the way Zed builds its notes. `N/A` entries are left out, so write these bullets for users.
+   - **Caveats** from `.github/release/caveats.md`. Pull requests keep it current: one that fixes a listed limitation removes its line, and one that adds a limitation adds one.
+   - **Verification**: APK and certificate SHA-256, commit, provenance.
 
    ```sh
-   # --cleanup=whitespace keeps the `### ...` headings; the default strips `#` lines.
-   git tag -a v0.4.1 --cleanup=whitespace -F /path/to/notes.md
-   git push origin v0.4.1
+   git tag -a vX.Y.Z -m "Zdroid X.Y.Z"   # or -F notes.md, with Highlights after the subject line
+   git push origin vX.Y.Z
+   ```
+
+   To preview the body before tagging (`vA.B.C` is the previous release):
+
+   ```sh
+   GITHUB_REPOSITORY=ilkersigirci/zed-android-port node .github/scripts/zdroid-release-notes.js zdroid --version X.Y.Z --previous vA.B.C
    ```
 
    If `git tag` says the tag already exists and it isn't this fork's, it's a local copy of Zed's: remove those as described under [Remotes](#remotes-one-time-per-clone).
