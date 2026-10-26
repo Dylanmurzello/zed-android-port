@@ -13,7 +13,8 @@ use ndk::configuration::UiModeNight;
 use anyhow::Result;
 use futures::channel::oneshot;
 use gpui::{
-    Action, AnyWindowHandle, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
+    Action, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds, ClipboardItem,
+    CursorStyle,
     DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Pixels,
     ActivityGuard, Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper,
     PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, RunnableVariant, Task, ThermalState,
@@ -227,6 +228,8 @@ pub(crate) struct PlatformHandlers {
     pub(crate) will_open_app_menu: Option<Box<dyn FnMut()>>,
     pub(crate) validate_app_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
     pub(crate) keyboard_layout_change: Option<Box<dyn FnMut()>>,
+    pub(crate) app_lifecycle: Option<Box<dyn FnMut(AppLifecyclePhase)>>,
+    pub(crate) memory_warning: Option<Box<dyn FnMut()>>,
 }
 
 pub(crate) struct AndroidCommon {
@@ -300,6 +303,8 @@ pub(crate) struct AndroidCommon {
     /// for the run loop to apply: gpui can't take callbacks then.
     pub(crate) deferred_primary_resync: bool,
     pub(crate) deferred_primary_focus: Option<bool>,
+    pub(crate) deferred_lifecycle: Vec<AppLifecyclePhase>,
+    pub(crate) deferred_memory_warning: bool,
     pub(crate) running: bool,
     /// Set by `quit()` so `run()` exits the process once the event loop ends.
     pub(crate) exit_requested: bool,
@@ -346,6 +351,8 @@ impl AndroidCommon {
             last_soft_keyboard_setting: None,
             deferred_primary_resync: false,
             deferred_primary_focus: None,
+            deferred_lifecycle: Vec::new(),
+            deferred_memory_warning: false,
             running: true,
             exit_requested: false,
         }
@@ -1238,10 +1245,32 @@ impl AndroidPlatform {
                     self.window_focus_changed(&window_ptr, focused);
                 }
             }
+            MainEvent::Start => self.notify_app_lifecycle(AppLifecyclePhase::Foreground),
+            MainEvent::Resume { .. } => self.notify_app_lifecycle(AppLifecyclePhase::Active),
+            MainEvent::Pause => self.notify_app_lifecycle(AppLifecyclePhase::Inactive),
+            MainEvent::Stop => self.notify_app_lifecycle(AppLifecyclePhase::Background),
+            MainEvent::LowMemory => self.notify_memory_warning(),
             MainEvent::Destroy => {
+                self.notify_app_lifecycle(AppLifecyclePhase::Disconnected);
                 self.common.borrow_mut().running = false;
             }
             _ => {}
+        }
+    }
+
+    fn notify_app_lifecycle(&self, phase: AppLifecyclePhase) {
+        let callback = self.common.borrow_mut().callbacks.app_lifecycle.take();
+        if let Some(mut callback) = callback {
+            callback(phase);
+            self.common.borrow_mut().callbacks.app_lifecycle = Some(callback);
+        }
+    }
+
+    fn notify_memory_warning(&self) {
+        let callback = self.common.borrow_mut().callbacks.memory_warning.take();
+        if let Some(mut callback) = callback {
+            callback();
+            self.common.borrow_mut().callbacks.memory_warning = Some(callback);
         }
     }
 
@@ -1283,18 +1312,50 @@ impl AndroidPlatform {
                 self.common.borrow_mut().deferred_primary_focus =
                     Some(matches!(event, MainEvent::GainedFocus));
             }
+            MainEvent::Start => self.defer_app_lifecycle(AppLifecyclePhase::Foreground),
+            MainEvent::Resume { .. } => self.defer_app_lifecycle(AppLifecyclePhase::Active),
+            MainEvent::Pause => self.defer_app_lifecycle(AppLifecyclePhase::Inactive),
+            MainEvent::Stop => self.defer_app_lifecycle(AppLifecyclePhase::Background),
+            MainEvent::LowMemory => self.common.borrow_mut().deferred_memory_warning = true,
             _ => {}
         }
     }
 
+    fn defer_app_lifecycle(&self, phase: AppLifecyclePhase) {
+        self.common.borrow_mut().deferred_lifecycle.push(phase);
+    }
+
+    fn sync_window_visibility(&self) {
+        let windows: Vec<crate::window::AndroidWindowStatePtr> = {
+            let common = self.common.borrow();
+            common
+                .window
+                .iter()
+                .chain(common.extra_windows.values())
+                .cloned()
+                .collect()
+        };
+        for window_ptr in windows {
+            window_ptr.sync_visibility();
+        }
+    }
+
     fn apply_deferred_main_events(&self) {
-        let (resync, focus) = {
+        let (resync, focus, lifecycle, memory_warning) = {
             let mut common = self.common.borrow_mut();
             (
                 std::mem::take(&mut common.deferred_primary_resync),
                 common.deferred_primary_focus.take(),
+                std::mem::take(&mut common.deferred_lifecycle),
+                std::mem::take(&mut common.deferred_memory_warning),
             )
         };
+        for phase in lifecycle {
+            self.notify_app_lifecycle(phase);
+        }
+        if memory_warning {
+            self.notify_memory_warning();
+        }
         if resync {
             self.resync_primary_window();
         }
@@ -1400,6 +1461,8 @@ impl Platform for AndroidPlatform {
             // when nothing is dirty, so calling on every iteration is
             // cheap; gating on FRAME_PENDING saves the dirty-bit check
             // when we know nothing's happened.
+            self.sync_window_visibility();
+
             if FRAME_PENDING.swap(false, Ordering::AcqRel) {
                 let (primary, extras) = {
                     let common = self.common.borrow();
@@ -1422,11 +1485,12 @@ impl Platform for AndroidPlatform {
                 }
                 IN_FRAME.set(true);
                 crate::frame_timing::paint_started();
-                if let Some(window_ptr) = primary {
-                    window_ptr.refresh();
-                }
-                for window_ptr in extras {
-                    window_ptr.refresh();
+                // Hidden windows have no surface to present to; gpui's
+                // contract is that the platform doesn't request their frames.
+                for window_ptr in primary.into_iter().chain(extras) {
+                    if window_ptr.is_visible() {
+                        window_ptr.refresh();
+                    }
                 }
                 crate::frame_timing::paint_finished();
                 IN_FRAME.set(false);
@@ -1610,6 +1674,12 @@ impl Platform for AndroidPlatform {
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.common.borrow_mut().callbacks.quit = Some(callback);
+    }
+    fn on_app_lifecycle(&self, callback: Box<dyn FnMut(AppLifecyclePhase)>) {
+        self.common.borrow_mut().callbacks.app_lifecycle = Some(callback);
+    }
+    fn on_memory_warning(&self, callback: Box<dyn FnMut()>) {
+        self.common.borrow_mut().callbacks.memory_warning = Some(callback);
     }
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.reopen = Some(callback);
