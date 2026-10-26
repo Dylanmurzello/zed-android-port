@@ -97,7 +97,7 @@ impl ClickTrackState {
         };
         self.last_click = Some((now, position, button, count));
         if count > 1 {
-            log::info!(
+            log::debug!(
                 "multi_click: source={source:?} count={count} window={window:?} \
                  slop={slop} button={button:?}"
             );
