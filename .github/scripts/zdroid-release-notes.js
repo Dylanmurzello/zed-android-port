@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 
-// Prints the "### Changes" section of a Zdroid release: the `Release Notes:`
-// bullets of every pull request merged into zdroid since the previous
-// release, each linked to its pull request. The bullets are parsed by
-// script/lib/release-notes.js, as Zed's script/draft-release-notes does. Zed
-// squash-merges, so its notes come from commit messages; this fork merges
-// pull requests with merge commits, so they come from the pull requests.
+// Prints a Zdroid release's notes, apart from the Verification section the
+// release workflow adds: Install from .github/release/install.md, the
+// optional Highlights from the tag message, Changes, and Caveats from
+// .github/release/caveats.md.
 //
-// Usage: zdroid-release-notes.js <tag> [<previous tag>]
-// The previous tag defaults to the release published before <tag>.
+// Changes lists the `Release Notes:` bullets of every pull request merged
+// into zdroid since the previous release, each linked to its pull request.
+// The bullets are parsed by script/lib/release-notes.js, as Zed's
+// script/draft-release-notes does. Zed squash-merges, so its notes come from
+// commit messages; this fork merges pull requests with merge commits, so
+// they come from the pull requests.
+//
+// Usage: zdroid-release-notes.js <tag> --version <X.Y.Z> [--previous <tag>]
+//   [--highlights <file>]
+// --previous defaults to the release published before <tag>.
 // Environment: GITHUB_REPOSITORY (owner/name); GH_TOKEN, optional.
 
+const fs = require("fs");
 const path = require("path");
+const { parseArgs } = require("util");
 const { releaseNotesSection, releaseNotesEntries } = require(
   path.join(__dirname, "../../script/lib/release-notes.js"),
 );
@@ -98,13 +106,27 @@ async function mergedPullRequests(fromSha, toSha) {
   return numbers.reverse();
 }
 
+function readReleaseFile(name) {
+  return fs.readFileSync(path.join(__dirname, "../release", name), "utf8").trim();
+}
+
 async function main() {
-  const [tag, previousTagArgument] = process.argv.slice(2);
-  if (!tag || !repository) {
-    console.error("Usage: GITHUB_REPOSITORY=owner/name zdroid-release-notes.js <tag> [<previous tag>]");
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      version: { type: "string" },
+      previous: { type: "string" },
+      highlights: { type: "string" },
+    },
+  });
+  const [tag] = positionals;
+  if (!tag || !values.version || !repository) {
+    console.error(
+      "Usage: GITHUB_REPOSITORY=owner/name zdroid-release-notes.js <tag> --version <X.Y.Z> [--previous <tag>] [--highlights <file>]",
+    );
     process.exit(1);
   }
-  const previousTag = previousTagArgument ?? (await previousRelease(tag));
+  const previousTag = values.previous ?? (await previousRelease(tag));
   const numbers = await mergedPullRequests(
     await resolveCommit(previousTag),
     await resolveCommit(tag),
@@ -126,13 +148,26 @@ async function main() {
     }
   }
 
-  console.log("### Changes\n");
-  if (notes.length === 0) {
-    const compareUrl = `https://github.com/${repository}/compare/${previousTag}...${tag}`;
-    console.log(`No user-facing changes since ${previousTag}. [View the commits](${compareUrl}).`);
-  } else {
-    console.log(notes.join("\n"));
-  }
+  const compareUrl = `https://github.com/${repository}/compare/${previousTag}...${tag}`;
+  const highlights = values.highlights ? fs.readFileSync(values.highlights, "utf8").trim() : "";
+  const caveats = readReleaseFile("caveats.md");
+  const sections = [
+    ["Install", readReleaseFile("install.md").replaceAll("{version}", values.version)],
+    ["Highlights", highlights],
+    [
+      "Changes",
+      notes.length > 0
+        ? notes.join("\n")
+        : `No user-facing changes since ${previousTag}. [View the commits](${compareUrl}).`,
+    ],
+    ["Caveats", caveats],
+  ];
+  console.log(
+    sections
+      .filter(([, body]) => body !== "")
+      .map(([heading, body]) => `### ${heading}\n\n${body}`)
+      .join("\n\n"),
+  );
 }
 
 main().catch((error) => {
