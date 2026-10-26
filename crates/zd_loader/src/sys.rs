@@ -14,6 +14,19 @@ pub const O_CREAT: usize = 0o100;
 pub const O_APPEND: usize = 0o2000;
 pub const O_CLOEXEC: usize = 0o2000000;
 pub const O_ACCMODE: usize = 0o3;
+pub const O_EXCL: usize = 0o200;
+
+pub const AT_EMPTY_PATH: usize = 0x1000;
+pub const X_OK: usize = 1;
+
+pub const S_IFMT: u32 = 0o170000;
+pub const S_IFREG: u32 = 0o100000;
+pub const S_IFCHR: u32 = 0o020000;
+pub const S_IFBLK: u32 = 0o060000;
+
+pub const AF_UNIX: u16 = 1;
+/// `sizeof(sun_path)` in `struct sockaddr_un`.
+pub const SUN_PATH_MAX: usize = 108;
 
 pub const F_SETFD: usize = 2;
 pub const MFD_CLOEXEC: usize = 1;
@@ -29,6 +42,7 @@ pub const MAP_FIXED: usize = 0x10;
 pub const MAP_ANONYMOUS: usize = 0x20;
 
 pub const SIGSYS: usize = 31;
+pub const SIGSYS_BIT: u64 = 1 << (SIGSYS - 1);
 pub const SIG_UNBLOCK: usize = 1;
 pub const SA_SIGINFO: u64 = 0x4;
 pub const SA_RESTART: u64 = 0x1000_0000;
@@ -42,9 +56,14 @@ pub const SECCOMP_MODE_FILTER: usize = 2;
 pub const SECCOMP_SET_MODE_FILTER: usize = 1;
 pub const SECCOMP_FILTER_FLAG_TSYNC: usize = 1;
 
+pub const EPERM: i32 = 1;
+pub const ENOENT: i32 = 2;
+pub const ENOEXEC: i32 = 8;
+pub const EBADF: i32 = 9;
 pub const EACCES: i32 = 13;
 pub const EFAULT: i32 = 14;
 pub const EINVAL: i32 = 22;
+pub const ERANGE: i32 = 34;
 pub const ENAMETOOLONG: i32 = 36;
 pub const ENOSYS: i32 = 38;
 
@@ -178,6 +197,59 @@ pub fn prctl(option: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> Resul
 
 pub fn seccomp(operation: usize, flags: usize, args: usize) -> Result<usize, i32> {
     check(unsafe { syscall6(nr::SECCOMP, operation, flags, args, 0, 0, 0) })
+}
+
+pub fn read(fd: i32, buffer: &mut [u8]) -> Result<usize, i32> {
+    check(unsafe { syscall6(nr::READ, fd as usize, buffer.as_mut_ptr() as usize, buffer.len(), 0, 0, 0) })
+}
+
+pub fn munmap(addr: usize, length: usize) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::MUNMAP, addr, length, 0, 0, 0, 0) }).map(|_| ())
+}
+
+/// `path` must be NUL-terminated. Returns `st_mode`.
+pub fn stat_mode(dirfd: isize, path: *const u8, flags: usize) -> Result<u32, i32> {
+    let mut buffer = [0u8; 128];
+    check(unsafe {
+        syscall6(
+            nr::NEWFSTATAT,
+            dirfd as usize,
+            path as usize,
+            buffer.as_mut_ptr() as usize,
+            flags,
+            0,
+            0,
+        )
+    })?;
+    Ok(u32::from_le_bytes([buffer[16], buffer[17], buffer[18], buffer[19]]))
+}
+
+pub fn faccessat(dirfd: isize, path: *const u8, mode: usize) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::FACCESSAT, dirfd as usize, path as usize, mode, 0, 0, 0) })
+        .map(|_| ())
+}
+
+/// Host working directory, NUL-terminated; returns the length without
+/// the NUL.
+pub fn getcwd(buffer: &mut [u8]) -> Result<usize, i32> {
+    let len = check(unsafe { syscall6(nr::GETCWD, buffer.as_mut_ptr() as usize, buffer.len(), 0, 0, 0, 0) })?;
+    Ok(len.saturating_sub(1))
+}
+
+pub fn getuid() -> u32 {
+    unsafe { syscall6(nr::GETUID, 0, 0, 0, 0, 0, 0) as u32 }
+}
+
+pub fn getgid() -> u32 {
+    unsafe { syscall6(nr::GETGID, 0, 0, 0, 0, 0, 0) as u32 }
+}
+
+/// Only returns on failure, with the errno.
+pub fn execve(path: *const u8, argv: *const *const u8, envp: *const *const u8) -> i32 {
+    match check(unsafe { syscall6(nr::EXECVE, path as usize, argv as usize, envp as usize, 0, 0, 0) }) {
+        Ok(_) => 0,
+        Err(errno) => errno,
+    }
 }
 
 pub fn memfd_create(name: *const u8, flags: usize) -> Result<i32, i32> {

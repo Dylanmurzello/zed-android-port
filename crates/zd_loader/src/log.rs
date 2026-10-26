@@ -98,13 +98,18 @@ pub fn itoa(buffer: &mut [u8; 20], mut value: u64) -> &[u8] {
 /// Report a fatal condition and exit with 126, the shell convention for
 /// "found but could not run".
 pub fn abort(args: fmt::Arguments<'_>) -> ! {
+    abort_code(126, args)
+}
+
+/// Report a fatal condition and exit with `code` (127 for "not found").
+pub fn abort_code(code: usize, args: fmt::Arguments<'_>) -> ! {
     let mut line = Line::new();
     line.push(b"zdload: ");
     if fmt::write(&mut line, args).is_err() {
         line.push(b"(unformattable)");
     }
     line.emit();
-    sys::exit_group(126)
+    sys::exit_group(code)
 }
 
 #[macro_export]

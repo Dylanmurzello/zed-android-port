@@ -12,6 +12,7 @@
 #[macro_use]
 mod log;
 mod config;
+mod exec;
 mod handler;
 mod load;
 mod mem;
@@ -20,10 +21,12 @@ mod sys;
 
 use core::arch::{asm, global_asm};
 
+use zd_engine_core::shebang::{self, MAX_DEPTH};
 use zd_engine_core::stack::{
-    AT_BASE, AT_ENTRY, AT_EXECFN, AT_NULL, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AuxEntry,
-    VectorWriter, auxv_get,
+    AT_BASE, AT_EGID, AT_ENTRY, AT_EUID, AT_EXECFN, AT_GID, AT_NULL, AT_PAGESZ, AT_PHDR,
+    AT_PHENT, AT_PHNUM, AT_UID, AuxEntry, VectorWriter, auxv_get,
 };
+use zd_engine_core::translate::Translated;
 use zd_engine_core::{LOADER_SELF_NAMES, elf::PHDR_SIZE, path};
 
 use crate::log::Bytes;
@@ -31,6 +34,10 @@ use crate::log::Bytes;
 /// Bytes `_start` leaves between the kernel's vector and the loader's
 /// first frame; the guest's vector is rebuilt in that gap.
 pub const VECTOR_GAP: usize = 0x40000;
+
+/// Shell to run when the loader is invoked under one of its own names
+/// with no program (the integrated terminal's `$SHELL`).
+const DEFAULT_SHELL: &[u8] = b"/bin/bash";
 
 global_asm!(
     ".globl _start",
@@ -123,11 +130,14 @@ pub unsafe fn cstr<'a>(pointer: *const u8) -> &'a [u8] {
     }
 }
 
+/// Room for `[interpreter, argument]` per `#!` level plus the program.
+const MAX_LEADING: usize = 2 * MAX_DEPTH + 2;
+
 struct Invocation {
-    /// Guest program path.
-    program: &'static [u8],
-    /// String the guest sees as its `argv[0]`.
-    argv0: *const u8,
+    /// Strings that open the guest's argv: its `argv[0]`, or after a
+    /// `#!` chain, interpreters, their arguments and the script path.
+    leading: [*const u8; MAX_LEADING],
+    leading_len: usize,
     /// `argv` index where the guest's own arguments start.
     first_arg: usize,
     /// Explicit form: loader entries precede the guest's in argv, so the
@@ -136,55 +146,108 @@ struct Invocation {
     selftest: bool,
 }
 
-/// Two ways in: `ZD_PROGRAM` set means the kernel exec'd the loader with
-/// the guest's own argv (the supervisor's form, exact `cmdline`); else
-/// the loader's basename must be one of its own names and the program
-/// follows its flags (`zdload [--selftest] [-0 argv0] <program> ...`).
-fn parse_invocation(stack: &InitialStack) -> Invocation {
+/// Three ways in. `ZD_PROGRAM` set: the kernel exec'd the loader with the
+/// guest's own argv (the supervisor's form, exact `cmdline`). The
+/// loader's own basename: `zdload [--selftest] [-0 argv0] <program>
+/// args...`, or with no program (or a leading `-` flag) the default shell
+/// with those flags, as `$SHELL` is invoked. Any other basename: a
+/// symlink-farm entry, resolved on the guest `PATH`.
+fn resolve_invocation(stack: &InitialStack) -> Invocation {
     let config = config::get();
+    let mut invocation = Invocation {
+        leading: [core::ptr::null(); MAX_LEADING],
+        leading_len: 1,
+        first_arg: 1,
+        compact: false,
+        selftest: config.selftest,
+    };
     if !config.program.is_empty() {
-        return Invocation {
-            program: config.program.as_bytes(),
-            argv0: stack.argv.first().copied().unwrap_or(config.program.as_ptr()),
-            first_arg: 1,
-            compact: false,
-            selftest: config.selftest,
-        };
+        set_level0(config.program.as_bytes());
+        invocation.leading[0] = stack
+            .argv
+            .first()
+            .copied()
+            .unwrap_or(config::get().levels[0].path.as_ptr());
+        return invocation;
     }
     let argv0 = stack.arg(0).unwrap_or(b"");
     let name = path::basename(argv0);
-    if !LOADER_SELF_NAMES.iter().any(|self_name| self_name.as_bytes() == name) {
-        abort!(
-            "invoked as {}: symlink-farm dispatch needs the guest PATH search, which is not in this build",
-            Bytes(name)
-        );
-    }
-    let mut index = 1usize;
-    let mut selftest = config.selftest;
-    let mut argv0_override: Option<*const u8> = None;
-    loop {
-        match stack.arg(index) {
-            Some(b"--selftest") => {
-                selftest = true;
-                index += 1;
+    if LOADER_SELF_NAMES.iter().any(|self_name| self_name.as_bytes() == name) {
+        let mut index = 1usize;
+        let mut argv0_override: Option<*const u8> = None;
+        loop {
+            match stack.arg(index) {
+                Some(b"--selftest") => {
+                    invocation.selftest = true;
+                    index += 1;
+                }
+                Some(b"-0") => {
+                    argv0_override = stack.argv.get(index + 1).copied();
+                    index += 2;
+                }
+                _ => break,
             }
-            Some(b"-0") => {
-                argv0_override = stack.argv.get(index + 1).copied();
-                index += 2;
-            }
-            _ => break,
         }
+        match (stack.arg(index), stack.argv.get(index)) {
+            (Some(program), Some(&program_pointer)) if !program.starts_with(b"-") => {
+                set_level0(program);
+                invocation.leading[0] = argv0_override.unwrap_or(program_pointer);
+                invocation.first_arg = index + 1;
+                invocation.compact = true;
+            }
+            _ => {
+                set_level0(DEFAULT_SHELL);
+                invocation.leading[0] = argv0_override.unwrap_or(config::get().levels[0].path.as_ptr());
+                invocation.first_arg = index;
+            }
+        }
+        return invocation;
     }
-    let (Some(program), Some(&program_pointer)) = (stack.arg(index), stack.argv.get(index)) else {
-        abort!("usage: {} [--selftest] [-0 argv0] <guest program> [args...]", Bytes(name));
+    if !search_guest_path(name) {
+        log::abort_code(127, format_args!("{}: command not found on the guest PATH", Bytes(name)));
+    }
+    invocation.leading[0] = stack.argv[0];
+    invocation
+}
+
+fn set_level0(program: &[u8]) {
+    // SAFETY: single-threaded startup.
+    let config = unsafe { config::get_mut() };
+    if config.levels[0].path.set(program).is_err() {
+        abort!("program path too long");
+    }
+}
+
+/// Resolve a bare name on the guest `PATH` into `levels[0].path`.
+fn search_guest_path(name: &[u8]) -> bool {
+    let Some(translator) = config::translator() else {
+        return false;
     };
-    Invocation {
-        program,
-        argv0: argv0_override.unwrap_or(program_pointer),
-        first_arg: index + 1,
-        compact: true,
-        selftest,
+    let guest_path = config::get().guest_path.as_bytes();
+    let mut candidate = [0u8; path::MAX_PATH];
+    let mut host = [0u8; path::MAX_PATH];
+    for directory in guest_path.split(|&byte| byte == b':') {
+        let directory: &[u8] = if directory.is_empty() { b"." } else { directory };
+        let mut writer = path::Writer::new(&mut candidate);
+        if writer.push(directory).is_err() || writer.push_component(name).is_err() {
+            continue;
+        }
+        let len = writer.finish();
+        let pointer = match translator.guest_to_host(&candidate[..len], &mut host) {
+            Ok(Translated::Host(_)) => host.as_ptr(),
+            Ok(Translated::Relative) => candidate.as_ptr(),
+            _ => continue,
+        };
+        let Ok(mode) = sys::stat_mode(sys::AT_FDCWD, pointer, 0) else {
+            continue;
+        };
+        if mode & sys::S_IFMT != sys::S_IFREG || sys::faccessat(sys::AT_FDCWD, pointer, sys::X_OK).is_err() {
+            continue;
+        }
+        set_level0(&candidate[..len]);
+        return true;
     }
+    false
 }
 
 #[unsafe(no_mangle)]
@@ -206,8 +269,7 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
     if let Err(error) = config::init(stack.env_entries(), page_size) {
         abort!("{error}");
     }
-    let invocation = parse_invocation(&stack);
-    let program = invocation.program;
+    let mut invocation = resolve_invocation(&stack);
 
     let filter = match handler::ensure_filter() {
         Ok(state) => state,
@@ -218,15 +280,12 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
         ),
     };
 
+    let program = config::get().levels[0].path.as_bytes();
     if invocation.selftest {
         selftest::preamble(&stack, &filter, program);
     }
     let started = selftest::now_ns();
-    let loaded = match load::load(program) {
-        Ok(loaded) => loaded,
-        Err(error) => abort!("cannot load {}: {error}", Bytes(program)),
-    };
-    config::set_guest_exe(program);
+    let loaded = load_chain(&mut invocation);
     if invocation.selftest {
         selftest::report_load(program, &loaded, started);
     }
@@ -237,20 +296,97 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
     unsafe { jump(loaded.start_address(), new_sp) }
 }
 
+/// Open `levels[0].path`, follow `#!` lines (each one prepends the
+/// interpreter and its argument to the guest's argv and makes the file
+/// just opened the next argument, as the kernel does), and map the ELF
+/// at the end of the chain.
+fn load_chain(invocation: &mut Invocation) -> load::Loaded {
+    let Some(translator) = config::translator() else {
+        abort!("no translator");
+    };
+    let mut depth = 0usize;
+    loop {
+        let program = config::get().levels[depth].path.as_bytes();
+        let mut host = [0u8; path::MAX_PATH];
+        let fd = match load::open_guest(translator, program, &mut host) {
+            Ok(fd) => fd,
+            Err(load::LoadError::Open(errno)) => log::abort_code(
+                if errno == sys::ENOENT { 127 } else { 126 },
+                format_args!("cannot open {}: errno {errno}", Bytes(program)),
+            ),
+            Err(error) => abort!("cannot open {}: {error}", Bytes(program)),
+        };
+        let mut head = [0u8; shebang::LINE_LIMIT];
+        let head_len = match load::read_head(fd, &mut head) {
+            Ok(len) => len,
+            Err(error) => abort!("cannot read {}: {error}", Bytes(program)),
+        };
+        match shebang::parse(&head[..head_len]) {
+            Some(script) => {
+                load::close_quietly(fd);
+                if depth == MAX_DEPTH {
+                    log::abort_code(126, format_args!("{}: too many levels of #!", Bytes(program)));
+                }
+                push_level(invocation, depth, &script);
+                depth += 1;
+            }
+            None => {
+                let loaded = load::load_fd(fd);
+                load::close_quietly(fd);
+                let loaded = match loaded {
+                    Ok(loaded) => loaded,
+                    Err(error) => abort!("cannot load {}: {error}", Bytes(program)),
+                };
+                config::set_guest_exe(program);
+                return loaded;
+            }
+        }
+    }
+}
+
+/// `#!interp arg` at `levels[depth]`: argv becomes
+/// `[interp, arg?, levels[depth].path, <previous argv minus its first>]`.
+fn push_level(invocation: &mut Invocation, depth: usize, script: &shebang::Shebang<'_>) {
+    // SAFETY: single-threaded startup.
+    let config = unsafe { config::get_mut() };
+    let level = &mut config.levels[depth + 1];
+    if level.path.set(script.interpreter).is_err()
+        || level.argument.set(script.argument.unwrap_or(b"")).is_err()
+    {
+        abort!("#! line too long");
+    }
+    let added = if script.argument.is_some() { 2 } else { 1 };
+    if invocation.leading_len + added > MAX_LEADING {
+        abort!("#! chain too deep");
+    }
+    let leading = &mut invocation.leading;
+    for index in (1..invocation.leading_len).rev() {
+        leading[index + added] = leading[index];
+    }
+    leading[0] = level.path.as_ptr();
+    if script.argument.is_some() {
+        leading[1] = level.argument.as_ptr();
+    }
+    leading[added] = config.levels[depth].path.as_ptr();
+    invocation.leading_len += added;
+    // A `#!` chain mixes strings from loader .bss into argv; those never
+    // came from the kernel's argument area, so it cannot be compacted.
+    invocation.compact = false;
+}
+
 /// Write the guest's `[argc][argv][0][envp][0][auxv]` into the gap below
 /// the kernel's vector and return the guest's initial stack pointer.
 ///
-/// The argument strings are compacted in place as well: the kernel
-/// reports `[arg_start, arg_end)` as `/proc/<pid>/cmdline`, and that
-/// area still spells the loader's own argv. Moving the guest's strings
-/// to its front (every move goes to a lower address, in order, so no
-/// source is clobbered before it is copied) makes the process look like
-/// the guest to `ps` and to programs that re-read their command line;
-/// the unused tail is NUL-filled. Environment strings stay where they
-/// are.
+/// In the explicit form the argument strings are compacted in place as
+/// well: the kernel reports `[arg_start, arg_end)` as
+/// `/proc/<pid>/cmdline`, and that area spells the loader's own argv.
+/// Moving the guest's strings to its front (every move goes to a lower
+/// address, in order, so no source is clobbered before it is copied)
+/// makes the process look like the guest to `ps`; the unused tail is
+/// NUL-filled. Environment strings stay where they are.
 fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &load::Loaded) -> usize {
     let config = config::get();
-    let argc = 1 + stack.argv.len().saturating_sub(invocation.first_arg);
+    let argc = invocation.leading_len + stack.argv.len().saturating_sub(invocation.first_arg);
     let mut envc = 0usize;
     for entry in stack.env_entries() {
         if !config::hidden_from_guest(entry) {
@@ -269,12 +405,13 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
     // kernel's vector; nothing else uses it.
     let out = unsafe { core::slice::from_raw_parts_mut(new_sp as *mut u64, words) };
 
-    let compact = invocation.compact && !stack.argv.is_empty() && {
+    let compact = invocation.compact && invocation.leading_len == 1 && !stack.argv.is_empty() && {
         let arg_start = stack.argv[0] as usize;
         let arg_end = argument_area_end(stack);
+        let first = invocation.leading[0] as usize;
         // SAFETY: kernel-provided argument strings.
         let guest_len: usize = unsafe {
-            cstr(invocation.argv0).len()
+            cstr(invocation.leading[0]).len()
                 + 1
                 + stack
                     .argv
@@ -283,7 +420,7 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
                     .map(|&argument| cstr(argument).len() + 1)
                     .sum::<usize>()
         };
-        guest_len <= arg_end - arg_start
+        first >= arg_start && first < arg_end && guest_len <= arg_end - arg_start
     };
 
     let mut write = || -> Result<(), zd_engine_core::stack::StackError> {
@@ -302,7 +439,9 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
         };
 
         let mut writer = VectorWriter::new(out, argc)?;
-        writer.push_arg(place(invocation.argv0))?;
+        for &pointer in &invocation.leading[..invocation.leading_len] {
+            writer.push_arg(place(pointer))?;
+        }
         for &argument in stack.argv.iter().skip(invocation.first_arg) {
             writer.push_arg(place(argument))?;
         }
@@ -323,9 +462,9 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
             // SAFETY: the tail of the argument area.
             unsafe { core::ptr::write_bytes(cursor as *mut u8, 0, arg_end - cursor) };
         }
-        // The recorded guest path lives in loader `.bss`, which outlives
-        // the argument strings that compaction may have moved.
-        let execfn = config.guest_exe.as_ptr() as u64;
+        // AT_EXECFN is the path asked for (the script of a `#!` chain);
+        // it lives in loader .bss, which outlives moved argument strings.
+        let execfn = config.levels[0].path.as_ptr() as u64;
         for &[key, value] in stack.auxv {
             let value = match key {
                 AT_PHDR => loaded.phdr,
@@ -334,6 +473,7 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
                 AT_ENTRY => loaded.entry,
                 AT_BASE => loaded.interp_base,
                 AT_EXECFN => execfn,
+                AT_UID | AT_EUID | AT_GID | AT_EGID if config.fake_root => 0,
                 _ => value,
             };
             writer.push_aux([key, value])?;

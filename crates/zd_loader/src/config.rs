@@ -8,8 +8,9 @@ use core::fmt;
 use zd_engine_core::bindings::{Bindings, BindingsError};
 use zd_engine_core::path::{MAX_PATH, is_absolute};
 use zd_engine_core::stack::{env_key, env_value};
+use zd_engine_core::shebang::MAX_DEPTH;
 use zd_engine_core::translate::Translator;
-use zd_engine_core::{LIST_SEPARATOR, env};
+use zd_engine_core::{DEFAULT_GUEST_PATH, LIST_SEPARATOR, env};
 
 use crate::sys;
 
@@ -117,10 +118,39 @@ pub fn hidden_from_guest(entry: &[u8]) -> bool {
     env::PER_EXEC.iter().any(|name| name.as_bytes() == key) || get().guest_env.overrides(entry)
 }
 
+/// One step of a `#!` chain: the file exec'd at that level and the
+/// optional interpreter argument that brought us there.
+pub struct Level {
+    pub path: Buf,
+    pub argument: Buf,
+}
+
+impl Level {
+    pub const fn new() -> Self {
+        Self {
+            path: Buf::new(),
+            argument: Buf::new(),
+        }
+    }
+}
+
+/// Persistent engine variables, in the order they are re-injected.
+pub const ENGINE_KEYS: [&str; 5] = [env::ROOTFS, env::BINDS, env::FAKE_ROOT, env::LOG, env::GUEST_ENV];
+
 pub struct Config {
     pub rootfs: Buf,
     pub binds: Buf,
     pub log: Buf,
+    /// Full `KEY=VALUE` strings of [`ENGINE_KEYS`] as received, for
+    /// re-injection into children that dropped them.
+    pub engine_entries: [Buf; 5],
+    pub real_uid: u32,
+    pub real_gid: u32,
+    /// Guest `PATH` used for symlink-farm lookups.
+    pub guest_path: Buf,
+    /// Program path at each `#!` level; `levels[0]` is what was asked
+    /// for, the last used level is the ELF actually mapped.
+    pub levels: [Level; MAX_DEPTH + 1],
     /// Guest program named by `ZD_PROGRAM`, when exec'd with the guest's
     /// own argv.
     pub program: Buf,
@@ -147,6 +177,11 @@ impl Config {
             rootfs: Buf::new(),
             binds: Buf::new(),
             log: Buf::new(),
+            engine_entries: [const { Buf::new() }; 5],
+            real_uid: 0,
+            real_gid: 0,
+            guest_path: Buf::new(),
+            levels: [const { Level::new() }; MAX_DEPTH + 1],
             program: Buf::new(),
             selftest: false,
             auxv_ptr: 0,
@@ -202,7 +237,15 @@ pub fn init(
     // SAFETY: single-threaded startup; nothing else holds a reference.
     let config = unsafe { &mut *config };
     config.page_size = page_size;
+    config.real_uid = sys::getuid();
+    config.real_gid = sys::getgid();
+    let mut inherited_path: Option<&'static [u8]> = None;
     for entry in entries {
+        for (index, key) in ENGINE_KEYS.iter().enumerate() {
+            if env_value(entry, key.as_bytes()).is_some() {
+                config.engine_entries[index].set(entry)?;
+            }
+        }
         if let Some(value) = env_value(entry, env::ROOTFS.as_bytes()) {
             config.rootfs.set(value)?;
         } else if let Some(value) = env_value(entry, env::BINDS.as_bytes()) {
@@ -211,6 +254,8 @@ pub fn init(
             config.log.set(value)?;
         } else if let Some(value) = env_value(entry, env::FAKE_ROOT.as_bytes()) {
             config.fake_root = value == b"1";
+        } else if let Some(value) = env_value(entry, b"PATH") {
+            inherited_path = Some(value);
         } else if let Some(value) = env_value(entry, env::PROGRAM.as_bytes()) {
             config.program.set(value)?;
         } else if let Some(value) = env_value(entry, env::SELFTEST.as_bytes()) {
@@ -222,6 +267,21 @@ pub fn init(
                 }
             }
         }
+    }
+    // The guest's PATH: the override wins, then whatever came in, then
+    // the distro default.
+    let override_path = config
+        .guest_env
+        .entries()
+        .find_map(|entry| env_value(entry, b"PATH"))
+        .map(|value| value.as_ptr_range());
+    match override_path {
+        Some(range) => {
+            // SAFETY: a slice of the guest env buffer in this same static.
+            let value = unsafe { core::slice::from_raw_parts(range.start, range.end as usize - range.start as usize) };
+            config.guest_path.set(value)?;
+        }
+        None => config.guest_path.set(inherited_path.unwrap_or(DEFAULT_GUEST_PATH.as_bytes()))?,
     }
     if config.rootfs.is_empty() {
         return Err(InitError::MissingRootfs);
@@ -245,6 +305,15 @@ pub fn init(
     bindings.parse_spec(binds).map_err(InitError::Bindings)?;
     config.translator = Some(Translator::new(rootfs, bindings));
     Ok(())
+}
+
+/// Mutable access during single-threaded startup (level bookkeeping).
+///
+/// # Safety
+/// Only before the guest starts, and never while a `get()` reference
+/// is alive.
+pub unsafe fn get_mut() -> &'static mut Config {
+    unsafe { &mut *CONFIG.get() }
 }
 
 /// Record where the guest's auxiliary vector lives (inside the vector

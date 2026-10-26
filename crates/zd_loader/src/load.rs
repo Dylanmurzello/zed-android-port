@@ -79,16 +79,12 @@ struct Mapped {
     interp_len: usize,
 }
 
-pub fn load(guest_path: &[u8]) -> Result<Loaded, LoadError> {
+/// Map the executable behind `fd` and, when it names one, its dynamic
+/// linker (opened through the translator like any guest path).
+pub fn load_fd(fd: i32) -> Result<Loaded, LoadError> {
     let translator = config::translator().ok_or(LoadError::Translate)?;
     let page = config::get().page_size as u64;
-    let mut host = [0u8; MAX_PATH];
-
-    let fd = open_guest(translator, guest_path, &mut host)?;
-    let exe = map_object(fd, page);
-    close_quietly(fd);
-    let exe = exe?;
-
+    let exe = map_object(fd, page)?;
     let mut loaded = Loaded {
         entry: exe.entry,
         base: exe.base,
@@ -100,6 +96,7 @@ pub fn load(guest_path: &[u8]) -> Result<Loaded, LoadError> {
         interp_entry: 0,
     };
     if exe.interp_len > 0 {
+        let mut host = [0u8; MAX_PATH];
         let fd = open_guest(translator, &exe.interp[..exe.interp_len], &mut host)?;
         let interp = map_object(fd, page);
         close_quietly(fd);
@@ -108,6 +105,17 @@ pub fn load(guest_path: &[u8]) -> Result<Loaded, LoadError> {
         loaded.interp_entry = interp.entry;
     }
     Ok(loaded)
+}
+
+/// First bytes of a file, for the `#!` check.
+pub fn read_head(fd: i32, head: &mut [u8]) -> Result<usize, LoadError> {
+    sys::pread64(fd, head, 0).map_err(LoadError::Read)
+}
+
+pub fn close_quietly(fd: i32) {
+    if let Err(_errno) = sys::close(fd) {
+        // The mapping already holds its own reference to the file.
+    }
 }
 
 /// Open a guest path for reading. Needs a NUL-terminated copy either
@@ -137,12 +145,6 @@ pub fn open_guest(
         0,
     )
     .map_err(LoadError::Open)
-}
-
-fn close_quietly(fd: i32) {
-    if let Err(_errno) = sys::close(fd) {
-        // The mapping already holds its own reference to the file.
-    }
 }
 
 fn read_exact(fd: i32, buffer: &mut [u8], offset: u64) -> Result<(), LoadError> {
