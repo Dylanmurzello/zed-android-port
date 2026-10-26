@@ -38,7 +38,7 @@
 //! work from the drain handler is the safe choice.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -69,6 +69,12 @@ pub(crate) enum ExtraWindowEvent {
     },
     /// `surfaceDestroyed` — Vulkan surface should be torn down.
     SurfaceDestroyed { window_id: u64 },
+    /// A `surfaceCreated` after the first, once the Activity was stopped
+    /// (screen off, minimized, covered) and started again.
+    SurfaceCreated {
+        window_id: u64,
+        native_window: NativeWindow,
+    },
     /// OS-initiated Activity destruction (user clicked the chrome X, or
     /// system swiped the task off Recents). The drain handler must invoke
     /// the gpui-registered `on_close` callback to drive `remove_window`,
@@ -228,10 +234,18 @@ pub(crate) struct LaunchBounds {
 /// responsible for subsequently creating an `AndroidWindow` and registering
 /// it with [`crate::platform::AndroidPlatform`] so future
 /// `ExtraWindowEvent`s for this id route correctly.
+///
+/// `wait` runs between checks, for at most the given time. It must handle
+/// the main Activity's lifecycle commands: when the new Activity covers the
+/// main one, Android pauses the main Activity first, and GameActivity holds
+/// the UI thread until this thread acknowledges the pause. The new Activity
+/// starts on that same UI thread, so without the acknowledgement its surface
+/// only arrives once GameActivity gives up, after 2 seconds.
 pub(crate) fn create_extra_window_blocking(
     android_app: &AndroidApp,
     window_id: u64,
     bounds: Option<LaunchBounds>,
+    mut wait: impl FnMut(Duration),
 ) -> Result<NativeWindow> {
     let (tx, rx) = oneshot::channel();
     {
@@ -248,8 +262,7 @@ pub(crate) fn create_extra_window_blocking(
     }
     // `oneshot::Receiver` is a `Future`. Drive it to completion synchronously
     // with a hard timeout so a stalled Activity launch can't lock the game
-    // thread forever (cold Activity start is normally 200-400ms; cap at
-    // 500ms — see `ACTIVITY_LAUNCH_TIMEOUT`).
+    // thread forever (see `ACTIVITY_LAUNCH_TIMEOUT`).
     //
     // `try_recv` returns: `Ok(Some(v))` value received; `Ok(None)` not sent
     // yet, channel still open; `Err(Canceled)` sender dropped without sending.
@@ -273,9 +286,7 @@ pub(crate) fn create_extra_window_blocking(
                 ACTIVITY_LAUNCH_TIMEOUT.as_millis()
             );
         }
-        // Yield briefly. We can't park the future cleanly without an executor,
-        // so a short sleep is the simplest correct choice.
-        std::thread::sleep(Duration::from_millis(8));
+        wait(Duration::from_millis(8));
     }
 }
 
@@ -683,18 +694,18 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<
         return;
     };
     let pending = pending_table().as_mut().and_then(|m| m.remove(&window_id));
-    if let Some(tx) = pending {
-        let _ = tx.send(native_window);
-    } else {
-        // Re-create after a config-change recreation should NOT happen with
-        // the exhaustive `configChanges` declared on `ExtraWindowActivity`,
-        // so this branch is a safety net only. Drop the NativeWindow; future
-        // re-attach support lives in L7c.
-        log::warn!(
-            "multi_window: surfaceCreated re-arrived for windowId={window_id} \
-             with no pending sender — config-change recreation? dropping surface"
-        );
-        drop(native_window);
+    match pending {
+        Some(tx) => {
+            if tx.send(native_window).is_err() {
+                log::warn!(
+                    "multi_window: windowId={window_id} stopped waiting for its first surface"
+                );
+            }
+        }
+        None => dispatch_event(ExtraWindowEvent::SurfaceCreated {
+            window_id,
+            native_window,
+        }),
     }
 }
 
