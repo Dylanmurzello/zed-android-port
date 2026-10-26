@@ -592,6 +592,13 @@ fn android_main(app: AndroidApp) {
         );
     });
 
+    // The runtime's TMPDIR may not exist yet (a chroot data dir before its
+    // first use), and tempfiles such as SSH's askpass socket go there.
+    let temp_dir = std::env::temp_dir();
+    if let Err(error) = std::fs::create_dir_all(&temp_dir) {
+        log::warn!("zed_android: can't create {}: {error}", temp_dir.display());
+    }
+
     // Publish the per-adapter terminal env overlay so
     // `crates/terminal/src/terminal.rs` can apply it when the PTY
     // spawns. Idempotent: subsequent android_main re-entries (activity

@@ -475,11 +475,18 @@ impl TouchState {
 
                 // Not a 2-finger tap. Cancel any in-flight Left from the
                 // original DOWN so the editor doesn't see a stuck button
-                // while we proceed into scroll classification.
+                // while we proceed into scroll classification. It releases
+                // where it went down: with no move in between, the editor
+                // takes a release elsewhere for a drag that never started.
                 if matches!(self.phase, GesturePhase::SingleFingerDown) {
+                    let anchor = self
+                        .pointers
+                        .get(&primary_id)
+                        .map(|s| s.down_pos)
+                        .unwrap_or(primary_pos);
                     out.push(PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
-                        position: primary_pos,
+                        position: anchor,
                         modifiers,
                         click_count: 0,
                     }));
@@ -714,7 +721,15 @@ impl TouchState {
             TouchAction::Up => {
                 // Final finger lifted. Resolve the gesture per the
                 // phase we're closing out.
-                let position = event.pointers[0].pos;
+                let mut position = event.pointers[0].pos;
+                // A tap releases where it went down, as gpui's own touch
+                // recognizer does: with no move in between, the editor
+                // takes a release elsewhere for a drag that never started.
+                if matches!(self.phase, GesturePhase::SingleFingerDown)
+                    && let Some(pointer) = self.pointers.get(&event.pointers[0].id)
+                {
+                    position = pointer.down_pos;
+                }
                 let close = match self.phase {
                     // Plain tap: emit `Up(Left, count=1)` to match the
                     // `Down(Left, count=1)` from `TouchAction::Down`.

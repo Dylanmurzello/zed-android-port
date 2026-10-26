@@ -34,14 +34,6 @@ use util::{paths::PathExt, shell::ShellKind};
 /// because SSH_ASKPASS must point to a directly executable binary. The CLI binary
 /// handles the ZED_ASKPASS_SOCKET env var to communicate with Zed over a Unix socket
 /// without needing a wrapper script.
-/// On Android, the gpui app sets this to a tiny standalone native helper
-/// at boot time via `set_askpass_program`, because `current_exe()` returns
-/// the path to `app_process64` (Android's Zygote launcher) which can't be
-/// re-spawned from a non-Activity context — execve aborts with `Error
-/// changing dalvik-cache ownership: Permission denied` under SELinux
-/// `untrusted_app_27`. The helper binary lives at
-/// `$PREFIX/bin/zed-askpass-helper` and implements the same socket
-/// protocol as `main()` below.
 static ASKPASS_PROGRAM: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 #[derive(PartialEq, Eq)]
@@ -281,17 +273,7 @@ impl PasswordProxy {
         >,
         executor: BackgroundExecutor,
     ) -> Result<Self> {
-        let temp_base = std::env::temp_dir();
-        // On Android TMPDIR points into the runtime's userland, which may not
-        // exist yet (e.g. a chroot data dir before first use).
-        #[cfg(not(target_os = "windows"))]
-        fs::create_dir_all(&temp_base)
-            .await
-            .with_context(|| format!("creating temp directory at {temp_base:?}"))?;
-        let temp_dir = tempfile::Builder::new()
-            .prefix("zed-askpass")
-            .tempdir_in(&temp_base)
-            .with_context(|| format!("creating askpass temp directory in {temp_base:?}"))?;
+        let temp_dir = tempfile::Builder::new().prefix("zed-askpass").tempdir()?;
         let askpass_socket = temp_dir.path().join("askpass.sock");
         let current_exec =
             std::env::current_exe().context("Failed to determine current zed executable path.")?;
