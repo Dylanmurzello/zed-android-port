@@ -336,11 +336,22 @@ pub(crate) async fn restorable_workspace_locations(
 
                 // Android: the app has one main window (others would open as
                 // extra Activities), so restore only the frontmost window,
-                // which is the last one after the reverse above.
-                if let Some(locations) = locations.as_mut()
-                    && let Some(frontmost) = locations.pop()
-                {
-                    *locations = vec![frontmost];
+                // with all of its workspaces. Android reports no window
+                // stack, so the locations are newest first.
+                if let Some(locations) = locations.as_mut() {
+                    let frontmost = if ordered {
+                        locations.last()
+                    } else {
+                        locations.first()
+                    };
+                    if let Some(frontmost) = frontmost {
+                        let window_id = frontmost.window_id;
+                        let workspace_id = frontmost.workspace_id;
+                        locations.retain(|location| match window_id {
+                            Some(window_id) => location.window_id == Some(window_id),
+                            None => location.workspace_id == workspace_id,
+                        });
+                    }
                 }
 
                 locations
@@ -592,8 +603,8 @@ fn android_main(app: AndroidApp) {
         );
     });
 
-    // The runtime's TMPDIR may not exist yet (a chroot data dir before its
-    // first use), and tempfiles such as SSH's askpass socket go there.
+    // The runtime's TMPDIR may not exist yet, and temp files such as SSH's
+    // askpass socket go there.
     let temp_dir = std::env::temp_dir();
     if let Err(error) = std::fs::create_dir_all(&temp_dir) {
         log::warn!("zed_android: can't create {}: {error}", temp_dir.display());

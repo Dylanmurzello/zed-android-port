@@ -668,9 +668,10 @@ impl TouchState {
                         // `TouchAction::Up`.
                         let anchor = pstate.down_pos;
                         self.phase = GesturePhase::LongPressSelection;
+                        // Released where it went down, like a tap.
                         out.push(PlatformInput::MouseUp(MouseUpEvent {
                             button: MouseButton::Left,
-                            position: primary_pos,
+                            position: anchor,
                             modifiers,
                             click_count: 0,
                         }));
@@ -761,11 +762,20 @@ impl TouchState {
             }
 
             TouchAction::Cancel => {
-                let position = event
+                let mut position = event
                     .pointers
                     .first()
                     .map(|p| p.pos)
                     .unwrap_or(Point::default());
+                // A pending tap is released where it went down, like a tap.
+                if matches!(self.phase, GesturePhase::SingleFingerDown)
+                    && let Some(pointer) = event
+                        .pointers
+                        .first()
+                        .and_then(|pointer| self.pointers.get(&pointer.id))
+                {
+                    position = pointer.down_pos;
+                }
                 // If we have an outstanding `Left` press (plain tap
                 // pending, long-press selection, or drag-passthrough),
                 // emit a `count=0` cancel `Up` so the editor doesn't

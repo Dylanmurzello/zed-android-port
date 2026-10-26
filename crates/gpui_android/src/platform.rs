@@ -528,6 +528,7 @@ impl AndroidPlatform {
             .extra_window_id = Some(window_id);
         if let Err(err) = window.ptr().attach_surface(native_window, scale_factor) {
             crate::multi_window::unmark_window_registered(window_id);
+            crate::multi_window::finish_extra_activity(&self.android_app, window_id);
             return Err(err);
         }
 
@@ -1285,6 +1286,18 @@ impl AndroidPlatform {
         let new_appearance = appearance_from_config(&self.android_app);
         self.common.borrow_mut().appearance = new_appearance;
         window_ptr.set_appearance(new_appearance);
+        // Light/dark switches arrive only through the main Activity's
+        // configuration, so extra windows follow it.
+        let extra_windows: Vec<_> = self
+            .common
+            .borrow()
+            .extra_windows
+            .values()
+            .cloned()
+            .collect();
+        for extra_window in extra_windows {
+            extra_window.set_appearance(new_appearance);
+        }
         let Some(native_window) = self.android_app.native_window() else {
             return;
         };
