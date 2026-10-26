@@ -9,6 +9,12 @@ import android.view.inputmethod.ExtractedTextRequest
 
 private const val TAG = "zdroid_ime"
 
+// Off unless enabled with `adb shell setprop log.tag.zdroid_ime DEBUG`: the
+// messages include typed text, which can be a password.
+private inline fun debugLog(message: () -> String) {
+    if (Log.isLoggable(TAG, Log.DEBUG)) Log.d(TAG, message())
+}
+
 /// Bridge from Android's IME (Gboard, Swiftkey, etc.) into gpui's
 /// `PlatformInputHandler`. The IME calls methods here for every text
 /// edit it wants to perform; we forward each into Rust via
@@ -56,11 +62,10 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
             val firstDown = events?.firstOrNull { it.action == KeyEvent.ACTION_DOWN }
             if (firstDown != null && firstDown.keyCode != KeyEvent.KEYCODE_UNKNOWN) {
                 val combinedMeta = modifier or firstDown.metaState
-                Log.i(
-                    TAG,
+                debugLog {
                     "IC.commitText w=$windowId intercepted ${quote(s)} as " +
                         "key=${firstDown.keyCode} meta=0x${Integer.toHexString(combinedMeta)}"
-                )
+                }
                 NativeBridge.nativeImeSendKeyEvent(
                     windowId,
                     KeyEvent.ACTION_DOWN,
@@ -96,7 +101,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
                 .load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
             val events = keyMap.getEvents(s.toCharArray())
             if (events != null && events.isNotEmpty()) {
-                Log.i(TAG, "IC.commitText w=$windowId vim-route ${quote(s)} as ${events.size} key events")
+                debugLog { "IC.commitText w=$windowId vim-route ${quote(s)} as ${events.size} key events" }
                 for (ev in events) {
                     NativeBridge.nativeImeSendKeyEvent(
                         windowId,
@@ -108,28 +113,28 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
                 }
                 return true
             }
-            Log.i(TAG, "IC.commitText w=$windowId vim-route fallthrough (no keymap) ${quote(s)}")
+            debugLog { "IC.commitText w=$windowId vim-route fallthrough (no keymap) ${quote(s)}" }
         }
-        Log.i(TAG, "IC.commitText w=$windowId text=${quote(s)} cursor=$newCursorPosition")
+        debugLog { "IC.commitText w=$windowId text=${quote(s)} cursor=$newCursorPosition" }
         NativeBridge.nativeImeCommitText(windowId, s, newCursorPosition)
         return true
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
         val s = text?.toString() ?: ""
-        Log.i(TAG, "IC.setComposingText w=$windowId text=${quote(s)} cursor=$newCursorPosition")
+        debugLog { "IC.setComposingText w=$windowId text=${quote(s)} cursor=$newCursorPosition" }
         NativeBridge.nativeImeSetComposingText(windowId, s, newCursorPosition)
         return true
     }
 
     override fun finishComposingText(): Boolean {
-        Log.i(TAG, "IC.finishComposingText w=$windowId")
+        debugLog { "IC.finishComposingText w=$windowId" }
         NativeBridge.nativeImeFinishComposingText(windowId)
         return true
     }
 
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-        Log.i(TAG, "IC.deleteSurroundingText w=$windowId before=$beforeLength after=$afterLength")
+        debugLog { "IC.deleteSurroundingText w=$windowId before=$beforeLength after=$afterLength" }
         NativeBridge.nativeImeDeleteSurroundingText(windowId, beforeLength, afterLength)
         return true
     }
@@ -151,12 +156,11 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
         val host = hostView.context as? ImeHost
         val modifier = host?.extraKeysModifierState ?: 0
         val meta = event.metaState or modifier
-        Log.i(
-            TAG,
+        debugLog {
             "IC.sendKeyEvent w=$windowId action=${event.action} keyCode=${event.keyCode} " +
                 "meta=0x${Integer.toHexString(meta)} (extras=0x${Integer.toHexString(modifier)}) " +
                 "repeat=${event.repeatCount} unicode=${event.unicodeChar} chars=${quote(event.characters ?: "")}"
-        )
+        }
         NativeBridge.nativeImeSendKeyEvent(
             windowId,
             event.action,
@@ -171,7 +175,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
     }
 
     override fun performEditorAction(actionCode: Int): Boolean {
-        Log.i(TAG, "IC.performEditorAction w=$windowId action=$actionCode")
+        debugLog { "IC.performEditorAction w=$windowId action=$actionCode" }
         NativeBridge.nativeImePerformEditorAction(windowId, actionCode)
         return true
     }
@@ -197,29 +201,28 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
 
     override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence? {
         val text = mirror().textBeforeCursor(n)
-        Log.i(TAG, "IC.getTextBeforeCursor n=$n -> len=${text.length}")
+        debugLog { "IC.getTextBeforeCursor n=$n -> len=${text.length}" }
         return text
     }
 
     override fun getTextAfterCursor(n: Int, flags: Int): CharSequence? {
         val text = mirror().textAfterCursor(n)
-        Log.i(TAG, "IC.getTextAfterCursor n=$n -> len=${text.length}")
+        debugLog { "IC.getTextAfterCursor n=$n -> len=${text.length}" }
         return text
     }
 
     override fun getSelectedText(flags: Int): CharSequence? {
         val text = mirror().selectedText()
         if (text.isEmpty()) return null
-        Log.i(TAG, "IC.getSelectedText -> len=${text.length}")
+        debugLog { "IC.getSelectedText -> len=${text.length}" }
         return text
     }
 
     override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText? {
         val state = mirror()
-        Log.i(
-            TAG,
+        debugLog {
             "IC.getExtractedText -> len=${state.text.length} sel=${state.selectionStart}..${state.selectionEnd}"
-        )
+        }
         return state.extractedText()
     }
 

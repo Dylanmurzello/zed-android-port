@@ -30,15 +30,9 @@ impl ReqwestClient {
     /// builds. `read_timeout` sets an idle timeout on each body read (see
     /// [`ReqwestClient::proxy_user_agent_and_read_timeout`]); `None` leaves
     /// reads without a timeout.
-    ///
-    /// TLS goes through `http_client_tls::tls_config()` (not plain
-    /// `use_rustls_tls()`) so Android resolves against the system +
-    /// user-installed CA store; webpki roots alone break corp/user CAs
-    /// there. Keeping it here in the shared builder is what guarantees
-    /// every constructor gets it.
     fn builder(read_timeout: Option<Duration>) -> reqwest::ClientBuilder {
         let builder = reqwest::Client::builder()
-            .use_preconfigured_tls(http_client_tls::tls_config())
+            .use_rustls_tls()
             .connect_timeout(Duration::from_secs(10))
             // Detect and drop connections that have silently gone bad on a
             // flaky path (NAT timeouts, resets) instead of reusing them. A
@@ -49,6 +43,10 @@ impl ReqwestClient {
             .http2_keep_alive_interval(Duration::from_secs(15))
             .http2_keep_alive_timeout(Duration::from_secs(10))
             .http2_keep_alive_while_idle(true);
+        // reqwest's native roots come from certificate files Android doesn't
+        // have, so every client there uses http_client_tls's configuration.
+        #[cfg(target_os = "android")]
+        let builder = builder.use_preconfigured_tls(http_client_tls::tls_config());
         match read_timeout {
             Some(read_timeout) => builder.read_timeout(read_timeout),
             None => builder,
@@ -116,7 +114,9 @@ impl ReqwestClient {
             client_has_proxy = false;
         };
 
-        let client = client.build()?;
+        let client = client
+            .use_preconfigured_tls(http_client_tls::tls_config())
+            .build()?;
         let mut client: ReqwestClient = client.into();
         client.proxy = client_has_proxy.then_some(proxy).flatten();
         client.user_agent = Some(user_agent);
