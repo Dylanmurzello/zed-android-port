@@ -204,8 +204,8 @@ android {
         // denied — the entire L2 plan stops working. Skipping Play Store
         // eligibility is the explicit trade.
         targetSdk = 28
-        versionCode = 36
-        versionName = "0.8.7"
+        versionCode = 37
+        versionName = "0.8.8"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -261,6 +261,12 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
+            // Strip the native libraries in the APK, but keep their symbol
+            // tables in build/outputs/native-debug-symbols for symbolizing
+            // profiles and crashes. CI publishes the file with each build.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
