@@ -194,3 +194,13 @@ The examples set `device=<tablet-ip>:<port>` first.
   ```
 
   The `--list` format above is Android 16's. The first line of `--latency` output is the panel's refresh period in nanoseconds, and the second column of each following line is when a frame was presented.
+- **CPU profile with function names:** release builds are profileable, and each CI build publishes its library's symbols as the `zdroid-native-symbols` artifact, also attached to releases. Use the symbols from the same build as the installed APK; they're matched by build ID. Unzip the artifact twice, since GitHub wraps it in another zip, and copy `arm64-v8a/libzed_android.so.sym` to `libzed_android.so` in a folder of its own. Record with the tablet's own `simpleperf`, because the copy the NDK's scripts push can't use the `cpu-clock` event, then symbolize with the NDK's scripts:
+
+  ```sh
+  adb -s "$device" shell simpleperf record --app com.zdroid -e cpu-clock -f 2000 -g --duration 20 -o /data/local/tmp/zdroid.data
+  adb -s "$device" pull /data/local/tmp/zdroid.data
+  ANDROID_SERIAL="$device" python3 "$ANDROID_NDK_HOME/simpleperf/binary_cache_builder.py" -i zdroid.data -lib <symbols folder> --ndk_path "$ANDROID_NDK_HOME"
+  "$ANDROID_NDK_HOME/simpleperf/bin/linux/x86_64/simpleperf" report -i zdroid.data --symfs binary_cache --comms android_main --sort symbol --percent-limit 1
+  ```
+
+  Add `--children` to see time by caller. `simpleperf dump zdroid.data` lists each sample's thread and CPU core, which shows whether the main loop ran on the prime core (cpu7) or the slower ones.
