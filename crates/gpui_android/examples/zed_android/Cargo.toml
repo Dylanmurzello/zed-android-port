@@ -78,6 +78,7 @@ shellexpand = "3.1"
 util = { path = "../../../util" }
 watch = { path = "../../../watch" }
 workspace = { path = "../../../workspace" }
+zd_engine_core = { path = "../../../zd_engine_core" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
 platform_title_bar = { path = "../../../platform_title_bar" }
 release_channel = { path = "../../../release_channel" }

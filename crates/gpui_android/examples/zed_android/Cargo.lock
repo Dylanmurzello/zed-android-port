@@ -17383,6 +17383,7 @@ dependencies = [
  "watch",
  "which_key",
  "workspace",
+ "zd_engine_core",
  "zdroid_runtime",
  "zed_actions",
 ]

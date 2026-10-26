@@ -23392,6 +23392,7 @@ dependencies = [
  "serde",
  "sha2",
  "tar",
+ "tempfile",
  "toml 0.8.23",
  "ureq",
  "util",

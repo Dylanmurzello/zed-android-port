@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Read;
 use std::os::fd::FromRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -117,10 +118,14 @@ impl RootfsAdapter {
     }
 
     /// A command that runs `program` (a guest path) through the loader
-    /// with the caller's environment plus the engine block.
+    /// with the caller's environment plus the engine block. The loader is
+    /// exec'd with the guest's own argv (`argv[0]` = `program`) and learns
+    /// what to run from `ZD_PROGRAM`, so the kernel's argument area, and
+    /// with it `/proc/<pid>/cmdline`, is exactly the guest's.
     pub fn command(&self, program: &str) -> Command {
         let mut command = Command::new(self.loader_path());
-        command.arg(program);
+        command.arg0(program);
+        command.env(engine_env::PROGRAM, program);
         command.envs(self.engine_env());
         command
     }

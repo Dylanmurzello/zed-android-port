@@ -88,15 +88,42 @@ fn adapter_for(data_path: &Path) -> RootfsAdapter {
     RootfsAdapter::new(rootfs_config, data_path)
 }
 
-fn loader_command(adapter: &RootfsAdapter, loader_args: &[&str], program: &str, args: &[&str]) -> Command {
-    let mut command = Command::new(adapter.loader_path());
+fn loader_command(adapter: &RootfsAdapter, program: &str, args: &[&str]) -> Command {
+    let mut command = adapter.command(program);
+    command.args(args).stdin(Stdio::null());
     command
-        .args(loader_args)
-        .arg(program)
-        .args(args)
-        .envs(adapter.engine_env())
-        .stdin(Stdio::null());
-    command
+}
+
+/// Median and 95th percentile of `runs` wall-clock timings of `command`
+/// after one untimed cold run; `None` carries the first failure.
+fn time_runs(mut make: impl FnMut() -> Command, runs: usize) -> Result<(f64, f64, f64), String> {
+    let mut samples_ms: Vec<f64> = Vec::with_capacity(runs);
+    for index in 0..=runs {
+        let started = Instant::now();
+        let output = make().output();
+        let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        match output {
+            Ok(output) if output.status.success() => {
+                if index > 0 {
+                    samples_ms.push(elapsed);
+                }
+            }
+            Ok(output) => {
+                return Err(format!(
+                    "exit {:?}: {}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            Err(error) => return Err(format!("spawn: {error}")),
+        }
+    }
+    samples_ms.sort_by(|a, b| a.total_cmp(b));
+    Ok((
+        samples_ms[0],
+        samples_ms[samples_ms.len() / 2],
+        samples_ms[samples_ms.len() * 95 / 100],
+    ))
 }
 
 fn run_steps(data_path: &Path, log_path: &Path) -> Report {
@@ -147,50 +174,42 @@ fn run_steps(data_path: &Path, log_path: &Path) -> Report {
     report
 }
 
+/// `/bin/true` through the loader against `/system/bin/true` spawned the
+/// same way: Zed's `Command` forks this large process, which costs the
+/// same for both, so the difference is the engine's own start-up.
 fn run_true_timing(adapter: &RootfsAdapter, report: &mut Report) {
-    let mut samples_ms: Vec<f64> = Vec::new();
-    let mut failure: Option<String> = None;
-    for index in 0..21 {
-        let started = Instant::now();
-        let output = loader_command(adapter, &[], "/bin/true", &[]).output();
-        let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-        match output {
-            Ok(output) if output.status.success() => {
-                if index > 0 {
-                    samples_ms.push(elapsed);
-                }
-            }
-            Ok(output) => {
-                failure = Some(format!(
-                    "exit {:?}: {}",
-                    output.status.code(),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-                break;
-            }
-            Err(error) => {
-                failure = Some(format!("spawn: {error}"));
-                break;
-            }
-        }
-    }
-    if let Some(failure) = failure {
-        report.record("true", false, failure);
-        return;
-    }
-    samples_ms.sort_by(|a, b| a.total_cmp(b));
-    let median = samples_ms[samples_ms.len() / 2];
-    let p95 = samples_ms[samples_ms.len() * 95 / 100];
-    report.record(
-        "true",
-        median < 10.0,
-        format!("n={} min={:.2}ms median={:.2}ms p95={:.2}ms", samples_ms.len(), samples_ms[0], median, p95),
+    let baseline = time_runs(
+        || {
+            let mut command = Command::new("/system/bin/true");
+            command.stdin(Stdio::null());
+            command
+        },
+        20,
     );
+    let engine = time_runs(|| loader_command(adapter, "/bin/true", &[]), 20);
+    match (baseline, engine) {
+        (Ok((base_min, base_median, base_p95)), Ok((min, median, p95))) => {
+            let delta = median - base_median;
+            report.record(
+                "true",
+                delta < 10.0,
+                format!(
+                    "engine min={min:.2}ms median={median:.2}ms p95={p95:.2}ms; \
+                     system true min={base_min:.2}ms median={base_median:.2}ms p95={base_p95:.2}ms; \
+                     engine overhead median={delta:.2}ms"
+                ),
+            );
+        }
+        (Err(error), _) => report.record("true", false, format!("baseline /system/bin/true: {error}")),
+        (_, Err(error)) => report.record("true", false, error),
+    }
 }
 
 fn run_loader_selftest(adapter: &RootfsAdapter, report: &mut Report) {
     let started = Instant::now();
-    let output = loader_command(adapter, &["--selftest"], "/bin/ls", &["-la", "/"]).output();
+    let mut command = loader_command(adapter, "/bin/ls", &["-la", "/"]);
+    command.env(zd_engine_core::env::SELFTEST, "1");
+    let output = command.output();
     let elapsed = started.elapsed();
     match output {
         Ok(output) => {

@@ -38,6 +38,9 @@ zd_engine_core.workspace = true
 # JNI init needed).
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [target.'cfg(target_os = "android")'.dependencies]
 nix = { workspace = true, features = ["socket", "uio"] }
 libc.workspace = true
