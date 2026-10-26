@@ -2748,7 +2748,8 @@ impl PyreflyLspAdapter {
     const ARCH_SERVER_NAME: &str = "macos";
 }
 
-#[cfg(target_os = "linux")]
+// Android only needs these to compile: Zed turns Pyrefly off by default.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl PyreflyLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
     const ARCH_SERVER_NAME: &str = "linux";
