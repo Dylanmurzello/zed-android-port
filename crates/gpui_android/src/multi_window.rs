@@ -707,10 +707,13 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<
     let pending = pending_table().as_mut().and_then(|m| m.remove(&window_id));
     match pending {
         Some(tx) => {
-            if tx.send(native_window).is_err() {
-                log::warn!(
-                    "multi_window: windowId={window_id} stopped waiting for its first surface"
-                );
+            // The wait timed out between taking the sender and sending;
+            // the run loop finishes the Activity of an unknown window.
+            if let Err(native_window) = tx.send(native_window) {
+                dispatch_event(ExtraWindowEvent::SurfaceCreated {
+                    window_id,
+                    native_window,
+                });
             }
         }
         None => dispatch_event(ExtraWindowEvent::SurfaceCreated {

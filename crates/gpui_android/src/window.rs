@@ -362,11 +362,6 @@ impl AndroidWindowStatePtr {
         Ok(())
     }
 
-    /// Called from the platform run loop on `MainEvent::TerminateWindow`. The
-    /// `ANativeWindow` is being destroyed by the system. We unconfigure the
-    /// wgpu surface so subsequent draws bail out, but keep the device, queue,
-    /// and atlas alive so the next `InitWindow` can `replace_surface` cheaply
-    /// without rebuilding glyph caches.
     /// Whether frames drawn now can be presented.
     pub(crate) fn is_visible(&self) -> bool {
         self.state.borrow().visibility.is_visible()
@@ -391,6 +386,11 @@ impl AndroidWindowStatePtr {
         }
     }
 
+    /// Called from the platform run loop on `MainEvent::TerminateWindow`. The
+    /// `ANativeWindow` is being destroyed by the system. We unconfigure the
+    /// wgpu surface so subsequent draws bail out, but keep the device, queue,
+    /// and atlas alive so the next `InitWindow` can `replace_surface` cheaply
+    /// without rebuilding glyph caches.
     pub(crate) fn detach_surface(&self) {
         // Keep the renderer alive — gpui's element tree caches
         // `AtlasTextureId`s into our atlas. Dropping the renderer (and

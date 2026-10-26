@@ -64,7 +64,7 @@ git -c merge.ours.driver=true merge vX.Y.Z
 ```sh
 git fetch upstream main
 git checkout -b upstream-sync-$(date +%Y%m%d)
-git merge upstream/main
+git -c merge.ours.driver=true merge upstream/main
 # expected:
 #   - automatic merges on most files
 #   - automatic ours-merge on identity files (no prompt)
