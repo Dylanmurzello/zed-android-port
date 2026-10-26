@@ -163,10 +163,13 @@ strip = "debuginfo"
 
 # Release: this is its own workspace, so the root workspace's release profile
 # doesn't apply. Use its thin LTO and single codegen unit, which make the `.so`
-# about 17% smaller, but ship it without debug info or symbols.
+# about 17% smaller, but ship it without debug info. The symbol table stays
+# in the build: the Android build strips it from the APK and keeps it in a
+# separate symbols file (`debugSymbolLevel` in build.gradle.kts), which
+# symbolizes profiles and crashes of release builds.
 [profile.release]
 debug = false
-strip = "symbols"
+strip = "none"
 opt-level = "z"
 lto = "thin"
 codegen-units = 1

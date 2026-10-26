@@ -261,6 +261,12 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
+            // Strip the native libraries in the APK, but keep their symbol
+            // tables in build/outputs/native-debug-symbols for symbolizing
+            // profiles and crashes. CI publishes the file with each build.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }

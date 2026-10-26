@@ -57,6 +57,7 @@ jobs:
     outputs:
       version: ${{ steps.apk.outputs.version }}
       apk_base: ${{ steps.apk.outputs.apk_base }}
+      symbols_name: ${{ steps.apk.outputs.symbols_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,9 +183,15 @@ jobs:
 
           mkdir -p dist
           cp "$apk" "dist/$apk_base-unsigned.apk"
+
+          # The native libraries' symbol tables, which the APK leaves out.
+          mkdir -p symbols
+          symbols_name="$apk_base-native-symbols.zip"
+          cp "$APP_DIR/android/app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip" "symbols/$symbols_name"
           {
             echo "version=$version"
             echo "apk_base=$apk_base"
+            echo "symbols_name=$symbols_name"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload unsigned APK
@@ -192,6 +199,13 @@ jobs:
         with:
           name: zdroid-apk-unsigned
           path: dist/
+          if-no-files-found: error
+
+      - name: Upload native symbols
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zdroid-native-symbols
+          path: symbols/
           if-no-files-found: error
 
   sign:
@@ -319,6 +333,12 @@ jobs:
           name: zdroid-apk
           path: dist
 
+      - name: Download native symbols
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: zdroid-native-symbols
+          path: symbols
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -356,10 +376,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
           APK_NAME: ${{ needs.sign.outputs.apk_name }}
+          SYMBOLS_NAME: ${{ needs.build.outputs.symbols_name }}
         # `gh release create` refuses to overwrite an existing release, so a
         # re-run can never clobber an asset and reset its download count.
+        # The symbols stay with the release for symbolizing its crashes.
         run: |
-          gh release create "$GITHUB_REF_NAME" "dist/$APK_NAME" \
+          gh release create "$GITHUB_REF_NAME" "dist/$APK_NAME" "symbols/$SYMBOLS_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Zdroid $VERSION" \
             --notes-file notes.md \

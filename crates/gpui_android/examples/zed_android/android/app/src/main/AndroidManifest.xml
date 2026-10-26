@@ -39,6 +39,15 @@
         android:resizeableActivity="true">
 
         <!--
+          Lets `adb shell` profile release builds with simpleperf or
+          Perfetto on Android 10 and later, as Google recommends for
+          measuring the builds people run. It doesn't make the app
+          debuggable: no debugger and no run-as. See "Debugging on the
+          tablet" in FORK.md.
+        -->
+        <profileable android:shell="true" />
+
+        <!--
           Exhaustive configChanges: in freeform / desktop windowing mode every
           drag-resize fires a config change, which by default destroys+recreates
           the Activity (breaking our gpui Window mid-resize). Declaring every
