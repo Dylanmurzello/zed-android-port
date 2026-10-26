@@ -3,7 +3,7 @@ use std::{
     ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
@@ -131,6 +131,9 @@ static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Whether a Choreographer callback is posted and hasn't fired yet.
 static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
+
+/// Live guards from `prevent_idle_sleep`.
+static IDLE_SLEEP_GUARDS: AtomicUsize = AtomicUsize::new(0);
 
 /// Wakes the run loop from Java threads. JNI callbacks queue input and
 /// window events, or set flags, that the loop only reads on its next tick,
@@ -1708,10 +1711,25 @@ impl Platform for AndroidPlatform {
         ThermalState::Nominal
     }
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
+    /// Keeps the screen on while the app is in front, Android's equivalent:
+    /// Zed asks for this while an agent works. Counted, so overlapping
+    /// requests don't release it early.
     fn prevent_idle_sleep(&self, reason: &str) -> Task<Result<ActivityGuard>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "idle sleep prevention for {reason:?} is not yet implemented on Android"
-        )))
+        use android_activity::WindowManagerFlags;
+        log::debug!("keeping the screen on: {reason}");
+        let android_app = self.android_app.clone();
+        if IDLE_SLEEP_GUARDS.fetch_add(1, Ordering::AcqRel) == 0 {
+            android_app
+                .set_window_flags(WindowManagerFlags::KEEP_SCREEN_ON, WindowManagerFlags::empty());
+        }
+        Task::ready(Ok(ActivityGuard::new(move || {
+            if IDLE_SLEEP_GUARDS.fetch_sub(1, Ordering::AcqRel) == 1 {
+                android_app.set_window_flags(
+                    WindowManagerFlags::empty(),
+                    WindowManagerFlags::KEEP_SCREEN_ON,
+                );
+            }
+        })))
     }
 
     fn compositor_name(&self) -> &'static str {
