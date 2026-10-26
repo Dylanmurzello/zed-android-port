@@ -360,26 +360,31 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         }
     }
 
-    /// Toggle the IME — status bar keyboard button entry point.
+    /// Show or hide the IME on the user's request; see
+    /// `MainActivity.requestIme`.
     @Suppress("unused")
-    fun toggleIme() {
+    fun requestIme(show: Boolean) {
         runOnUiThread {
             val host = imeHostView ?: return@runOnUiThread
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                as android.view.inputmethod.InputMethodManager
-            if (imeShown) {
-                Log.i(TAG_IME, "toggleIme[w=$extraWindowId]: hiding (manual dismiss)")
-                programmaticHidePending = true
-                WindowInsetsControllerCompat(window, window.decorView)
-                    .hide(WindowInsetsCompat.Type.ime())
-                setImeShown(false)
-                setImeManuallyDismissed(true)
-            } else {
-                Log.i(TAG_IME, "toggleIme[w=$extraWindowId]: showing (clearing manual-dismiss)")
-                if (!host.isFocused) host.requestFocus()
-                imm.showSoftInput(host, 0)
-                setImeShown(true)
+            if (show) {
+                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: showing (clearing manual-dismiss)")
+                if (!imeShown) {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
+                        as android.view.inputmethod.InputMethodManager
+                    if (!host.isFocused) host.requestFocus()
+                    imm.showSoftInput(host, 0)
+                    setImeShown(true)
+                }
                 setImeManuallyDismissed(false)
+            } else {
+                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: hiding (manual dismiss)")
+                if (imeShown) {
+                    programmaticHidePending = true
+                    WindowInsetsControllerCompat(window, window.decorView)
+                        .hide(WindowInsetsCompat.Type.ime())
+                    setImeShown(false)
+                }
+                setImeManuallyDismissed(true)
             }
         }
     }

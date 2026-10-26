@@ -127,7 +127,7 @@ use android_activity::AndroidApp;
 use futures::channel::mpsc;
 use jni::JNIEnv;
 use jni::JavaVM;
-use jni::objects::{JObject, JString};
+use jni::objects::{JObject, JString, JValue};
 
 use crate::window::AndroidWindowStatePtr;
 
@@ -718,15 +718,20 @@ pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u6
     }
 }
 
-/// Toggle the soft keyboard on an explicit request (gpui's
-/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`).
-/// Inverts the current `imeShown` state on the target Activity — and,
-/// when showing, clears the user-dismissed flag so subsequent
-/// text-input focuses can auto-show again.
-pub(crate) fn toggle_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
-    log::info!("ime::toggle_keyboard w={extra_window_id:?}");
-    if let Err(err) = call_activity_void(android_app, extra_window_id, "toggleIme") {
-        log::warn!("ime::toggle_keyboard failed: {err:#}");
+/// Show or hide the soft keyboard on an explicit request (gpui's
+/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`): the
+/// Activity's `requestIme`, which also sets or clears its "user dismissed
+/// the keyboard" flag, so text fields auto-show it again after a show.
+pub(crate) fn request_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>, show: bool) {
+    log::info!("ime::request_keyboard w={extra_window_id:?} show={show}");
+    if let Err(err) = call_activity(
+        android_app,
+        extra_window_id,
+        "requestIme",
+        "(Z)V",
+        &[JValue::Bool(show.into())],
+    ) {
+        log::warn!("ime::request_keyboard failed: {err:#}");
     }
 }
 
@@ -738,6 +743,16 @@ fn call_activity_void(
     android_app: &AndroidApp,
     extra_window_id: Option<u64>,
     method: &str,
+) -> anyhow::Result<()> {
+    call_activity(android_app, extra_window_id, method, "()V", &[])
+}
+
+fn call_activity(
+    android_app: &AndroidApp,
+    extra_window_id: Option<u64>,
+    method: &str,
+    signature: &str,
+    args: &[JValue],
 ) -> anyhow::Result<()> {
     let vm_ptr = android_app.vm_as_ptr();
     let activity_ptr = android_app.activity_as_ptr();
@@ -754,12 +769,12 @@ fn call_activity_void(
                 // surface to attach to anyway.
                 return Ok(());
             };
-            env.call_method(activity_ref.as_obj(), method, "()V", &[])
+            env.call_method(activity_ref.as_obj(), method, signature, args)
                 .with_context(|| format!("call ExtraWindowActivity.{method}()"))?;
         }
         None => {
             let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, method, "()V", &[])
+            env.call_method(&activity, method, signature, args)
                 .with_context(|| format!("call MainActivity.{method}()"))?;
         }
     }
@@ -879,7 +894,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImePerformEditorAction
 
 /// Kotlin pushes its `imeShown` state here whenever it changes
 /// (after showSoftInput / hideSoftInput / WindowInsetsListener edge).
-/// We mirror it into [`SOFT_KEYBOARD_VISIBLE`] so the pane button can
+/// We mirror it into [`SOFT_KEYBOARD_VISIBLE`] so the status bar keyboard button can
 /// reflect the actual OS visibility.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetSoftKeyboardVisible<'local>(

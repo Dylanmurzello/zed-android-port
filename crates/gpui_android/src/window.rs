@@ -596,20 +596,18 @@ pub(crate) struct AndroidWindow {
 }
 
 impl AndroidWindow {
-    /// The Activity's `toggleIme`, which also clears its "user dismissed the
-    /// keyboard" flag when showing, so text fields can auto-show it again.
-    fn toggle_soft_keyboard(&self) {
+    /// An explicit request to show or hide the soft keyboard.
+    fn request_soft_keyboard(&self, show: bool) {
         let (android_app, extra_window_id) = {
             let state = self.ptr.state.borrow();
             (state.android_app.clone(), state.extra_window_id)
         };
-        // Flip our view of the keyboard before the asynchronous JNI call:
+        // Set our view of the keyboard before the asynchronous JNI call:
         // Kotlin confirms 100-500 ms later, after the IME animation, and a
         // button showing the old state that long reads as a missed tap.
-        // Kotlin's insets listener corrects it if the toggle fails.
-        let new_visible = !crate::ime::soft_keyboard_visible();
-        crate::ime::SOFT_KEYBOARD_VISIBLE.store(new_visible, std::sync::atomic::Ordering::Release);
-        crate::ime::toggle_keyboard(&android_app, extra_window_id);
+        // Kotlin's insets listener corrects it if the request fails.
+        crate::ime::SOFT_KEYBOARD_VISIBLE.store(show, std::sync::atomic::Ordering::Release);
+        crate::ime::request_keyboard(&android_app, extra_window_id, show);
     }
 
     pub(crate) fn new(
@@ -901,15 +899,11 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn show_soft_keyboard(&self) {
-        if !crate::ime::soft_keyboard_visible() {
-            self.toggle_soft_keyboard();
-        }
+        self.request_soft_keyboard(true);
     }
 
     fn hide_soft_keyboard(&self) {
-        if crate::ime::soft_keyboard_visible() {
-            self.toggle_soft_keyboard();
-        }
+        self.request_soft_keyboard(false);
     }
 
     fn text_input_state_changed(&self, change: TextInputStateChange) {

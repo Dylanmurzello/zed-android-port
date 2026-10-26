@@ -124,7 +124,7 @@ class MainActivity : GameActivity(), ImeHost {
     private var imeShown: Boolean = false
 
     /// Set right before we call `imm.hideSoftInputFromWindow` from
-    /// our own code (hideIme / toggleIme). The WindowInsets listener
+    /// our own code (hideIme / requestIme). The WindowInsets listener
     /// consults this to distinguish "we asked the IME to close"
     /// (don't mark manual-dismiss) from "user closed it via Back /
     /// swipe" (mark manual-dismiss so auto-show stays suppressed).
@@ -227,7 +227,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// edge transition into text-input focus. The first call within
     /// a focus session does the real work; repeats are filtered.
     /// Suppressed entirely when the user has manually dismissed the
-    /// IME (see [toggleIme] + the WindowInsets listener installed
+    /// IME (see [requestIme] + the WindowInsets listener installed
     /// in [onCreate]) — the user can re-summon via the status bar
     /// keyboard button or by tapping into a different text target
     /// (which triggers `restartImeForTarget` and clears the flag).
@@ -252,7 +252,7 @@ class MainActivity : GameActivity(), ImeHost {
             // (matches hide). `imm.showSoftInput` requires focused
             // text-input AND has a documented "first call silently
             // fails" race when window state is mid-transition — the
-            // observed symptom where toggleIme:showing was followed
+            // observed symptom where an explicit show was followed
             // by WindowInsets immediately reporting IME hidden because
             // imm.show didn't actually take effect. InsetsController
             // routes through the OS-level inset animation directly.
@@ -288,7 +288,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// True when the user explicitly dismissed the IME (Back press,
     /// IME-bar swipe, etc.) and we should suppress the auto-show
     /// that fires on every text-input focus transition. Cleared by:
-    /// - [toggleIme] when the user taps the status bar keyboard button
+    /// - [requestIme] when the user taps the status bar keyboard button
     ///   to bring the IME back up,
     /// - any `restartImeForTarget` call (focus moved to a different
     ///   input target — fresh context, fresh auto-show budget).
@@ -304,33 +304,37 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    /// Toggle the IME. If currently shown, hides it AND marks the
-    /// IME as manually-dismissed so the auto-show on text-input
-    /// focus is suppressed until the user re-toggles. If currently
-    /// hidden, shows the IME and clears the manually-dismissed
-    /// flag so subsequent focuses behave normally again.
+    /// Show or hide the IME on the user's request: the status bar keyboard
+    /// button, through gpui's `request_virtual_keyboard` and
+    /// `dismiss_virtual_keyboard`. Hiding marks the IME as manually
+    /// dismissed, so the auto-show on text-input focus stays off until the
+    /// user shows it again; showing clears that.
     @Suppress("unused")
-    fun toggleIme() {
+    fun requestIme(show: Boolean) {
         runOnUiThread {
             val host = imeHostView ?: return@runOnUiThread
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                as android.view.inputmethod.InputMethodManager
-            if (imeShown) {
-                Log.i("zdroid_ime", "toggleIme: hiding (manual dismiss)")
-                programmaticHidePending = true
-                // Modern hide path — see hideIme rationale. Sidesteps
-                // the `hideSoftInputFromWindow` first-call race that
-                // produced the two-taps-to-dismiss regression.
-                androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                    .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
-                setImeShown(false)
-                setImeManuallyDismissed(true)
-            } else {
-                Log.i("zdroid_ime", "toggleIme: showing (clearing manual-dismiss)")
-                if (!host.isFocused) host.requestFocus()
-                imm.showSoftInput(host, 0)
-                setImeShown(true)
+            if (show) {
+                Log.i("zdroid_ime", "requestIme: showing (clearing manual-dismiss)")
+                if (!imeShown) {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
+                        as android.view.inputmethod.InputMethodManager
+                    if (!host.isFocused) host.requestFocus()
+                    imm.showSoftInput(host, 0)
+                    setImeShown(true)
+                }
                 setImeManuallyDismissed(false)
+            } else {
+                Log.i("zdroid_ime", "requestIme: hiding (manual dismiss)")
+                if (imeShown) {
+                    programmaticHidePending = true
+                    // Modern hide path — see hideIme rationale. Sidesteps
+                    // the `hideSoftInputFromWindow` first-call race that
+                    // produced the two-taps-to-dismiss regression.
+                    androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                        .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
+                    setImeShown(false)
+                }
+                setImeManuallyDismissed(true)
             }
         }
     }

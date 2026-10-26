@@ -1039,14 +1039,6 @@ impl AndroidPlatform {
         }
     }
 
-    /// Detect changes to `SOFT_KEYBOARD_VISIBLE` and force a window
-    /// redraw so the status bar keyboard button's `toggle_state` picks
-    /// up the new value on the next paint. Runs every main-loop
-    /// tick INDEPENDENTLY of input-handler visibility — the button
-    /// is rendered on any focused pane (including those whose
-    /// input handler is None, e.g. a terminal pane without active
-    /// text-input), so gating this on `currently_visible` like
-    /// `tick_ime_target_and_selection` would miss those cases.
     /// Detect `TRACKPAD_MODE_ENABLED` flips and tell every active
     /// window (primary + each registered extra) to show / hide its
     /// SurfaceControl cursor sprite. Each Activity owns its own
@@ -1139,6 +1131,12 @@ impl AndroidPlatform {
         }
     }
 
+    /// Detect changes to `SOFT_KEYBOARD_VISIBLE` and force a window
+    /// redraw so the status bar keyboard button's `toggle_state` picks
+    /// up the new value on the next paint. Runs every main-loop
+    /// tick INDEPENDENTLY of input-handler visibility — the button
+    /// shows whether or not a text field is focused, so gating this on `currently_visible` like
+    /// `tick_ime_target_and_selection` would miss those cases.
     fn tick_soft_keyboard_visibility(&self) {
         let current = crate::ime::soft_keyboard_visible();
         let last = self.common.borrow().last_soft_keyboard_visible;

@@ -222,7 +222,7 @@ object NativeBridge {
     /// `SOFT_KEYBOARD_VISIBLE` atomic. Pushed on every transition
     /// (showSoftInput / hideSoftInputFromWindow / WindowInsetsListener
     /// edge). The status bar keyboard button reads this via
-    /// `Window::soft_keyboard_visible()` to render its lit-up
+    /// `gpui_android::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)
 
