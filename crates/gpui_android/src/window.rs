@@ -113,6 +113,12 @@ pub(crate) struct AndroidWindowState {
     /// `workspace::CloseWindow`, so with every window reporting active,
     /// Ctrl+W in Settings closed the main window instead, and Zed quit.
     pub(crate) active: bool,
+    /// The pointer state from the last input, recorded the way gpui records
+    /// it. gpui reads these back whenever the window is activated or
+    /// resized, so defaults would move its pointer to the top-left corner.
+    pub(crate) mouse_position: Point<Pixels>,
+    pub(crate) modifiers: Modifiers,
+    pub(crate) capslock: Capslock,
     /// Cheap clone (Arc internally) used by `AndroidWindow::Drop` to issue
     /// `multi_window::finish_extra_activity` for extra windows. Always set
     /// at construction time (both primary and extras carry it; primary just
@@ -480,6 +486,7 @@ impl AndroidWindowStatePtr {
     /// active `PlatformInputHandler` (gpui's text-input path) when the
     /// callback didn't claim them.
     pub(crate) fn handle_input(&self, input: PlatformInput) {
+        self.record_pointer_state(&input);
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut callback) = callback {
             let result = callback(input.clone());
@@ -502,6 +509,41 @@ impl AndroidWindowStatePtr {
                     state.input_handler = Some(input_handler);
                 }
             }
+        }
+    }
+
+    /// Mirrors `Window::dispatch_event`'s bookkeeping.
+    fn record_pointer_state(&self, input: &PlatformInput) {
+        let mut state = self.state.borrow_mut();
+        match input {
+            PlatformInput::MouseMove(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::MouseDown(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::MouseUp(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::MouseExited(event) => {
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::ModifiersChanged(event) => {
+                state.modifiers = event.modifiers;
+                state.capslock = event.capslock;
+            }
+            PlatformInput::ScrollWheel(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::Pinch(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            _ => {}
         }
     }
 }
@@ -550,6 +592,9 @@ impl AndroidWindow {
             os_closed: AtomicBool::new(false),
             closed: false,
             active: true,
+            mouse_position: Point::default(),
+            modifiers: Modifiers::default(),
+            capslock: Capslock::default(),
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
             captured: crate::captured_pointer::CapturedPointerState::default(),
@@ -647,15 +692,15 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
-        Point::default()
+        self.ptr.state.borrow().mouse_position
     }
 
     fn modifiers(&self) -> Modifiers {
-        Modifiers::default()
+        self.ptr.state.borrow().modifiers
     }
 
     fn capslock(&self) -> Capslock {
-        Capslock::default()
+        self.ptr.state.borrow().capslock
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
