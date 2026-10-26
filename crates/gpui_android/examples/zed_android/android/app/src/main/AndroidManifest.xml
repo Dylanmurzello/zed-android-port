@@ -28,8 +28,14 @@
          to be allowed to invoke the installer at all. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
+    <!--
+      allowBackup is off because the home directory holds credentials, such
+      as ~/.ssh keys and git tokens, which `adb backup` and cloud or
+      device-to-device backups would otherwise copy off the device.
+    -->
     <application
         android:name=".ZedApplication"
+        android:allowBackup="false"
         android:label="Zdroid"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
