@@ -38,21 +38,22 @@ arrived and the run loop is about to refresh anyway. `frame_callback` no
 longer re-posts itself; it sets `FRAME_PENDING` for the run loop, which
 refreshes every window. One callback serves the primary and extra windows.
 
-While frames run back to back, because gpui asked for another frame during
-the last one or input is arriving fast, the run loop posts the next
+While frames that present run back to back, the run loop posts the next
 callback before it paints, as Android's own animations do. A paint that
 overruns the 8.3ms budget then starts the next frame right away; asking
 only after the paint would wait for a further vsync and halve the frame
-rate. A run ends with one frame that has nothing to draw.
+rate. A frame belongs to a run when a window presented within
+`FRAME_RUN_GAP` (50ms) before it started, and a run ends with up to two
+frames that present nothing.
 
-gpui also keeps presenting for a second after input arrives at 60 events a
+That also carries gpui's own rule for fast input. gpui keeps presenting
+for a second after input that changes something arrives at 60 events a
 second or more, such as scrolling or dragging, so the panel stays at its
-high refresh rate. It only asks for frames while a window is dirty,
-though, so `InputRate` applies the thresholds of gpui's `InputRateTracker`
-and the run loop keeps requesting frames for that second, as the old
-continuous callback did. This matters with Samsung's adaptive refresh,
+high refresh rate, and each of those presents keeps the run going, as the
+old continuous callback did. This matters with Samsung's adaptive refresh,
 which drops the panel to 60 or 30 Hz soon after an app stops rendering.
-Slower input, such as typing, gets frames only while it changes something.
+Input that changes nothing, such as moving the pointer over text, starts
+no frames.
 
 Java threads queue work for the run loop: IME events, extra-window events
 and captured-trackpad events, plus the soft keyboard's visibility. They
@@ -61,18 +62,20 @@ them up within a vsync; without the wake, an idle loop would only see them
 at its 100ms poll timeout.
 
 Repaints that gpui doesn't know about request a frame themselves: surface
-attach after returning from the background, GPU device-lost recovery, and
-a present that failed or an atlas the renderer cleared, which are retried
-once as gpui's Wayland backend does.
+attach after returning from the background, GPU device-lost recovery, an
+atlas the renderer cleared, which redraws everything, and a present that
+failed, which presents the same scene again once. gpui's Wayland backend
+handles the last two the same way.
 The soft-keyboard tick sets `FRAME_PENDING` directly, as before.
 
 ## Why this works
 
 An idle editor now wakes only for the run loop's 100ms poll timeout and real
 events, instead of at the panel's refresh rate. While you scroll or drag,
-and for a second after, frames run on every vsync as before. Typing and
-animations still paint on the next vsync, because they dirty the window or
-schedule a next-frame callback, which wakes the frame loop.
+and for the second gpui keeps presenting after, frames run on every vsync
+as before. Typing and animations still paint on the next vsync, because
+they dirty the window or schedule a next-frame callback, which wakes the
+frame loop.
 
 ## Failure mode if regressed
 

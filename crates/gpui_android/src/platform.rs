@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
     ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
@@ -138,12 +137,15 @@ static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
 static RUN_LOOP_WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
 
 thread_local! {
-    static INPUT_RATE: RefCell<InputRate> = RefCell::default();
     /// Set while the run loop refreshes the windows for a vsync.
     static IN_FRAME: Cell<bool> = const { Cell::new(false) };
-    /// Whether gpui asked for another frame while the last one ran.
-    static RUN_CONTINUES: Cell<bool> = const { Cell::new(false) };
+    /// When a window last presented, if no frame has started since.
+    static LAST_PRESENT_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
+
+/// A frame that starts within this long of the last present continues a
+/// run of frames; after a longer gap it follows an idle pause.
+const FRAME_RUN_GAP: Duration = Duration::from_millis(50);
 
 pub(crate) fn wake_run_loop() {
     if let Some(waker) = RUN_LOOP_WAKER
@@ -152,45 +154,6 @@ pub(crate) fn wake_run_loop() {
         .as_ref()
     {
         waker.wake();
-    }
-}
-
-/// gpui keeps presenting for a second after input arrives at 60 events a
-/// second or more, such as scrolling or dragging, so the panel doesn't drop
-/// out of its high refresh rate. It only asks for frames while a window is
-/// dirty, though, so the run loop keeps requesting them for that second.
-/// Same thresholds as gpui's `InputRateTracker`, which only counts input
-/// that changed something; this counts every event gpui receives.
-#[derive(Default)]
-struct InputRate {
-    recent: VecDeque<Instant>,
-    sustain_until: Option<Instant>,
-}
-
-impl InputRate {
-    const WINDOW: Duration = Duration::from_millis(100);
-    const EVENTS_PER_WINDOW: usize = 6;
-    const SUSTAIN: Duration = Duration::from_secs(1);
-
-    fn record(&mut self) {
-        let now = Instant::now();
-        self.recent.push_back(now);
-        while self.recent.len() > Self::EVENTS_PER_WINDOW
-            || self
-                .recent
-                .front()
-                .is_some_and(|&at| now.duration_since(at) > Self::WINDOW)
-        {
-            self.recent.pop_front();
-        }
-        if self.recent.len() == Self::EVENTS_PER_WINDOW {
-            self.sustain_until = Some(now + Self::SUSTAIN);
-        }
-    }
-
-    fn is_high_rate(&self) -> bool {
-        self.sustain_until
-            .is_some_and(|until| Instant::now() < until)
     }
 }
 
@@ -205,11 +168,17 @@ unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) 
 /// an idle editor stops waking at the panel's refresh rate. gpui's web and
 /// Wayland backends drive their frame loops the same way.
 pub(crate) fn request_frame_callback() {
-    let in_frame = IN_FRAME.get();
-    if in_frame {
-        RUN_CONTINUES.set(true);
-    }
-    post_frame_callback(in_frame);
+    post_frame_callback(IN_FRAME.get());
+}
+
+/// Called whenever a window presents. While frames that present run back
+/// to back, the run loop asks for the next vsync before it paints. That
+/// also carries gpui's own rule for fast input: it keeps presenting for a
+/// second after input that changes something arrives at 60 events a
+/// second or more, so the panel stays at its high refresh rate, and each
+/// of those presents asks for the next frame.
+pub(crate) fn frame_presented() {
+    LAST_PRESENT_AT.set(Some(Instant::now()));
 }
 
 fn post_frame_callback(continues_run: bool) {
@@ -231,16 +200,6 @@ fn post_frame_callback(continues_run: bool) {
             return;
         }
         AChoreographer_postFrameCallback64(c, frame_callback, std::ptr::null_mut());
-    }
-}
-
-/// Called for each input event a window hands to gpui.
-pub(crate) fn input_arrived() {
-    if INPUT_RATE.with_borrow_mut(|rate| {
-        rate.record();
-        rate.is_high_rate()
-    }) {
-        request_frame_callback();
     }
 }
 
@@ -1303,13 +1262,16 @@ impl Platform for AndroidPlatform {
                         common.extra_windows.values().cloned().collect::<Vec<_>>(),
                     )
                 };
-                // While frames run back to back (scrolling, animations),
-                // ask for the next vsync before painting, as Android's own
-                // animations do: a paint that overruns the frame budget
-                // then starts the next frame right away instead of
-                // waiting for a further vsync. A run ends with one frame
-                // that has nothing to draw.
-                if RUN_CONTINUES.take() || INPUT_RATE.with_borrow(InputRate::is_high_rate) {
+                // While frames that present run back to back (scrolling,
+                // animations), ask for the next vsync before painting, as
+                // Android's own animations do: a paint that overruns the
+                // frame budget then starts the next frame right away
+                // instead of waiting for a further vsync. A run ends with
+                // up to two frames that present nothing.
+                if LAST_PRESENT_AT
+                    .take()
+                    .is_some_and(|at| at.elapsed() < FRAME_RUN_GAP)
+                {
                     post_frame_callback(true);
                 }
                 IN_FRAME.set(true);
