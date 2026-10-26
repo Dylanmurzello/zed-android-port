@@ -721,25 +721,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // any compile-and-run flow). Idempotent on re-launch.
     gpui_android::storage::setup_user_symlinks(&termux_home);
 
-    // Pre-trust every repo. Files under /storage/emulated/0 are owned by
-    // media_rw (UID 1023) but we run as the app's per-app UID, so libgit2's
-    // dubious-ownership check fires for every repo a user opens. The
-    // `Trust Directory` button in git_panel writes `safe.directory = <path>`
-    // to ~/.gitconfig per-repo; this skips that prompt globally by setting
-    // `safe.directory = *`. Idempotent: only writes if the file doesn't
-    // already exist (we never want to clobber a user's git config).
-    let gitconfig = data_path.join(".gitconfig");
-    if !gitconfig.exists() {
-        let body = "[safe]\n\tdirectory = *\n";
-        match std::fs::write(&gitconfig, body) {
-            Ok(()) => info!("zed_android: wrote default ~/.gitconfig with safe.directory = *"),
-            Err(err) => error!(
-                "zed_android: failed to write ~/.gitconfig at {}: {err:#}",
-                gitconfig.display()
-            ),
-        }
-    }
-
     release_channel::init(zed_release_version(), cx);
     info!("zed_android: release_channel init");
     migrate_development_credentials(cx);
