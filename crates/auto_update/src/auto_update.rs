@@ -683,6 +683,43 @@ impl AutoUpdater {
         arch: &str,
         cx: &mut AsyncApp,
     ) -> Result<ReleaseAsset> {
+        // Zed's CDN rejects "dev" as a channel. Android runs as Dev but is
+        // built from a Zed stable or preview release, so it uses that
+        // release's assets. Zed never reuses a version number across
+        // channels, so only one of them has it. Pairs with the same funnel
+        // arm in `remote/src/transport/ssh.rs`.
+        #[cfg(target_os = "android")]
+        if release_channel == ReleaseChannel::Dev {
+            let stable = Box::pin(Self::get_release_asset(
+                this,
+                ReleaseChannel::Stable,
+                version.clone(),
+                asset,
+                os,
+                arch,
+                cx,
+            ))
+            .await;
+            return match stable {
+                Ok(release) => Ok(release),
+                Err(stable_error) => {
+                    log::info!(
+                        "no stable {asset} for this version, trying preview: {stable_error:#}"
+                    );
+                    Box::pin(Self::get_release_asset(
+                        this,
+                        ReleaseChannel::Preview,
+                        version,
+                        asset,
+                        os,
+                        arch,
+                        cx,
+                    ))
+                    .await
+                }
+            };
+        }
+
         let client = this.read_with(cx, |this, _| this.client.clone());
 
         let (system_id, metrics_id, is_staff) = if client.telemetry().metrics_enabled() {
@@ -704,16 +741,7 @@ impl AutoUpdater {
         };
         let http_client = client.http_client();
 
-        // Zed's CDN rejects "dev" as a channel. Android runs as Dev but is
-        // built from a Zed stable release, so it uses that release's
-        // remote_server. Pairs with the same funnel arm in
-        // `remote/src/transport/ssh.rs`.
-        let cdn_channel = if cfg!(target_os = "android") && release_channel == ReleaseChannel::Dev {
-            ReleaseChannel::Stable.dev_name()
-        } else {
-            release_channel.dev_name()
-        };
-        let path = format!("/releases/{}/{}/asset", cdn_channel, version,);
+        let path = format!("/releases/{}/{}/asset", release_channel.dev_name(), version,);
         let url = http_client.build_zed_cloud_url_with_query(
             &path,
             AssetQuery {
