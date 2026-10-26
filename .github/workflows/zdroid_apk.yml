@@ -151,7 +151,7 @@ jobs:
         env:
           # Point the in-app updater at this repository's releases.
           ZDROID_RELEASE_REPO: ${{ github.repository }}
-        run: cargo ndk -t arm64-v8a -P "$ANDROID_PLATFORM" -o android/app/src/main/jniLibs build --release
+        run: cargo ndk -t arm64-v8a -P "$ANDROID_PLATFORM" -o android/app/src/main/jniLibs build --release --locked
 
       - name: Build APK
         # Gradle also builds and bundles zd-exec and zed-askpass-helper.
