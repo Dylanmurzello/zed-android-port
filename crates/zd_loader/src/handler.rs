@@ -10,18 +10,20 @@
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use zd_engine_core::bpf::{self, FilterSpec, SockFilter};
+use zd_engine_core::bpf::{self, ArgTrap, FilterSpec, SockFilter};
+use zd_engine_core::identity::{Identity, MAX_GROUPS};
 use zd_engine_core::compat::{self, Response};
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
 use zd_engine_core::sysno::{
     MAX_TRAPPED, PROBE_ACK, PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE, TRAP_TABLE_FAKE_ROOT,
-    is_engine_tag, nr,
+    ioctl, is_engine_tag, nr, socket as socket_traps,
 };
 use zd_engine_core::translate::{ProcExe, Translated, Translator};
 use zd_engine_core::{LOADER_IMAGE_BASE, LOADER_WINDOW_SIZE};
 
 use crate::config;
 use crate::exec;
+use crate::link;
 use crate::log;
 use crate::sys::{self, KernelSigaction};
 
@@ -159,6 +161,18 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
     }
     let program = bpf::build(&FilterSpec {
         trapped: &trapped[..count],
+        arg_traps: &[
+            ArgTrap {
+                nr: nr::IOCTL,
+                arg: 1,
+                values: ioctl::TERMIOS2_REQUESTS,
+            },
+            ArgTrap {
+                nr: nr::SOCKET,
+                arg: 0,
+                values: socket_traps::TRAPPED_FAMILIES,
+            },
+        ],
         window_start: LOADER_IMAGE_BASE,
         window_end: LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE,
         probe_nr: nr::GETPID,
@@ -213,7 +227,12 @@ pub extern "C" fn sigsys(_signal: i32, info: *mut SigInfo, context: *mut UContex
     TRAP_COUNT.fetch_add(1, Ordering::Relaxed);
     let tag = info.si_errno as u16;
     let number = info.si_syscall as u32;
-    let regs = &mut context.uc_mcontext.regs;
+    let UContext {
+        uc_sigmask,
+        uc_mcontext,
+        ..
+    } = context;
+    let regs = &mut uc_mcontext.regs;
     if tag == TAG_PROBE {
         regs[0] = PROBE_ACK;
         return;
@@ -222,12 +241,15 @@ pub extern "C" fn sigsys(_signal: i32, info: *mut SigInfo, context: *mut UContex
         compat_trap(number, regs);
         return;
     }
-    dispatch(number, regs);
+    dispatch(number, regs, uc_sigmask);
 }
 
 /// Android's filter trapped a syscall bionic never makes.
 fn compat_trap(number: u32, regs: &mut [u64; 31]) {
     COMPAT_COUNT.fetch_add(1, Ordering::Relaxed);
+    if config::get().fake_root && identity_syscall(number, regs) {
+        return;
+    }
     regs[0] = match compat::response(number, config::get().fake_root) {
         Response::Errno(errno) => sys::neg_errno(errno),
         Response::Success => 0,
@@ -307,7 +329,9 @@ fn is_self(who: ProcExe) -> bool {
     }
 }
 
-fn dispatch(number: u32, regs: &mut [u64; 31]) {
+/// `blocked` is the frame's `uc_sigmask`: the interrupted thread's signal
+/// mask, which `rt_sigreturn` reinstalls when this handler returns.
+fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64) {
     let Some(translator) = config::translator() else {
         regs[0] = sys::neg_errno(sys::ENOSYS);
         return;
@@ -332,6 +356,8 @@ fn dispatch(number: u32, regs: &mut [u64; 31]) {
         | nr::FCHMODAT
         | nr::FCHOWNAT
         | nr::OPENAT
+        | nr::OPENAT2
+        | nr::FACCESSAT2
         | nr::READLINKAT
         | nr::NEWFSTATAT
         | nr::UTIMENSAT
@@ -344,43 +370,145 @@ fn dispatch(number: u32, regs: &mut [u64; 31]) {
         nr::BIND | nr::CONNECT => sockaddr(translator, number, regs, 1, 2),
         nr::SENDTO => sockaddr(translator, number, regs, 4, 5),
         nr::RT_SIGACTION => sigaction(regs),
-        nr::RT_SIGPROCMASK => sigprocmask(regs),
+        nr::RT_SIGPROCMASK => sigprocmask(regs, blocked),
+        nr::IOCTL => termios2(regs),
+        nr::SOCKET => socket(regs),
         nr::FSTAT => {
             regs[0] = issue(number, &args_of(regs));
-            fake_owner(regs[0], regs[1] as *mut u8, false);
+            fixup_stat(regs[0], regs[1] as *mut u8, false);
         }
         nr::FCHOWN => {
             let result = issue(number, &args_of(regs));
             regs[0] = if result == sys::neg_errno(sys::EPERM) { 0 } else { result };
         }
-        nr::GETUID | nr::GETEUID | nr::GETGID | nr::GETEGID | nr::GETGROUPS => regs[0] = 0,
-        nr::SETUID
-        | nr::SETGID
-        | nr::SETREUID
-        | nr::SETREGID
-        | nr::SETRESUID
-        | nr::SETRESGID
-        | nr::SETFSUID
-        | nr::SETFSGID
-        | nr::SETGROUPS
-        | nr::CAPSET => regs[0] = 0,
-        nr::GETRESUID | nr::GETRESGID => {
-            for &pointer in &regs[0..3] {
-                let pointer = pointer as *mut u32;
-                if !pointer.is_null() {
-                    // SAFETY: guest-supplied output pointers, as for the kernel.
-                    unsafe { pointer.write_unaligned(0) };
-                }
+        nr::CAPSET => regs[0] = 0,
+        _ => {
+            if !identity_syscall(number, regs) {
+                regs[0] = sys::neg_errno(sys::ENOSYS);
             }
-            regs[0] = 0;
         }
-        _ => regs[0] = sys::neg_errno(sys::ENOSYS),
     }
+}
+
+fn identity() -> &'static Identity {
+    &config::get().identity
+}
+
+fn identity_mut() -> &'static mut Identity {
+    // SAFETY: only SIGSYS handlers of this process touch the record, and
+    // glibc's setxid broadcast makes every thread write the same values.
+    unsafe { &mut config::get_mut().identity }
+}
+
+fn status(result: Result<(), i32>) -> u64 {
+    match result {
+        Ok(()) => 0,
+        Err(errno) => sys::neg_errno(errno),
+    }
+}
+
+/// The uid/gid family under fake root, answered from the virtual
+/// record. Returns false for any other syscall.
+fn identity_syscall(number: u32, regs: &mut [u64; 31]) -> bool {
+    let (a0, a1, a2) = (regs[0] as u32, regs[1] as u32, regs[2] as u32);
+    regs[0] = match number {
+        nr::GETUID => u64::from(identity().ruid),
+        nr::GETEUID => u64::from(identity().euid),
+        nr::GETGID => u64::from(identity().rgid),
+        nr::GETEGID => u64::from(identity().egid),
+        nr::GETRESUID => {
+            let id = identity();
+            write_triple(regs, [id.ruid, id.euid, id.suid])
+        }
+        nr::GETRESGID => {
+            let id = identity();
+            write_triple(regs, [id.rgid, id.egid, id.sgid])
+        }
+        nr::GETGROUPS => getgroups(regs),
+        nr::SETUID => status(identity_mut().setuid(a0)),
+        nr::SETGID => status(identity_mut().setgid(a0)),
+        nr::SETREUID => status(identity_mut().setreuid(a0, a1)),
+        nr::SETREGID => status(identity_mut().setregid(a0, a1)),
+        nr::SETRESUID => status(identity_mut().setresuid(a0, a1, a2)),
+        nr::SETRESGID => status(identity_mut().setresgid(a0, a1, a2)),
+        nr::SETFSUID => u64::from(identity_mut().setfsuid(a0)),
+        nr::SETFSGID => u64::from(identity_mut().setfsgid(a0)),
+        nr::SETGROUPS => setgroups(regs),
+        _ => return false,
+    };
+    true
+}
+
+/// `getresuid`/`getresgid`: three output pointers, EFAULT for a null
+/// one like the kernel.
+fn write_triple(regs: &[u64; 31], values: [u32; 3]) -> u64 {
+    for (&pointer, value) in regs[0..3].iter().zip(values) {
+        let pointer = pointer as *mut u32;
+        if pointer.is_null() {
+            return sys::neg_errno(sys::EFAULT);
+        }
+        // SAFETY: a guest output pointer, as handed to the kernel.
+        unsafe { pointer.write_unaligned(value) };
+    }
+    0
+}
+
+/// `getgroups(size, list)`: size 0 asks for the count.
+fn getgroups(regs: &[u64; 31]) -> u64 {
+    let size = regs[0] as i32;
+    let list = regs[1] as *mut u32;
+    let groups = identity().groups();
+    if size < 0 {
+        return sys::neg_errno(sys::EINVAL);
+    }
+    if size == 0 {
+        return groups.len() as u64;
+    }
+    if (size as usize) < groups.len() {
+        return sys::neg_errno(sys::EINVAL);
+    }
+    if list.is_null() {
+        return sys::neg_errno(sys::EFAULT);
+    }
+    for (index, &group) in groups.iter().enumerate() {
+        // SAFETY: the guest supplied `size` slots at `list`.
+        unsafe { list.add(index).write_unaligned(group) };
+    }
+    groups.len() as u64
+}
+
+/// `setgroups(size, list)`.
+fn setgroups(regs: &[u64; 31]) -> u64 {
+    let size = regs[0] as i32;
+    let list = regs[1] as *const u32;
+    if !identity().may_setgroups() {
+        return sys::neg_errno(sys::EPERM);
+    }
+    if size < 0 || size as usize > MAX_GROUPS {
+        return sys::neg_errno(sys::EINVAL);
+    }
+    let count = size as usize;
+    let mut groups = [0u32; MAX_GROUPS];
+    if count > 0 {
+        if list.is_null() {
+            return sys::neg_errno(sys::EFAULT);
+        }
+        for (index, slot) in groups[..count].iter_mut().enumerate() {
+            // SAFETY: the guest supplied `size` ids at `list`.
+            *slot = unsafe { list.add(index).read_unaligned() };
+        }
+    }
+    status(identity_mut().setgroups(&groups[..count]))
 }
 
 /// Syscalls with one path argument at `index` whose other arguments pass
 /// through unchanged, plus their result fixups.
 fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31], index: usize) {
+    if number == nr::UTIMENSAT && regs[1] == 0 {
+        // `futimens`: the fd itself, nothing to translate.
+        regs[0] = issue(number, &args_of(regs));
+        return;
+    }
     let Some(guest) = (unsafe { cstr_bounded(regs[index] as *const u8, MAX_PATH) }) else {
         regs[0] = sys::neg_errno(if regs[index] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
         return;
@@ -406,15 +534,18 @@ fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 
             issue(number, &args)
         }
         Ok(Translated::ProcExe(_)) => issue(number, &args),
-        Ok(Translated::ProcAuxv(who)) if is_self(who) && number == nr::OPENAT => serve_auxv(regs),
+        Ok(Translated::ProcAuxv(who)) if is_self(who) && number == nr::OPENAT => serve_auxv(regs, regs[2] as usize),
+        Ok(Translated::ProcAuxv(who)) if is_self(who) && number == nr::OPENAT2 => {
+            serve_auxv(regs, open_how_flags(regs[2] as *const u64))
+        }
         Ok(Translated::ProcAuxv(_)) => issue(number, &args),
         Err(_) => sys::neg_errno(sys::ENAMETOOLONG),
     };
     regs[0] = result;
     match number {
         nr::READLINKAT => detranslate_readlink(translator, regs, &mut host),
-        nr::NEWFSTATAT => fake_owner(result, regs[2] as *mut u8, false),
-        nr::STATX => fake_owner(result, regs[4] as *mut u8, true),
+        nr::NEWFSTATAT => fixup_stat(result, regs[2] as *mut u8, false),
+        nr::STATX => fixup_stat(result, regs[4] as *mut u8, true),
         nr::FCHOWNAT if result == sys::neg_errno(sys::EPERM) => regs[0] = 0,
         nr::MKNODAT if result == sys::neg_errno(sys::EPERM) => {
             regs[0] = device_placeholder(args[0] as isize, args[1] as *const u8, regs[2] as u32);
@@ -448,23 +579,58 @@ fn device_placeholder(dirfd: isize, path: *const u8, mode: u32) -> u64 {
     }
 }
 
-/// Present files owned by the app as root's. `struct stat` keeps uid at
-/// 24 and gid at 28; `struct statx` at 20 and 24.
-fn fake_owner(result: u64, buffer: *mut u8, statx: bool) {
-    let config = config::get();
-    if !config.fake_root || result != 0 || buffer.is_null() {
+/// `socket(AF_NETLINK, type, protocol)`: see `sysno::socket`.
+fn socket(regs: &mut [u64; 31]) {
+    let result = issue(nr::SOCKET, &args_of(regs));
+    let refused = result == sys::neg_errno(sys::EACCES) || result == sys::neg_errno(sys::EPERM);
+    regs[0] = if refused {
+        sys::neg_errno(sys::EPROTONOSUPPORT)
+    } else {
+        result
+    };
+}
+
+/// `open_how.flags` of an `openat2` call.
+fn open_how_flags(how: *const u64) -> usize {
+    if how.is_null() {
+        return 0;
+    }
+    // SAFETY: a guest `struct open_how`, as handed to the kernel.
+    unsafe { how.read_unaligned() as usize }
+}
+
+/// Two corrections to a `struct stat` (uid 24, gid 28, nlink 20, ino 8)
+/// or `struct statx` (uid 20, gid 24, nlink 16, ino 32) the kernel just
+/// filled. Under fake root, files the app owns are presented as owned
+/// by the guest's saved ids, so a process that dropped to a user for good
+/// sees its files as that user's while one that only lowered its
+/// effective id still sees root's (proot's fake_id0 makes the same
+/// choice). Always, a file this process "hard-linked" by copying reports
+/// the link count the link would have given it.
+fn fixup_stat(result: u64, buffer: *mut u8, statx: bool) {
+    if result != 0 || buffer.is_null() {
         return;
     }
-    let (uid_offset, gid_offset) = if statx { (20usize, 24usize) } else { (24usize, 28usize) };
+    let config = config::get();
+    let (uid_offset, gid_offset, nlink_offset, ino_offset) =
+        if statx { (20usize, 24usize, 16usize, 32usize) } else { (24usize, 28usize, 20usize, 8usize) };
     // SAFETY: the kernel just filled this guest buffer.
     unsafe {
-        let uid = buffer.add(uid_offset) as *mut u32;
-        let gid = buffer.add(gid_offset) as *mut u32;
-        if uid.read_unaligned() == config.real_uid {
-            uid.write_unaligned(0);
+        if config.fake_root {
+            let uid = buffer.add(uid_offset) as *mut u32;
+            let gid = buffer.add(gid_offset) as *mut u32;
+            if uid.read_unaligned() == config.real_uid {
+                uid.write_unaligned(config.identity.suid);
+            }
+            if gid.read_unaligned() == config.real_gid {
+                gid.write_unaligned(config.identity.sgid);
+            }
         }
-        if gid.read_unaligned() == config.real_gid {
-            gid.write_unaligned(0);
+        let ino = (buffer.add(ino_offset) as *const u64).read_unaligned();
+        let extra = link::extra_links(ino);
+        if extra != 0 {
+            let nlink = buffer.add(nlink_offset) as *mut u32;
+            nlink.write_unaligned(nlink.read_unaligned().saturating_add(extra));
         }
     }
 }
@@ -489,7 +655,13 @@ fn two_paths(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31]
             }
         }
     }
-    regs[0] = issue(number, &args);
+    let result = issue(number, &args);
+    let refused = result == sys::neg_errno(sys::EACCES) || result == sys::neg_errno(sys::EPERM);
+    regs[0] = if number == nr::LINKAT && refused {
+        link::by_copy(args[0] as isize, args[1] as *const u8, args[2] as isize, args[3] as *const u8, args[4])
+    } else {
+        result
+    };
 }
 
 /// Guest absolute path of the directory `dirfd` refers to, via the
@@ -647,20 +819,195 @@ fn sockaddr(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31],
     regs[0] = issue(number, &args);
 }
 
-/// `rt_sigprocmask(how, set, oldset, sigsetsize)`: SIGSYS never enters
-/// the blocked set, whatever the guest asks.
-fn sigprocmask(regs: &mut [u64; 31]) {
-    let how = regs[0] as usize;
-    let set = regs[1] as *const u64;
-    let mut args = args_of(regs);
-    if set.is_null() || how == sys::SIG_UNBLOCK || regs[3] != 8 {
-        regs[0] = issue(nr::RT_SIGPROCMASK, &args);
+/// Kernel `struct termios` (asm-generic): 36 bytes, no speed fields.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KernelTermios {
+    iflag: u32,
+    oflag: u32,
+    cflag: u32,
+    lflag: u32,
+    line: u8,
+    cc: [u8; 19],
+}
+
+/// Kernel `struct termios2`: the same plus explicit input and output
+/// speeds, 44 bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KernelTermios2 {
+    iflag: u32,
+    oflag: u32,
+    cflag: u32,
+    lflag: u32,
+    line: u8,
+    cc: [u8; 19],
+    ispeed: u32,
+    ospeed: u32,
+}
+
+const _: () = {
+    assert!(size_of::<KernelTermios>() == 36);
+    assert!(size_of::<KernelTermios2>() == 44);
+};
+
+const CBAUD: u32 = 0x100f;
+const BOTHER: u32 = 0x1000;
+const BAUD_LOW: [u32; 16] = [
+    0, 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600, 19200, 38400,
+];
+const BAUD_HIGH: [u32; 15] = [
+    57600, 115200, 230400, 460800, 500000, 576000, 921600, 1000000, 1152000, 1500000, 2000000,
+    2500000, 3000000, 3500000, 4000000,
+];
+
+fn speed_of(cflag: u32) -> u32 {
+    let code = cflag & CBAUD;
+    if code < 16 {
+        BAUD_LOW[code as usize]
+    } else if (0x1001..=0x100f).contains(&code) {
+        BAUD_HIGH[(code - 0x1001) as usize]
+    } else {
+        0
+    }
+}
+
+/// Closest classic `Bxxx` code for a speed, for a `BOTHER` request that
+/// a pty would ignore anyway.
+fn code_of(speed: u32) -> u32 {
+    if let Some(index) = BAUD_LOW.iter().position(|&candidate| candidate == speed) {
+        return index as u32;
+    }
+    if let Some(index) = BAUD_HIGH.iter().position(|&candidate| candidate == speed) {
+        return 0x1001 + index as u32;
+    }
+    0xf
+}
+
+/// `ioctl(fd, TCGETS2 | TCSETS2 | TCSETSW2 | TCSETSF2, termios2*)`, served
+/// through the classic requests the app domain is allowed. glibc 2.41+
+/// uses only the termios2 forms, so without this no guest can tell a
+/// terminal from a pipe.
+fn termios2(regs: &mut [u64; 31]) {
+    let fd = regs[0] as usize;
+    let request = regs[1];
+    let argument = regs[2] as *mut u8;
+    if argument.is_null() {
+        regs[0] = sys::neg_errno(sys::EFAULT);
         return;
     }
-    // SAFETY: a guest sigset of 8 bytes, as handed to the kernel.
-    let copy = unsafe { set.read_unaligned() } & !sys::SIGSYS_BIT;
-    args[1] = &copy as *const u64 as usize;
-    regs[0] = issue(nr::RT_SIGPROCMASK, &args);
+    if request == ioctl::TCGETS2 {
+        let mut classic = KernelTermios {
+            iflag: 0,
+            oflag: 0,
+            cflag: 0,
+            lflag: 0,
+            line: 0,
+            cc: [0; 19],
+        };
+        let result = unsafe {
+            sys::syscall6(
+                nr::IOCTL,
+                fd,
+                ioctl::TCGETS as usize,
+                &mut classic as *mut KernelTermios as usize,
+                0,
+                0,
+                0,
+            )
+        };
+        if result != 0 {
+            regs[0] = result as u64;
+            return;
+        }
+        let speed = speed_of(classic.cflag);
+        let extended = KernelTermios2 {
+            iflag: classic.iflag,
+            oflag: classic.oflag,
+            cflag: classic.cflag,
+            lflag: classic.lflag,
+            line: classic.line,
+            cc: classic.cc,
+            ispeed: speed,
+            ospeed: speed,
+        };
+        // SAFETY: a guest `struct termios2`, as handed to the kernel.
+        unsafe { (argument as *mut KernelTermios2).write_unaligned(extended) };
+        regs[0] = 0;
+        return;
+    }
+    let classic_request = match request {
+        ioctl::TCSETS2 => ioctl::TCSETS,
+        ioctl::TCSETSW2 => ioctl::TCSETSW,
+        ioctl::TCSETSF2 => ioctl::TCSETSF,
+        _ => {
+            regs[0] = issue(nr::IOCTL, &args_of(regs));
+            return;
+        }
+    };
+    // SAFETY: a guest `struct termios2`, as handed to the kernel.
+    let extended = unsafe { (argument as *const KernelTermios2).read_unaligned() };
+    let mut cflag = extended.cflag;
+    if cflag & CBAUD == BOTHER {
+        cflag = (cflag & !CBAUD) | code_of(extended.ospeed);
+    }
+    let classic = KernelTermios {
+        iflag: extended.iflag,
+        oflag: extended.oflag,
+        cflag,
+        lflag: extended.lflag,
+        line: extended.line,
+        cc: extended.cc,
+    };
+    regs[0] = unsafe {
+        sys::syscall6(
+            nr::IOCTL,
+            fd,
+            classic_request as usize,
+            &classic as *const KernelTermios as usize,
+            0,
+            0,
+            0,
+        ) as u64
+    };
+}
+
+/// `rt_sigprocmask(how, set, oldset, sigsetsize)`, applied to the signal
+/// frame rather than re-issued. The kernel reinstalls `uc_sigmask` at
+/// `rt_sigreturn`, so a mask changed by a syscall from inside this
+/// handler would be undone the moment the guest resumes (bash blocks
+/// SIGTTOU around `tcsetpgrp` this way; with the change undone every
+/// foreground job stopped in the child's `tcsetpgrp`). SIGSYS never
+/// enters the blocked set, whatever the guest asks: a trap while it is
+/// blocked kills the process.
+fn sigprocmask(regs: &mut [u64; 31], blocked: &mut u64) {
+    let how = regs[0] as usize;
+    let set = regs[1] as *const u64;
+    let oldset = regs[2] as *mut u64;
+    if regs[3] != 8 {
+        regs[0] = sys::neg_errno(sys::EINVAL);
+        return;
+    }
+    let old = *blocked;
+    if !set.is_null() {
+        // SAFETY: a guest sigset of 8 bytes, as handed to the kernel.
+        let requested = unsafe { set.read_unaligned() };
+        let new = match how {
+            sys::SIG_BLOCK => old | requested,
+            sys::SIG_UNBLOCK => old & !requested,
+            sys::SIG_SETMASK => requested,
+            _ => {
+                regs[0] = sys::neg_errno(sys::EINVAL);
+                return;
+            }
+        };
+        *blocked = new & !sys::SIGSYS_BIT;
+    }
+    if !oldset.is_null() {
+        // SAFETY: a guest sigset of 8 bytes, as handed to the kernel.
+        unsafe { oldset.write_unaligned(old) };
+    }
+    regs[0] = 0;
 }
 
 /// `rt_sigaction(sig, act, oact, sigsetsize)`: the guest's SIGSYS
@@ -701,12 +1048,11 @@ fn sigaction(regs: &mut [u64; 31]) {
 /// (its `AT_PHDR`, `AT_ENTRY`, `AT_EXECFN`), so hand out a memfd holding
 /// the vector the guest actually started with. rustix-based programs
 /// (uutils among them) read `AT_EXECFN` this way instead of `argv[0]`.
-fn serve_auxv(regs: &[u64; 31]) -> u64 {
+fn serve_auxv(regs: &[u64; 31], flags: usize) -> u64 {
     let config = config::get();
     if config.auxv_ptr == 0 {
         return issue(nr::OPENAT, &args_of(regs));
     }
-    let flags = regs[2] as usize;
     if flags & sys::O_ACCMODE != sys::O_RDONLY {
         return sys::neg_errno(sys::EACCES);
     }

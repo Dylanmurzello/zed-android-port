@@ -12,6 +12,7 @@ pub mod bindings;
 pub mod bpf;
 pub mod compat;
 pub mod elf;
+pub mod identity;
 pub mod path;
 pub mod shebang;
 pub mod stack;
@@ -58,7 +59,11 @@ pub mod env {
     pub const FAKE_ROOT: &str = "ZD_FAKE_ROOT";
     /// Optional file the loader appends diagnostics to.
     pub const LOG: &str = "ZD_LOG";
-    /// Guest-only environment overrides as `KEY=VALUE;KEY=VALUE`.
+    /// Guest-only environment overrides as `KEY=VALUE;KEY=VALUE`, the
+    /// editor's view of `HOME`, `PATH` and friends translated into the
+    /// guest's at the boundary. Applied by the loader where present (the
+    /// supervisor's spawns) and then removed, so a guest's own exports
+    /// reach its children untouched. Per exec.
     pub const GUEST_ENV: &str = "ZD_GUEST_ENV";
     /// Guest path of the program to run when the loader is exec'd with
     /// the guest's own argv (so the kernel's argument area, and with it
@@ -73,8 +78,13 @@ pub mod env {
     /// leak them; guests exec their children without it, so fds they
     /// pass on purpose still arrive. Per exec.
     pub const CLOSE_FDS: &str = "ZD_CLOSE_FDS";
+    /// The fake-root identity of the process being exec'd, as
+    /// [`crate::identity::Identity::encode`] writes it. Per exec: the
+    /// handler writes it from its own record on every `execve`, so a
+    /// stale copy in a guest's environment never wins.
+    pub const IDENTITY: &str = "ZD_IDENTITY";
     /// Variables that describe one exec and must not reach the guest.
-    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS];
+    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV];
 }
 
 /// Separator between entries in [`env::BINDS`] and [`env::GUEST_ENV`].

@@ -6,8 +6,10 @@
 //! 2. `getpid(PROBE_MAGIC)` -> TRAP tagged `probe_tag`.
 //! 3. instruction pointer inside the loader window -> ALLOW (this is how
 //!    the handler's own re-issued syscalls get through).
-//! 4. trapped syscall numbers -> TRAP tagged `path_tag`.
-//! 5. everything else -> ALLOW.
+//! 4. argument-conditional traps (`ioctl` with a termios2 request) ->
+//!    TRAP tagged `path_tag`; other arguments fall through.
+//! 5. trapped syscall numbers -> TRAP tagged `path_tag`.
+//! 6. everything else -> ALLOW.
 
 /// `struct sock_filter` from `<linux/filter.h>`.
 #[repr(C)]
@@ -39,6 +41,14 @@ const OFF_IP_HI: u32 = 12;
 const OFF_ARG0_LO: u32 = 16;
 const OFF_ARG0_HI: u32 = 20;
 
+/// Trap `nr` only when argument `arg` equals one of `values`.
+#[derive(Debug, Clone, Copy)]
+pub struct ArgTrap<'a> {
+    pub nr: u32,
+    pub arg: u8,
+    pub values: &'a [u64],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BpfError {
     TooManyTrapped,
@@ -49,6 +59,7 @@ pub enum BpfError {
 
 pub struct FilterSpec<'a> {
     pub trapped: &'a [u32],
+    pub arg_traps: &'a [ArgTrap<'a>],
     pub window_start: u64,
     pub window_end: u64,
     pub probe_nr: u32,
@@ -113,14 +124,23 @@ const fn ret(k: u32) -> SockFilter {
     }
 }
 
+fn arg_offset(arg: u8) -> u32 {
+    OFF_ARG0_LO + 8 * u32::from(arg)
+}
+
 pub fn build(spec: &FilterSpec) -> Result<Program, BpfError> {
-    // Fixed prologue (indices 0..=15), one jeq per trapped number, then
-    // ALLOW for the fall-through and the shared TRAP that the chain hits
-    // jump over the ALLOW to reach. Jump offsets are relative to the next
-    // instruction, so every forward jump below is `target - index - 1`.
+    // Fixed prologue (indices 0..=15), one block per argument trap, one
+    // jeq per trapped number, then ALLOW for the fall-through and the
+    // shared TRAP that the jumps reach. Jump offsets are relative to the
+    // next instruction, so every forward jump below is `target - index - 1`.
     const PROLOGUE: usize = 16;
     let count = spec.trapped.len();
-    if PROLOGUE + count + 2 > MAX_INSNS || count > 200 {
+    let arg_block_len: usize = spec
+        .arg_traps
+        .iter()
+        .map(|trap| 2 + 4 * trap.values.len())
+        .sum();
+    if PROLOGUE + arg_block_len + count + 2 > MAX_INSNS || count > 200 {
         return Err(BpfError::TooManyTrapped);
     }
     let window_hi = (spec.window_start >> 32) as u32;
@@ -129,9 +149,13 @@ pub fn build(spec: &FilterSpec) -> Result<Program, BpfError> {
     }
     let window_lo_start = spec.window_start as u32;
     let window_lo_end = spec.window_end as u32;
-    let allow_index = PROLOGUE + count;
+    let table_index = PROLOGUE + arg_block_len;
+    let allow_index = table_index + count;
     let trap_index = allow_index + 1;
     let total = trap_index + 1;
+    if trap_index - PROLOGUE > usize::from(u8::MAX) {
+        return Err(BpfError::TooManyTrapped);
+    }
 
     let mut insns = [ret(SECCOMP_RET_ALLOW); MAX_INSNS];
     let distance = |from: usize, to: usize| -> u8 { (to - from - 1) as u8 };
@@ -152,8 +176,30 @@ pub fn build(spec: &FilterSpec) -> Result<Program, BpfError> {
     insns[13] = jge(window_lo_end, distance(13, 15), 0);
     insns[14] = ret(SECCOMP_RET_ALLOW);
     insns[15] = ld(OFF_NR);
+
+    // Each block: `jeq nr` else skip the block; per value `ld lo; jne ->
+    // next value; ld hi; jeq -> TRAP`; the block ends by reloading nr for
+    // whatever follows (the accumulator held an argument word).
+    let mut index = PROLOGUE;
+    for trap in spec.arg_traps {
+        let block_end = index + 2 + 4 * trap.values.len();
+        insns[index] = jeq(trap.nr, 0, distance(index, block_end - 1));
+        index += 1;
+        for &value in trap.values {
+            let next_value = index + 4;
+            insns[index] = ld(arg_offset(trap.arg));
+            insns[index + 1] = jeq(value as u32, 0, distance(index + 1, next_value));
+            insns[index + 2] = ld(arg_offset(trap.arg) + 4);
+            insns[index + 3] = jeq((value >> 32) as u32, distance(index + 3, trap_index), 0);
+            index = next_value;
+        }
+        insns[index] = ld(OFF_NR);
+        index += 1;
+        debug_assert_eq!(index, block_end);
+    }
+
     for (offset, &number) in spec.trapped.iter().enumerate() {
-        let index = PROLOGUE + offset;
+        let index = table_index + offset;
         insns[index] = jeq(number, distance(index, trap_index), 0);
     }
     insns[trap_index] = ret(SECCOMP_RET_TRAP | u32::from(spec.path_tag));
@@ -185,7 +231,7 @@ pub fn evaluate(program: &Program, data: &SeccompData) -> u32 {
             other => {
                 let rel = other - OFF_ARG0_LO;
                 let arg = data.args[(rel / 8) as usize];
-                if rel % 8 == 0 { arg as u32 } else { (arg >> 32) as u32 }
+                if rel.is_multiple_of(8) { arg as u32 } else { (arg >> 32) as u32 }
             }
         }
     };
@@ -211,9 +257,16 @@ mod tests {
     use crate::sysno::{PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE_CHUNK1, nr};
     use crate::{LOADER_IMAGE_BASE, LOADER_WINDOW_SIZE};
 
+    const IOCTL_TRAPS: &[ArgTrap<'static>] = &[ArgTrap {
+        nr: nr::IOCTL,
+        arg: 1,
+        values: crate::sysno::ioctl::TERMIOS2_REQUESTS,
+    }];
+
     fn program() -> Program {
         build(&FilterSpec {
             trapped: TRAP_TABLE_CHUNK1,
+            arg_traps: IOCTL_TRAPS,
             window_start: LOADER_IMAGE_BASE,
             window_end: LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE,
             probe_nr: nr::GETPID,
@@ -231,6 +284,27 @@ mod tests {
             instruction_pointer: ip,
             args: [arg0, 0, 0, 0, 0, 0],
         }
+    }
+
+    #[test]
+    fn ioctl_traps_only_termios2_requests() {
+        use crate::sysno::ioctl;
+        let program = program();
+        let mut call = data(nr::IOCTL, GUEST_IP, 0);
+        for request in [ioctl::TCGETS2, ioctl::TCSETS2, ioctl::TCSETSW2, ioctl::TCSETSF2] {
+            call.args[1] = request;
+            assert_eq!(evaluate(&program, &call), SECCOMP_RET_TRAP | u32::from(TAG_PATH), "{request:#x}");
+        }
+        for request in [ioctl::TCGETS, ioctl::TCSETS, 0x5413, 0x8912, ioctl::TCGETS2 | (1 << 32)] {
+            call.args[1] = request;
+            assert_eq!(evaluate(&program, &call), SECCOMP_RET_ALLOW, "{request:#x}");
+        }
+        call.args[1] = ioctl::TCGETS2;
+        call.instruction_pointer = LOADER_IP;
+        assert_eq!(evaluate(&program, &call), SECCOMP_RET_ALLOW);
+        // A trapped number after the ioctl block still traps: the block
+        // reloads the syscall number before the table.
+        assert_eq!(evaluate(&program, &data(nr::OPENAT, GUEST_IP, ioctl::TCGETS2)), SECCOMP_RET_TRAP | u32::from(TAG_PATH));
     }
 
     const GUEST_IP: u64 = 0x7f12_3456_7890;
@@ -317,13 +391,14 @@ mod tests {
                 assert!(index + 1 + usize::from(insn.jf) < len, "jf out of range at {index}");
             }
         }
-        assert_eq!(len, 16 + TRAP_TABLE_CHUNK1.len() + 2);
+        assert_eq!(len, 16 + (2 + 4 * 4) + TRAP_TABLE_CHUNK1.len() + 2);
     }
 
     #[test]
     fn rejects_windows_crossing_a_high_word() {
         let error = build(&FilterSpec {
             trapped: TRAP_TABLE_CHUNK1,
+            arg_traps: &[],
             window_start: 0x54_FFFF_0000,
             window_end: 0x55_0000_1000,
             probe_nr: nr::GETPID,

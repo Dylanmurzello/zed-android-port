@@ -5,6 +5,7 @@
 use core::cell::UnsafeCell;
 use core::fmt;
 
+use zd_engine_core::identity::Identity;
 use zd_engine_core::bindings::{Bindings, BindingsError};
 use zd_engine_core::path::{MAX_PATH, is_absolute};
 use zd_engine_core::stack::{env_key, env_value};
@@ -135,7 +136,7 @@ impl Level {
 }
 
 /// Persistent engine variables, in the order they are re-injected.
-pub const ENGINE_KEYS: [&str; 5] = [env::ROOTFS, env::BINDS, env::FAKE_ROOT, env::LOG, env::GUEST_ENV];
+pub const ENGINE_KEYS: [&str; 4] = [env::ROOTFS, env::BINDS, env::FAKE_ROOT, env::LOG];
 
 pub struct Config {
     pub rootfs: Buf,
@@ -143,7 +144,7 @@ pub struct Config {
     pub log: Buf,
     /// Full `KEY=VALUE` strings of [`ENGINE_KEYS`] as received, for
     /// re-injection into children that dropped them.
-    pub engine_entries: [Buf; 5],
+    pub engine_entries: [Buf; ENGINE_KEYS.len()],
     pub real_uid: u32,
     pub real_gid: u32,
     /// Guest `PATH` used for symlink-farm lookups.
@@ -168,6 +169,8 @@ pub struct Config {
     pub loader_path: Buf,
     pub guest_env: GuestEnv,
     pub fake_root: bool,
+    /// What the guest believes its uids and gids are (fake root only).
+    pub identity: Identity,
     pub page_size: usize,
     pub translator: Option<Translator<'static>>,
 }
@@ -178,7 +181,7 @@ impl Config {
             rootfs: Buf::new(),
             binds: Buf::new(),
             log: Buf::new(),
-            engine_entries: [const { Buf::new() }; 5],
+            engine_entries: [const { Buf::new() }; ENGINE_KEYS.len()],
             real_uid: 0,
             real_gid: 0,
             guest_path: Buf::new(),
@@ -192,6 +195,7 @@ impl Config {
             loader_path: Buf::new(),
             guest_env: GuestEnv::new(),
             fake_root: false,
+            identity: Identity::ROOT,
             page_size: 0,
             translator: None,
         }
@@ -206,6 +210,7 @@ pub enum InitError {
     RootfsNotAbsolute,
     TooLong,
     BadGuestEnv,
+    BadIdentity,
     Bindings(BindingsError),
 }
 
@@ -216,6 +221,7 @@ impl fmt::Display for InitError {
             Self::RootfsNotAbsolute => write!(f, "{} must be an absolute path", env::ROOTFS),
             Self::TooLong => write!(f, "an engine variable exceeds {MAX_PATH} bytes"),
             Self::BadGuestEnv => write!(f, "{} entries must look like KEY=VALUE", env::GUEST_ENV),
+            Self::BadIdentity => write!(f, "{} is not a list of ids", env::IDENTITY),
             Self::Bindings(error) => write!(f, "{}: {error:?}", env::BINDS),
         }
     }
@@ -264,6 +270,8 @@ pub fn init(
             config.selftest = value == b"1";
         } else if let Some(value) = env_value(entry, env::CLOSE_FDS.as_bytes()) {
             config.close_fds = value == b"1";
+        } else if let Some(value) = env_value(entry, env::IDENTITY.as_bytes()) {
+            config.identity = Identity::parse(value).ok_or(InitError::BadIdentity)?;
         } else if let Some(value) = env_value(entry, env::GUEST_ENV.as_bytes()) {
             for item in value.split(|&byte| byte == LIST_SEPARATOR as u8) {
                 if !item.is_empty() {

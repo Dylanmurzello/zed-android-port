@@ -17,6 +17,11 @@ pub const O_ACCMODE: usize = 0o3;
 pub const O_EXCL: usize = 0o200;
 
 pub const AT_EMPTY_PATH: usize = 0x1000;
+pub const AT_SYMLINK_NOFOLLOW: usize = 0x100;
+pub const AT_SYMLINK_FOLLOW: usize = 0x400;
+pub const O_NOFOLLOW: usize = 0o400000;
+pub const S_IFLNK: u32 = 0o120000;
+pub const S_IFIFO: u32 = 0o010000;
 pub const X_OK: usize = 1;
 
 pub const S_IFMT: u32 = 0o170000;
@@ -43,7 +48,9 @@ pub const MAP_ANONYMOUS: usize = 0x20;
 
 pub const SIGSYS: usize = 31;
 pub const SIGSYS_BIT: u64 = 1 << (SIGSYS - 1);
+pub const SIG_BLOCK: usize = 0;
 pub const SIG_UNBLOCK: usize = 1;
+pub const SIG_SETMASK: usize = 2;
 pub const SA_SIGINFO: u64 = 0x4;
 pub const SA_RESTART: u64 = 0x1000_0000;
 pub const SA_NODEFER: u64 = 0x4000_0000;
@@ -66,6 +73,7 @@ pub const EINVAL: i32 = 22;
 pub const ERANGE: i32 = 34;
 pub const ENAMETOOLONG: i32 = 36;
 pub const ENOSYS: i32 = 38;
+pub const EPROTONOSUPPORT: i32 = 93;
 
 #[inline(always)]
 pub unsafe fn syscall6(
@@ -222,6 +230,58 @@ pub fn stat_mode(dirfd: isize, path: *const u8, flags: usize) -> Result<u32, i32
         )
     })?;
     Ok(u32::from_le_bytes([buffer[16], buffer[17], buffer[18], buffer[19]]))
+}
+
+/// `st_mode`, `st_uid` and `st_gid` of an open file.
+pub fn fstat_owner(fd: i32) -> Result<(u32, u32, u32), i32> {
+    let mut buffer = [0u8; 128];
+    check(unsafe { syscall6(nr::FSTAT, fd as usize, buffer.as_mut_ptr() as usize, 0, 0, 0, 0) })?;
+    let word = |offset: usize| {
+        u32::from_le_bytes([buffer[offset], buffer[offset + 1], buffer[offset + 2], buffer[offset + 3]])
+    };
+    Ok((word(16), word(24), word(28)))
+}
+
+/// Raw arm64 `struct stat` of an open file.
+pub fn fstat_raw(fd: i32, buffer: &mut [u8; 128]) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::FSTAT, fd as usize, buffer.as_mut_ptr() as usize, 0, 0, 0, 0) }).map(|_| ())
+}
+
+/// Raw arm64 `struct stat` of a path; `path` must be NUL-terminated.
+pub fn fstatat_raw(dirfd: isize, path: *const u8, flags: usize, buffer: &mut [u8; 128]) -> Result<(), i32> {
+    check(unsafe {
+        syscall6(nr::NEWFSTATAT, dirfd as usize, path as usize, buffer.as_mut_ptr() as usize, flags, 0, 0)
+    })
+    .map(|_| ())
+}
+
+pub fn fchmod(fd: i32, mode: u32) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::FCHMOD, fd as usize, mode as usize, 0, 0, 0, 0) }).map(|_| ())
+}
+
+/// `sendfile(out, in, NULL, count)`: copies from the input's file
+/// position.
+pub fn sendfile(out_fd: i32, in_fd: i32, count: usize) -> Result<usize, i32> {
+    check(unsafe { syscall6(nr::SENDFILE, out_fd as usize, in_fd as usize, 0, count, 0, 0) })
+}
+
+/// `utimensat(fd, NULL, times, 0)`: `[atime sec, nsec, mtime sec, nsec]`.
+pub fn futimens(fd: i32, times: &[u64; 4]) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::UTIMENSAT, fd as usize, 0, times.as_ptr() as usize, 0, 0, 0) }).map(|_| ())
+}
+
+pub fn unlinkat(dirfd: isize, path: *const u8, flags: usize) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::UNLINKAT, dirfd as usize, path as usize, flags, 0, 0, 0) }).map(|_| ())
+}
+
+pub fn symlinkat(target: *const u8, dirfd: isize, path: *const u8) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::SYMLINKAT, target as usize, dirfd as usize, path as usize, 0, 0, 0) })
+        .map(|_| ())
+}
+
+pub fn mknodat(dirfd: isize, path: *const u8, mode: u32, dev: usize) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::MKNODAT, dirfd as usize, path as usize, mode as usize, dev, 0, 0) })
+        .map(|_| ())
 }
 
 pub fn faccessat(dirfd: isize, path: *const u8, mode: usize) -> Result<(), i32> {

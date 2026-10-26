@@ -14,6 +14,7 @@ pub mod nr {
     pub const GETCWD: u32 = 17;
     pub const FCNTL: u32 = 25;
     pub const INOTIFY_ADD_WATCH: u32 = 27;
+    pub const IOCTL: u32 = 29;
     pub const MKNODAT: u32 = 33;
     pub const MKDIRAT: u32 = 34;
     pub const UNLINKAT: u32 = 35;
@@ -28,6 +29,7 @@ pub mod nr {
     pub const FACCESSAT: u32 = 48;
     pub const CHDIR: u32 = 49;
     pub const CHROOT: u32 = 51;
+    pub const FCHMOD: u32 = 52;
     pub const FCHMODAT: u32 = 53;
     pub const FCHOWNAT: u32 = 54;
     pub const FCHOWN: u32 = 55;
@@ -37,6 +39,7 @@ pub mod nr {
     pub const READ: u32 = 63;
     pub const WRITE: u32 = 64;
     pub const PREAD64: u32 = 67;
+    pub const SENDFILE: u32 = 71;
     pub const READLINKAT: u32 = 78;
     pub const NEWFSTATAT: u32 = 79;
     pub const FSTAT: u32 = 80;
@@ -78,6 +81,7 @@ pub mod nr {
     pub const GETEUID: u32 = 175;
     pub const GETGID: u32 = 176;
     pub const GETEGID: u32 = 177;
+    pub const SOCKET: u32 = 198;
     pub const BIND: u32 = 200;
     pub const CONNECT: u32 = 203;
     pub const SENDTO: u32 = 206;
@@ -130,6 +134,8 @@ pub const TRAP_TABLE_CHUNK1: &[u32] = &[
 /// Syscalls with a path, a sockaddr, a signal set, or a cwd result that
 /// the engine translates. Everything else passes through the filter.
 pub const TRAP_TABLE: &[u32] = &[
+    nr::FACCESSAT2,
+    nr::OPENAT2,
     // path in x0
     nr::SETXATTR,
     nr::LSETXATTR,
@@ -198,6 +204,33 @@ pub const TRAP_TABLE_FAKE_ROOT: &[u32] = &[
     nr::SETGROUPS,
     nr::CAPSET,
 ];
+
+/// `ioctl` requests trapped by argument. glibc 2.41+ implements
+/// `tcgetattr`/`tcsetattr` (and so `isatty`, readline's raw mode, every
+/// interactive shell's startup check) with the termios2 requests, and
+/// Android's SELinux policy grants app domains only the classic tty
+/// ioctls on `devpts`, so these four fail with EACCES unless the engine
+/// serves them through `TCGETS`/`TCSETS*`.
+pub mod ioctl {
+    pub const TCGETS: u64 = 0x5401;
+    pub const TCSETS: u64 = 0x5402;
+    pub const TCSETSW: u64 = 0x5403;
+    pub const TCSETSF: u64 = 0x5404;
+    pub const TCGETS2: u64 = 0x802c_542a;
+    pub const TCSETS2: u64 = 0x402c_542b;
+    pub const TCSETSW2: u64 = 0x402c_542c;
+    pub const TCSETSF2: u64 = 0x402c_542d;
+    pub const TERMIOS2_REQUESTS: &[u64] = &[TCGETS2, TCSETS2, TCSETSW2, TCSETSF2];
+}
+
+/// `socket` calls trapped by address family. Android 16 lets apps create
+/// netlink sockets only for routing; the other families fail with EACCES,
+/// which libaudit users (shadow's useradd, groupadd, passwd) treat as
+/// fatal where a kernel without the family (EPROTONOSUPPORT) is skipped.
+pub mod socket {
+    pub const AF_NETLINK: u64 = 16;
+    pub const TRAPPED_FAMILIES: &[u64] = &[AF_NETLINK];
+}
 
 /// Upper bound on the trapped set, for the loader's stack array.
 pub const MAX_TRAPPED: usize = TRAP_TABLE.len() + TRAP_TABLE_FAKE_ROOT.len();

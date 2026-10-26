@@ -14,6 +14,7 @@ mod log;
 mod config;
 mod exec;
 mod handler;
+mod link;
 mod load;
 mod mem;
 mod selftest;
@@ -336,6 +337,9 @@ fn load_chain(invocation: &mut Invocation) -> load::Loaded {
                 depth += 1;
             }
             None => {
+                if config::get().fake_root {
+                    apply_exec_setid(fd);
+                }
                 let loaded = load::load_fd(fd);
                 load::close_quietly(fd);
                 let loaded = match loaded {
@@ -347,6 +351,20 @@ fn load_chain(invocation: &mut Invocation) -> load::Loaded {
             }
         }
     }
+}
+
+/// What the kernel's `execve` would have done to the ids for this file.
+/// Files the app owns are root's in the guest's eyes, so a set-uid file
+/// among them lends uid 0.
+fn apply_exec_setid(fd: i32) {
+    let Ok((mode, uid, gid)) = sys::fstat_owner(fd) else {
+        return;
+    };
+    // SAFETY: single-threaded startup; nothing else holds a reference.
+    let config = unsafe { config::get_mut() };
+    let owner_uid = if uid == config.real_uid { 0 } else { uid };
+    let owner_gid = if gid == config.real_gid { 0 } else { gid };
+    config.identity.exec_setid(mode, owner_uid, owner_gid);
 }
 
 /// `#!interp arg` at `levels[depth]`: argv becomes
@@ -478,7 +496,10 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
                 AT_ENTRY => loaded.entry,
                 AT_BASE => loaded.interp_base,
                 AT_EXECFN => execfn,
-                AT_UID | AT_EUID | AT_GID | AT_EGID if config.fake_root => 0,
+                AT_UID if config.fake_root => u64::from(config.identity.ruid),
+                AT_EUID if config.fake_root => u64::from(config.identity.euid),
+                AT_GID if config.fake_root => u64::from(config.identity.rgid),
+                AT_EGID if config.fake_root => u64::from(config.identity.egid),
                 _ => value,
             };
             writer.push_aux([key, value])?;

@@ -10,6 +10,7 @@
 
 use zd_engine_core::elf::{EM_AARCH64, HEADER_SIZE};
 use zd_engine_core::env;
+use zd_engine_core::identity::MAX_ENCODED;
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
 use zd_engine_core::shebang;
 use zd_engine_core::stack::env_key;
@@ -62,7 +63,7 @@ fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *cons
     }
 
     let envc = count_pointers(envp);
-    let needed = envc + ENGINE_KEYS.len() + 2;
+    let needed = envc + ENGINE_KEYS.len() + 3;
     let mut on_stack = [core::ptr::null::<u8>(); STACK_ENTRIES];
     let mut mapped: Option<(usize, usize)> = None;
     let slots: &mut [*const u8] = if needed <= STACK_ENTRIES {
@@ -82,7 +83,7 @@ fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *cons
 
     let config = config::get();
     let mut count = 0usize;
-    let mut present = [false; 5];
+    let mut present = [false; ENGINE_KEYS.len()];
     for index in 0..envc {
         // SAFETY: `envp` has `envc` non-null entries, as handed to the kernel.
         let entry = unsafe { *envp.add(index) };
@@ -121,6 +122,22 @@ fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *cons
     }
     slots[count] = program_entry.as_ptr();
     count += 1;
+    let mut identity_entry = [0u8; 16 + MAX_ENCODED];
+    if config.fake_root {
+        let mut encoded = [0u8; MAX_ENCODED];
+        let encoded_len = config.identity.encode(&mut encoded);
+        let mut writer = Writer::new(&mut identity_entry);
+        if writer.push(env::IDENTITY.as_bytes()).is_err()
+            || writer.push(b"=").is_err()
+            || writer.push(&encoded[..encoded_len]).is_err()
+        {
+            release(mapped);
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        }
+        writer.finish();
+        slots[count] = identity_entry.as_ptr();
+        count += 1;
+    }
     slots[count] = core::ptr::null();
 
     let errno = sys::execve(config.loader_path.as_ptr(), argv, slots.as_ptr());
