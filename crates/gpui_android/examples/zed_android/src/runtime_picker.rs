@@ -1,32 +1,34 @@
-//! Runtime adapter picker — lets the user pick which userland Zdroid
-//! routes its spawns through.
+//! Runtime adapter picker: lets the user pick which userland Zdroid
+//! routes its spawns through, and installs the rootfs image.
 //!
 //! Opens as a standalone window from the `zdroid: pick runtime` action
-//! (command palette, Settings → Android Runtime, onboarding). Renders
+//! (command palette, Settings > Android Runtime, onboarding). Renders
 //! one card per adapter with name, tagline and a live health snapshot;
 //! `Select` writes `zd-runtime.toml` and shows a restart banner.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render, Size,
-    Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
+    Task, Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
 };
 use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
 use theme::ActiveTheme;
 use ui::{
-    Button, Chip, Clickable, Color, FluentBuilder, Headline, HeadlineSize, Icon,
-    IconName, IconSize, Label, LabelCommon, LabelSize, ParentElement, Styled, h_flex, v_flex,
+    Button, Chip, Clickable, Color, FluentBuilder, Headline, HeadlineSize, Icon, IconName,
+    IconSize, Label, LabelCommon, LabelSize, ParentElement, Styled, h_flex, v_flex,
 };
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
-    HealthStatus, RuntimeId, RuntimeProvider,
-    adapters,
-    adapters::chroot::SPAWND_RELEASE_URL,
-    config::{self, ChrootConfig, RuntimeFile, RuntimeState},
+    HealthStatus, ProgressSink, RuntimeId, RuntimeProvider,
+    adapters::{self, chroot::SPAWND_RELEASE_URL, rootfs::RootfsAdapter, rootfs_install::Cancelled},
+    config::{self, ChrootConfig, RootfsConfig, RuntimeFile, RuntimeState},
 };
 
 actions!(
@@ -94,14 +96,11 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
     }
 
     let app_id = ReleaseChannel::global(cx).app_id();
-    // Sized to fit all three adapter cards on a fresh open without the
-    // user having to drag the window taller. The cards (with NotInstalled
-    // detail lines visible) come in around ~165px each in DP; three
-    // stacked plus header, title bar, gap_3 spacing, and p_6 container
-    // padding lands at ~700 DP minimum content. The 800 DP height gives
-    // headroom for theme variance and Samsung DeX's chrome insets.
-    // Width stays generous so the right-hand action button doesn't
-    // wrap into the body text on the longest tagline.
+    // Sized to fit the adapter cards on a fresh open without the user
+    // having to drag the window taller. The 800 DP height gives headroom
+    // for theme variance and Samsung DeX's chrome insets. Width stays
+    // generous so the right-hand action button doesn't wrap into the
+    // body text on the longest tagline.
     let window_size = Size {
         width: px(640.0),
         height: px(800.0),
@@ -140,6 +139,57 @@ struct AdapterEntry {
     health: HealthStatus,
 }
 
+/// Progress of the rootfs install, as rendered by the card.
+enum InstallState {
+    Idle,
+    Running {
+        step: String,
+        done: u64,
+        total: u64,
+    },
+    Failed(String),
+}
+
+/// Messages the install thread sends to the picker.
+enum InstallEvent {
+    Step(String),
+    Progress(u64, u64),
+    Warn(String),
+    Finished(Result<(), InstallFailure>),
+}
+
+enum InstallFailure {
+    Cancelled,
+    Error(String),
+}
+
+/// `ProgressSink` that forwards to the picker's channel and reads the
+/// shared cancel flag.
+struct ChannelSink {
+    sender: Sender<InstallEvent>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl ProgressSink for ChannelSink {
+    fn step(&mut self, label: &str) {
+        log::info!("zdroid_runtime_picker: install: {label}");
+        self.sender.send(InstallEvent::Step(label.to_string())).ok();
+    }
+
+    fn progress(&mut self, done: u64, total: u64) {
+        self.sender.send(InstallEvent::Progress(done, total)).ok();
+    }
+
+    fn warn(&mut self, message: &str) {
+        log::warn!("zdroid_runtime_picker: install: {message}");
+        self.sender.send(InstallEvent::Warn(message.to_string())).ok();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+}
+
 pub struct RuntimePicker {
     title_bar: Option<Entity<PlatformTitleBar>>,
     focus_handle: FocusHandle,
@@ -157,6 +207,9 @@ pub struct RuntimePicker {
     /// policies); the user closes via Recents and reopens from the
     /// launcher.
     restart_required: bool,
+    install: InstallState,
+    install_cancel: Option<Arc<AtomicBool>>,
+    _install_poller: Option<Task<()>>,
 }
 
 impl RuntimePicker {
@@ -172,6 +225,9 @@ impl RuntimePicker {
             entries: build_entries(),
             current: detect_current(),
             restart_required: false,
+            install: InstallState::Idle,
+            install_cancel: None,
+            _install_poller: None,
         }
     }
 
@@ -184,8 +240,9 @@ impl RuntimePicker {
             return;
         }
 
-        let path = config::runtime_toml_path(&config::data_path());
-        let file = RuntimeFile::with_defaults(id);
+        let data_path = config::data_path();
+        let path = config::runtime_toml_path(&data_path);
+        let file = RuntimeFile::with_defaults(id, &data_path);
         match file.save(&path) {
             Ok(()) => {
                 log::info!(
@@ -227,6 +284,110 @@ impl RuntimePicker {
             }
         }
     }
+
+    fn start_install(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.install, InstallState::Running { .. }) {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = std::sync::mpsc::channel::<InstallEvent>();
+        let data_path = config::data_path();
+        std::thread::Builder::new()
+            .name("rootfs-install".into())
+            .spawn({
+                let cancel = cancel.clone();
+                move || {
+                    let adapter = RootfsAdapter::new(RootfsConfig::defaults(&data_path), &data_path);
+                    let mut sink = ChannelSink {
+                        sender: sender.clone(),
+                        cancel,
+                    };
+                    let result = adapter.install(&mut sink).map_err(|error| {
+                        if error.downcast_ref::<Cancelled>().is_some() {
+                            InstallFailure::Cancelled
+                        } else {
+                            InstallFailure::Error(format!("{error:#}"))
+                        }
+                    });
+                    sender.send(InstallEvent::Finished(result)).ok();
+                }
+            })
+            .log_err();
+        self.install = InstallState::Running {
+            step: "Starting".to_string(),
+            done: 0,
+            total: 0,
+        };
+        self.install_cancel = Some(cancel);
+        self._install_poller = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let finished = this
+                    .update(cx, |picker, cx| picker.drain_install_events(&receiver, cx))
+                    .unwrap_or(true);
+                if finished {
+                    break;
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    /// Apply queued events; returns true once the install thread is done.
+    fn drain_install_events(&mut self, receiver: &Receiver<InstallEvent>, cx: &mut Context<Self>) -> bool {
+        let mut finished = false;
+        let mut changed = false;
+        while let Ok(event) = receiver.try_recv() {
+            changed = true;
+            match event {
+                InstallEvent::Step(label) => {
+                    self.install = InstallState::Running {
+                        step: label,
+                        done: 0,
+                        total: 0,
+                    };
+                }
+                InstallEvent::Progress(new_done, new_total) => {
+                    if let InstallState::Running { done, total, .. } = &mut self.install {
+                        *done = new_done;
+                        *total = new_total;
+                    }
+                }
+                InstallEvent::Warn(message) => {
+                    log::warn!("zdroid_runtime_picker: {message}");
+                }
+                InstallEvent::Finished(result) => {
+                    finished = true;
+                    self.install_cancel = None;
+                    self.install = match result {
+                        Ok(()) => InstallState::Idle,
+                        Err(InstallFailure::Cancelled) => InstallState::Idle,
+                        Err(InstallFailure::Error(message)) => {
+                            log::error!("zdroid_runtime_picker: install failed: {message}");
+                            InstallState::Failed(message)
+                        }
+                    };
+                    self.entries = build_entries();
+                }
+            }
+        }
+        if changed {
+            cx.notify();
+        }
+        finished
+    }
+
+    fn cancel_install(&mut self, cx: &mut Context<Self>) {
+        if let Some(cancel) = &self.install_cancel {
+            cancel.store(true, Ordering::Relaxed);
+            if let InstallState::Running { step, .. } = &mut self.install {
+                *step = "Cancelling".to_string();
+            }
+            cx.notify();
+        }
+    }
 }
 
 impl Focusable for RuntimePicker {
@@ -247,9 +408,7 @@ impl Render for RuntimePicker {
             .entries
             .iter()
             .enumerate()
-            .map(|(idx, entry)| {
-                render_card(idx, entry, self.current, cx)
-            })
+            .map(|(idx, entry)| render_card(idx, entry, self.current, &self.install, cx))
             .collect();
 
         let banner = self.restart_required.then(|| {
@@ -323,10 +482,15 @@ impl Render for RuntimePicker {
     }
 }
 
+fn megabytes(bytes: u64) -> f64 {
+    bytes as f64 / 1_000_000.0
+}
+
 fn render_card(
     idx: usize,
     entry: &AdapterEntry,
     current: Option<RuntimeId>,
+    install: &InstallState,
     cx: &mut Context<RuntimePicker>,
 ) -> AnyElement {
     let theme_colors = cx.theme().colors();
@@ -334,19 +498,34 @@ fn render_card(
     let is_current = current == Some(id);
     let name = id.display_name();
     let tagline = entry.tagline;
+    let installing = id == RuntimeId::Rootfs && matches!(install, InstallState::Running { .. });
 
-    let (dot_color, dot_label): (Color, &'static str) = match &entry.health {
-        HealthStatus::Healthy => (Color::Success, "Ready"),
-        HealthStatus::NotInstalled { .. } => (Color::Muted, "Not installed"),
-        HealthStatus::Misconfigured { .. } => (Color::Warning, "Needs attention"),
-        HealthStatus::Failed { .. } => (Color::Error, "Failed"),
+    let (dot_color, dot_label): (Color, &'static str) = if installing {
+        (Color::Accent, "Installing")
+    } else {
+        match &entry.health {
+            HealthStatus::Healthy => (Color::Success, "Ready"),
+            HealthStatus::NotInstalled { .. } => (Color::Muted, "Not installed"),
+            HealthStatus::Misconfigured { .. } => (Color::Warning, "Needs attention"),
+            HealthStatus::Failed { .. } => (Color::Error, "Failed"),
+        }
     };
 
-    let detail = match &entry.health {
-        HealthStatus::Healthy => None,
-        HealthStatus::NotInstalled { hint } => Some(hint.clone()),
-        HealthStatus::Misconfigured { reason } => Some(reason.clone()),
-        HealthStatus::Failed { error } => Some(error.clone()),
+    let (detail, detail_color): (Option<String>, Color) = if id == RuntimeId::Rootfs {
+        match install {
+            InstallState::Running { step, done, total } if *total > 0 => (
+                Some(format!("{step}: {:.1} / {:.1} MB", megabytes(*done), megabytes(*total))),
+                Color::Muted,
+            ),
+            InstallState::Running { step, done, .. } if *done > 0 => {
+                (Some(format!("{step}: {done} entries")), Color::Muted)
+            }
+            InstallState::Running { step, .. } => (Some(step.clone()), Color::Muted),
+            InstallState::Failed(message) => (Some(message.clone()), Color::Error),
+            InstallState::Idle => (health_detail(&entry.health), Color::Muted),
+        }
+    } else {
+        (health_detail(&entry.health), Color::Muted)
     };
 
     h_flex()
@@ -413,48 +592,88 @@ fn render_card(
                     this.child(
                         Label::new(Arc::<str>::from(detail))
                             .size(LabelSize::XSmall)
-                            .color(Color::Muted),
+                            .color(detail_color),
                     )
                 }),
         )
-        // Cascade priority: install actions WIN over the "Selected"
-        // decorative chip, even when the unhealthy adapter is the
-        // user's current runtime.toml selection; a "Selected" chip on
-        // a broken adapter would leave the user stuck without a way to
-        // fix it.
-        .child(if id == RuntimeId::Chroot
-            && !matches!(entry.health, HealthStatus::Healthy)
-        {
-            // Chroot adapter requires the zdroid-spawnd Magisk module
-            // to be running. If the daemon socket isn't reachable,
-            // letting the user pick chroot just writes a runtime.toml
-            // that breaks every subsequent spawn. Surface the install
-            // path inline instead: tap "Get module" to jump to the
-            // GitHub releases page where the zip lives. After install
-            // + reboot, re-open the picker and the gate flips to
-            // Healthy → normal Select.
-            Button::new(("get-module", idx), "Get module")
-                .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
-                .on_click(cx.listener(|_, _, _, cx| {
-                    cx.open_url(SPAWND_RELEASE_URL);
-                }))
-                .into_any_element()
-        } else if is_current {
-            // Healthy AND the active selection — decorative confirm.
-            // The header already shows an "Active" Chip; this right-
-            // hand Chip is design-language parity.
-            Chip::new("Selected")
-                .icon(IconName::Check)
-                .label_color(Color::Accent)
-                .into_any_element()
-        } else {
-            Button::new(("select", idx), "Select")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select(id, window, cx);
-                }))
-                .into_any_element()
-        })
+        .child(render_action(idx, entry, is_current, install, cx))
         .into_any_element()
+}
+
+fn health_detail(health: &HealthStatus) -> Option<String> {
+    match health {
+        HealthStatus::Healthy => None,
+        HealthStatus::NotInstalled { hint } => Some(hint.clone()),
+        HealthStatus::Misconfigured { reason } => Some(reason.clone()),
+        HealthStatus::Failed { error } => Some(error.clone()),
+    }
+}
+
+/// The right-hand action. Install and repair actions win over the
+/// decorative "Selected" chip: a selected but broken adapter must still
+/// offer a way out.
+fn render_action(
+    idx: usize,
+    entry: &AdapterEntry,
+    is_current: bool,
+    install: &InstallState,
+    cx: &mut Context<RuntimePicker>,
+) -> AnyElement {
+    let id = entry.id;
+    match id {
+        RuntimeId::Rootfs => match install {
+            InstallState::Running { .. } => Button::new(("cancel-install", idx), "Cancel")
+                .on_click(cx.listener(|this, _, _, cx| this.cancel_install(cx)))
+                .into_any_element(),
+            InstallState::Failed(_) => Button::new(("retry-install", idx), "Retry")
+                .on_click(cx.listener(|this, _, _, cx| this.start_install(cx)))
+                .into_any_element(),
+            InstallState::Idle => match &entry.health {
+                HealthStatus::NotInstalled { .. } => Button::new(("install", idx), "Install")
+                    .on_click(cx.listener(|this, _, _, cx| this.start_install(cx)))
+                    .into_any_element(),
+                HealthStatus::Failed { .. } | HealthStatus::Misconfigured { .. } => {
+                    Button::new(("reinstall", idx), "Reinstall")
+                        .on_click(cx.listener(|this, _, _, cx| this.start_install(cx)))
+                        .into_any_element()
+                }
+                HealthStatus::Healthy if is_current => Chip::new("Selected")
+                    .icon(IconName::Check)
+                    .label_color(Color::Accent)
+                    .into_any_element(),
+                HealthStatus::Healthy => Button::new(("select", idx), "Select")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select(id, window, cx);
+                    }))
+                    .into_any_element(),
+            },
+        },
+        RuntimeId::Chroot => {
+            if !matches!(entry.health, HealthStatus::Healthy) {
+                // Chroot needs the zdroid-spawnd Magisk module running.
+                // Without the daemon socket, selecting it would only
+                // write a runtime.toml that breaks every spawn, so the
+                // install path is offered instead.
+                Button::new(("get-module", idx), "Get module")
+                    .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.open_url(SPAWND_RELEASE_URL);
+                    }))
+                    .into_any_element()
+            } else if is_current {
+                Chip::new("Selected")
+                    .icon(IconName::Check)
+                    .label_color(Color::Accent)
+                    .into_any_element()
+            } else {
+                Button::new(("select", idx), "Select")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select(id, window, cx);
+                    }))
+                    .into_any_element()
+            }
+        }
+    }
 }
 
 /// Build the per-adapter health snapshot at modal-open time. Each
@@ -462,18 +681,27 @@ fn render_card(
 /// can run; the user's eventual `runtime.toml` overrides these when
 /// the adapter is actually selected.
 fn build_entries() -> Vec<AdapterEntry> {
+    let data_path = config::data_path();
+    let rootfs_health =
+        RootfsAdapter::new(RootfsConfig::defaults(&data_path), &data_path).health_check();
     let chroot_health = adapters::chroot::ChrootAdapter::new(default_chroot_config())
         .map(|a| a.health_check())
         .unwrap_or_else(|err| HealthStatus::Failed {
             error: err.to_string(),
         });
 
-    vec![AdapterEntry {
-        id: RuntimeId::Chroot,
-        tagline:
-            "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
-        health: chroot_health,
-    }]
+    vec![
+        AdapterEntry {
+            id: RuntimeId::Rootfs,
+            tagline: "Stock Ubuntu 26.04 image run through the Zdroid engine. No root, no patches; apt works as shipped.",
+            health: rootfs_health,
+        },
+        AdapterEntry {
+            id: RuntimeId::Chroot,
+            tagline: "Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
+            health: chroot_health,
+        },
+    ]
 }
 
 fn default_chroot_config() -> ChrootConfig {
@@ -491,4 +719,3 @@ fn default_chroot_config() -> ChrootConfig {
 fn detect_current() -> Option<RuntimeId> {
     RuntimeState::load(&config::data_path()).id()
 }
-

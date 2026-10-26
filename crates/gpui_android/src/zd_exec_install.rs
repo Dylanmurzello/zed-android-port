@@ -295,3 +295,33 @@ pub fn native_library_dir(android_app: &AndroidApp) -> Result<PathBuf> {
 pub fn loader_path(android_app: &AndroidApp) -> Result<PathBuf> {
     Ok(native_library_dir(android_app)?.join(zd_engine_core::LOADER_FILE_NAME))
 }
+
+/// Point `<data>/files/bin/zdload` at the current install's loader. The
+/// native library dir moves on every install, so everything persistent
+/// (runtime config, the symlink farm, `terminal.shell`) names this link
+/// and boot re-targets it. The kernel checks exec permission on the
+/// link's target, which stays an `apk_data_file`.
+pub fn ensure_loader_link(data_path: &Path, loader: &Path) -> Result<PathBuf> {
+    let bin_dir = data_path.join("bin");
+    fs::create_dir_all(&bin_dir).with_context(|| format!("create_dir_all {}", bin_dir.display()))?;
+    let link = bin_dir.join(zd_engine_core::LOADER_LINK_NAME);
+    match fs::read_link(&link) {
+        Ok(target) if target == loader => return Ok(link),
+        Ok(_) => fs::remove_file(&link)
+            .with_context(|| format!("remove stale loader link {}", link.display()))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            // A real file squatting on the name: replace it, the name is ours.
+            fs::remove_file(&link)
+                .with_context(|| format!("remove non-link {}", link.display()))?;
+        }
+    }
+    std::os::unix::fs::symlink(loader, &link)
+        .with_context(|| format!("symlink {} -> {}", link.display(), loader.display()))?;
+    log::info!(
+        "zd_exec_install: loader link {} -> {}",
+        link.display(),
+        loader.display()
+    );
+    Ok(link)
+}

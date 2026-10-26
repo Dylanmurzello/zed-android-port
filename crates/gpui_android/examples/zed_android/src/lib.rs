@@ -3,6 +3,7 @@
 //! workspace stack and shows the WelcomePage on first launch (no auto-
 //! opened project) — matches official Zed's first-run behaviour.
 
+mod engine_self_test;
 mod header;
 mod menu_bar;
 mod noexec_modal;
@@ -33,7 +34,7 @@ use workspace::{
 use reqwest_client::ReqwestClient;
 use zdroid_runtime::{
     RuntimeProvider, adapters,
-    config::{self as runtime_config, NotConfiguredReason, RuntimeState},
+    config::{self as runtime_config, NotConfiguredReason, ResolvedConfig, RuntimeState},
 };
 
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
@@ -59,7 +60,7 @@ impl BootRuntime {
 
 fn active_runtime(data_path: &std::path::Path) -> BootRuntime {
     match RuntimeState::load(data_path) {
-        RuntimeState::Configured(resolved) => match adapters::for_config(&resolved) {
+        RuntimeState::Configured(resolved) => match adapters::for_config(&resolved, data_path) {
             Ok(provider) => BootRuntime::Provider(provider),
             Err(err) => BootRuntime::NotConfigured(NotConfiguredReason::Unresolvable(format!(
                 "{err:#}"
@@ -136,6 +137,9 @@ fn android_main(app: AndroidApp) {
         .unwrap_or_else(|| PathBuf::from(runtime_config::DEFAULT_DATA_PATH));
     info!("zed_android: data_path = {}", data_path.display());
     runtime_config::set_data_path(data_path.clone());
+    // The rootfs installer seeds the guest's /etc/resolv.conf from the
+    // device's active resolvers; Android has no resolv.conf of its own.
+    runtime_config::set_nameservers(gpui_android::dns_bridge::android_dns_servers(&app));
 
     // The Zed-Rust process env is now adapter-owned. Every set_var/
     // remove_var that used to live inline here is produced by the
@@ -260,8 +264,28 @@ fn android_main(app: AndroidApp) {
                 path.is_file(),
                 size,
             );
+            if path.is_file() {
+                if let Err(err) =
+                    gpui_android::zd_exec_install::ensure_loader_link(&data_path, &path)
+                {
+                    log::warn!("zed_android: loader link failed: {err:#}");
+                }
+            }
         }
         Err(err) => log::warn!("zed_android: engine loader path unavailable: {err:#}"),
+    }
+
+    // Resolvers change with the network; refresh the guest's view of them
+    // every boot when a rootfs is installed.
+    {
+        let rootfs_config = match RuntimeState::load(&data_path) {
+            RuntimeState::Configured(ResolvedConfig::Rootfs(config)) => config,
+            _ => runtime_config::RootfsConfig::defaults(&data_path),
+        };
+        let adapter = adapters::rootfs::RootfsAdapter::new(rootfs_config, &data_path);
+        if let Err(err) = adapters::rootfs_install::reseed_resolv(&adapter, &runtime_config::nameservers()) {
+            log::warn!("zed_android: resolv.conf reseed failed: {err:#}");
+        }
     }
 
     // Populate <data>/files/zd-runtime/ with symlinks for every binary
@@ -1240,6 +1264,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     onboarding::init(cx);
     menu_bar::register_actions(cx);
     runtime_picker::register(cx);
+    engine_self_test::register(cx);
     info!(
         "zed_android: workspace + diagnostics + search + file_finder + outline_panel + onboarding + menu_bar init complete"
     );

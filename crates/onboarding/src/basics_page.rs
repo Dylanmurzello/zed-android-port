@@ -923,6 +923,7 @@ fn render_android_runtime_section(tab_index: &mut isize, cx: &mut App) -> impl I
         .try_global::<crate::runtime_global::ActiveRuntime>()
         .and_then(|state| state.current);
     let current_label: SharedString = match current {
+        Some(RuntimeId::Rootfs) => "Current: Ubuntu rootfs".into(),
         Some(RuntimeId::Chroot) => "Current: Kali chroot".into(),
         None => "Not configured yet".into(),
     };
