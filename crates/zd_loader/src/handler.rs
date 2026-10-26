@@ -354,6 +354,16 @@ fn dispatch(number: u32, regs: &mut [u64; 31]) {
             regs[0] = if result == sys::neg_errno(sys::EPERM) { 0 } else { result };
         }
         nr::GETUID | nr::GETEUID | nr::GETGID | nr::GETEGID | nr::GETGROUPS => regs[0] = 0,
+        nr::SETUID
+        | nr::SETGID
+        | nr::SETREUID
+        | nr::SETREGID
+        | nr::SETRESUID
+        | nr::SETRESGID
+        | nr::SETFSUID
+        | nr::SETFSGID
+        | nr::SETGROUPS
+        | nr::CAPSET => regs[0] = 0,
         nr::GETRESUID | nr::GETRESGID => {
             for &pointer in &regs[0..3] {
                 let pointer = pointer as *mut u32;

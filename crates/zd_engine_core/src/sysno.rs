@@ -109,6 +109,7 @@ pub mod nr {
     pub const FSCONFIG: u32 = 431;
     pub const FSMOUNT: u32 = 432;
     pub const FSPICK: u32 = 433;
+    pub const CLOSE_RANGE: u32 = 436;
     pub const OPENAT2: u32 = 437;
     pub const FACCESSAT2: u32 = 439;
     pub const MOUNT_SETATTR: u32 = 442;
@@ -172,7 +173,10 @@ pub const TRAP_TABLE: &[u32] = &[
     nr::RT_SIGPROCMASK,
 ];
 
-/// Additional traps when presenting uid 0 to the guest.
+/// Additional traps when presenting uid 0 to the guest. The identity
+/// setters are allowlisted by Android's filter (bionic wraps them), so
+/// the kernel would run them and refuse; trapped here they succeed and
+/// nothing changes, which is what a root-only tool expects.
 pub const TRAP_TABLE_FAKE_ROOT: &[u32] = &[
     nr::FSTAT,
     nr::FCHOWN,
@@ -183,6 +187,16 @@ pub const TRAP_TABLE_FAKE_ROOT: &[u32] = &[
     nr::GETRESUID,
     nr::GETRESGID,
     nr::GETGROUPS,
+    nr::SETUID,
+    nr::SETGID,
+    nr::SETREUID,
+    nr::SETREGID,
+    nr::SETRESUID,
+    nr::SETRESGID,
+    nr::SETFSUID,
+    nr::SETFSGID,
+    nr::SETGROUPS,
+    nr::CAPSET,
 ];
 
 /// Upper bound on the trapped set, for the loader's stack array.

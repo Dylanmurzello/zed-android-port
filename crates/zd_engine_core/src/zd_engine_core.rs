@@ -67,8 +67,14 @@ pub mod env {
     pub const PROGRAM: &str = "ZD_PROGRAM";
     /// `1` runs the self-test before loading the program. Per exec.
     pub const SELFTEST: &str = "ZD_SELFTEST";
+    /// `1` closes every fd above 2 before the guest starts. The
+    /// supervisor sets it on its own environment so spawns from the
+    /// editor (whose graphics stack opens fds without CLOEXEC) do not
+    /// leak them; guests exec their children without it, so fds they
+    /// pass on purpose still arrive. Per exec.
+    pub const CLOSE_FDS: &str = "ZD_CLOSE_FDS";
     /// Variables that describe one exec and must not reach the guest.
-    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST];
+    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS];
 }
 
 /// Separator between entries in [`env::BINDS`] and [`env::GUEST_ENV`].

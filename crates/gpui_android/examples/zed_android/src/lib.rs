@@ -131,6 +131,7 @@ fn android_main(app: AndroidApp) {
             ),
     );
     info!("zed_android: android_main entry");
+    gpui_android::process_hygiene::ensure_standard_fds();
 
     let data_path = app
         .internal_data_path()

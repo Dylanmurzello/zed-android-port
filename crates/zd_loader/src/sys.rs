@@ -252,6 +252,10 @@ pub fn execve(path: *const u8, argv: *const *const u8, envp: *const *const u8) -
     }
 }
 
+pub fn close_range(first: u32, last: u32, flags: usize) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::CLOSE_RANGE, first as usize, last as usize, flags, 0, 0, 0) }).map(|_| ())
+}
+
 pub fn memfd_create(name: *const u8, flags: usize) -> Result<i32, i32> {
     check(unsafe { syscall6(nr::MEMFD_CREATE, name as usize, flags, 0, 0, 0, 0) }).map(|fd| fd as i32)
 }

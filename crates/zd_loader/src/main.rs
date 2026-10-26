@@ -270,6 +270,11 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
         abort!("{error}");
     }
     let mut invocation = resolve_invocation(&stack);
+    if config::get().close_fds
+        && let Err(errno) = sys::close_range(3, u32::MAX, 0)
+    {
+        abort!("close_range failed: errno {errno}");
+    }
 
     let filter = match handler::ensure_filter() {
         Ok(state) => state,

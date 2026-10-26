@@ -106,6 +106,7 @@ impl RootfsAdapter {
             ),
             (engine_env::BINDS.to_string(), OsString::from(self.bind_spec())),
             (engine_env::FAKE_ROOT.to_string(), OsString::from("1")),
+            (engine_env::CLOSE_FDS.to_string(), OsString::from("1")),
             (
                 engine_env::GUEST_ENV.to_string(),
                 OsString::from(self.guest_env_spec()),

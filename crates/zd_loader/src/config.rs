@@ -155,6 +155,7 @@ pub struct Config {
     /// own argv.
     pub program: Buf,
     pub selftest: bool,
+    pub close_fds: bool,
     /// The guest's auxiliary vector as built for it, served as
     /// `/proc/self/auxv`.
     pub auxv_ptr: usize,
@@ -184,6 +185,7 @@ impl Config {
             levels: [const { Level::new() }; MAX_DEPTH + 1],
             program: Buf::new(),
             selftest: false,
+            close_fds: false,
             auxv_ptr: 0,
             auxv_len: 0,
             guest_exe: Buf::new(),
@@ -260,6 +262,8 @@ pub fn init(
             config.program.set(value)?;
         } else if let Some(value) = env_value(entry, env::SELFTEST.as_bytes()) {
             config.selftest = value == b"1";
+        } else if let Some(value) = env_value(entry, env::CLOSE_FDS.as_bytes()) {
+            config.close_fds = value == b"1";
         } else if let Some(value) = env_value(entry, env::GUEST_ENV.as_bytes()) {
             for item in value.split(|&byte| byte == LIST_SEPARATOR as u8) {
                 if !item.is_empty() {
