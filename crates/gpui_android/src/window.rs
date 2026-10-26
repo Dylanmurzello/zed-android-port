@@ -21,7 +21,7 @@ use gpui::{
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 use crate::display::AndroidDisplay;
-use crate::platform::set_native_window_frame_rate;
+use crate::platform::{input_arrived, request_frame_callback, set_native_window_frame_rate};
 
 /// Raw window handle wrapper for Android. Holds a `*mut ANativeWindow` pointer
 /// (obtained from `android_activity::AndroidApp::native_window()`), or null when
@@ -329,6 +329,7 @@ impl AndroidWindowStatePtr {
         // `window.draw(cx)` inside open_window, but it's cheap and makes the
         // background→foreground path symmetric.
         state.force_render_after_recovery = true;
+        request_frame_callback();
         Ok(())
     }
 
@@ -442,6 +443,7 @@ impl AndroidWindowStatePtr {
     /// active `PlatformInputHandler` (gpui's text-input path) when the
     /// callback didn't claim them.
     pub(crate) fn handle_input(&self, input: PlatformInput) {
+        input_arrived();
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut callback) = callback {
             let result = callback(input.clone());
@@ -694,6 +696,10 @@ impl PlatformWindow for AndroidWindow {
         true
     }
 
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        Some(Rc::new(request_frame_callback))
+    }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.ptr.callbacks.borrow_mut().request_frame = Some(callback);
     }
@@ -796,6 +802,7 @@ impl PlatformWindow for AndroidWindow {
             match renderer.recover(&raw_window) {
                 Ok(()) => {
                     state.force_render_after_recovery = true;
+                    request_frame_callback();
                 }
                 Err(err) => log::error!("GPU recovery failed: {err:#}"),
             }
@@ -803,6 +810,10 @@ impl PlatformWindow for AndroidWindow {
         }
 
         renderer.draw(scene);
+    }
+
+    fn schedule_frame(&self) {
+        request_frame_callback();
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {

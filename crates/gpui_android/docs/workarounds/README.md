@@ -77,7 +77,7 @@ patches.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
-| [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with event-driven vsync |
+| [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with vsync callbacks, requested only while gpui has frames to draw |
 | [Two-finger tap → right click](two-finger-rightclick.md) | Active | Touchscreens don't have a right mouse button |
 | [JVM stack overflow on clipboard](jvm-clipboard-stack-overflow.md) | Active | Android's 988KB android_main thread can't handle clipboard JNI synchronously |
 | [Soft-keyboard / IME bridge](deferred-soft-keyboard.md) | Deferred | Hardware keyboard works; touch IME bridge is its own engineering problem |

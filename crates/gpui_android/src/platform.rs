@@ -1,10 +1,11 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
 use android_activity::AndroidApp;
@@ -125,42 +126,67 @@ pub(crate) fn set_native_window_frame_rate(window: *mut c_void) -> bool {
 /// call window.refresh().
 static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 
-unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) {
-    FRAME_PENDING.store(true, Ordering::Release);
-    crate::frame_timing::vsync_arrived();
-    // Re-post for the next vsync so we get a continuous stream of
-    // frame callbacks. Stopping this stream means the next tick won't
-    // get a vsync wake-up; we always want to be ready to render.
-    unsafe {
-        let c = AChoreographer_getInstance();
-        if !c.is_null() {
-            AChoreographer_postFrameCallback64(
-                c,
-                frame_callback,
-                std::ptr::null_mut(),
-            );
-        }
-    }
+/// Whether a Choreographer callback is posted and hasn't fired yet.
+static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
+
+/// gpui keeps presenting for a second after fast input, such as scrolling
+/// or trackpad motion, so the panel doesn't drop out of its high refresh
+/// rate, but it only asks for frames while a window is dirty. Keep the
+/// vsync loop running this long after any input so those presents happen.
+const FRAMES_AFTER_INPUT: Duration = Duration::from_secs(1);
+
+thread_local! {
+    static LAST_INPUT_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
-/// Register the first Choreographer frame callback on the calling
-/// thread (must have a Looper attached — android-activity's main
-/// thread does). Subsequent callbacks self-re-post inside
-/// `frame_callback` so we keep getting vsync ticks for the app's
-/// lifetime.
-fn install_choreographer_callback() {
+unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) {
+    FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
+    FRAME_PENDING.store(true, Ordering::Release);
+    crate::frame_timing::vsync_arrived();
+}
+
+/// Asks for a refresh on the next vsync. Called through each window's frame
+/// waker, which gpui invokes while a window is dirty or still animating, so
+/// an idle editor stops waking at the panel's refresh rate. gpui's web and
+/// Wayland backends drive their frame loops the same way.
+pub(crate) fn request_frame_callback() {
+    if FRAME_CALLBACK_POSTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    crate::frame_timing::frame_requested();
     unsafe {
         let c = AChoreographer_getInstance();
         if c.is_null() {
-            log::warn!(
-                "AChoreographer_getInstance returned null; vsync sync \
-                 disabled, falling back to poll-timeout-driven refresh"
-            );
+            // No vsync source: refresh on the run loop's next tick instead.
+            FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
+            FRAME_PENDING.store(true, Ordering::Release);
             return;
         }
         AChoreographer_postFrameCallback64(c, frame_callback, std::ptr::null_mut());
     }
-    log::info!("AndroidPlatform: Choreographer frame callback registered");
+}
+
+/// Called for each input event a window hands to gpui.
+pub(crate) fn input_arrived() {
+    LAST_INPUT_AT.set(Some(Instant::now()));
+    request_frame_callback();
+}
+
+/// Requests the first frame on the calling thread, which must have a Looper
+/// attached (android-activity's main thread does).
+fn install_choreographer_callback() {
+    // `android_main` runs again when the Activity is recreated, and a
+    // callback posted on the previous run's Looper will never fire.
+    FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
+    if unsafe { AChoreographer_getInstance() }.is_null() {
+        log::warn!(
+            "AChoreographer_getInstance returned null; vsync sync \
+             disabled, falling back to poll-timeout-driven refresh"
+        );
+    } else {
+        log::info!("AndroidPlatform: Choreographer frame callbacks enabled");
+    }
+    request_frame_callback();
 }
 
 #[derive(Default)]
@@ -1213,6 +1239,12 @@ impl Platform for AndroidPlatform {
                     window_ptr.refresh();
                 }
                 crate::frame_timing::paint_finished();
+                if LAST_INPUT_AT
+                    .get()
+                    .is_some_and(|at| at.elapsed() < FRAMES_AFTER_INPUT)
+                {
+                    request_frame_callback();
+                }
                 // First successful paint cycle => let the SplashScreen
                 // poller dismiss its window. Idempotent atomic swap on
                 // the inside; safe to call every frame.
