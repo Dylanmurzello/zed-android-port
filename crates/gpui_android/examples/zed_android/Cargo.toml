@@ -24,12 +24,14 @@ assets = { path = "../../../assets" }
 breadcrumbs = { path = "../../../breadcrumbs" }
 call_hierarchy = { path = "../../../call_hierarchy" }
 client = { path = "../../../client" }
+collections = { path = "../../../collections" }
 command_palette = { path = "../../../command_palette" }
 tabular_data_preview = { path = "../../../tabular_data_preview" }
 db = { path = "../../../db" }
 diagnostics = { path = "../../../diagnostics" }
 editor = { path = "../../../editor" }
 encoding_selector = { path = "../../../encoding_selector" }
+feature_flags = { path = "../../../feature_flags" }
 feedback = { path = "../../../feedback" }
 file_finder = { path = "../../../file_finder" }
 fs = { path = "../../../fs" }
@@ -52,6 +54,7 @@ inspector_ui = { path = "../../../inspector_ui" }
 json_schema_store = { path = "../../../json_schema_store" }
 keymap_editor = { path = "../../../keymap_editor" }
 language = { path = "../../../language" }
+language_onboarding = { path = "../../../language_onboarding" }
 language_model = { path = "../../../language_model" }
 language_selector = { path = "../../../language_selector" }
 language_tools = { path = "../../../language_tools" }

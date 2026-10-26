@@ -12,34 +12,39 @@ mod runtime_picker;
 mod title_bar;
 mod zed;
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use android_activity::AndroidApp;
 use anyhow::{Context as _, Result};
 use client::{Client, ProxySettings, UserStore};
+use collections::HashMap;
 use db::AppDatabase;
 use db::kvp::KeyValueStore;
+use editor::Editor;
 use fs::{Fs, RealFs};
 use futures::StreamExt as _;
-use node_runtime::NodeRuntime;
-use project::Project;
-use prompt_store::PromptBuilder;
-use session::{AppSession, Session};
-use gpui::{App, AppContext as _, TaskExt as _, UpdateGlobal as _};
+use gpui::{App, AppContext as _, AsyncApp, TaskExt as _, UpdateGlobal as _};
 use gpui_tokio::Tokio;
 use log::{error, info};
+use node_runtime::NodeRuntime;
+use onboarding::{FIRST_OPEN, show_onboarding_view};
 use parking_lot::Mutex;
+use project::Project;
+use prompt_store::PromptBuilder;
+use recent_projects::{RemoteSettings, open_remote_project};
 use release_channel::AppVersion;
+use remote::RemoteConnectionOptions;
+use session::{AppSession, Session};
 use settings::{Settings as _, SettingsStore, watch_config_file};
 use theme::{ActiveTheme as _, ThemeRegistry};
 use theme_settings::load_user_theme;
 use util::ResultExt as _;
 use workspace::{
-    AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, RestoreOnStartupBehavior,
-    SerializedWorkspaceLocation, SessionWorkspace, Toast, Workspace, WorkspaceDb,
-    WorkspaceSettings, WorkspaceStore, notifications::NotificationId, open_new,
-    workspace_windows_for_location,
+    AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast, Workspace,
+    WorkspaceDb, WorkspaceSettings, WorkspaceStore, notifications::NotificationId,
+    restore_multiworkspace, workspace_windows_for_location,
 };
 use reqwest_client::ReqwestClient;
 use zdroid_runtime::{
@@ -99,106 +104,252 @@ fn migrate_development_credentials(cx: &mut App) {
     .detach_and_log_err(cx);
 }
 
-/// Android counterpart of `restore_or_create_workspace` in
-/// crates/zed/src/main.rs: honors `restore_on_startup` and reconnects remote
-/// projects instead of reopening their paths locally. The app hosts a single
-/// main window, so `last_session` restores only the most recent workspace,
-/// like `last_workspace`.
-async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut gpui::AsyncApp) -> Result<()> {
-    let (restore_on_startup, db) = cx.update(|cx| {
-        (
-            WorkspaceSettings::get_global(cx).restore_on_startup,
-            WorkspaceDb::global(cx),
-        )
-    });
-    let recent = match restore_on_startup {
-        RestoreOnStartupBehavior::LastWorkspace | RestoreOnStartupBehavior::LastSession => {
-            workspace::last_opened_workspace_location(&db, app_state.fs.as_ref()).await
-        }
-        RestoreOnStartupBehavior::EmptyTab | RestoreOnStartupBehavior::Launchpad => None,
-    };
-    let serialized = recent.and_then(|(workspace_id, location, paths)| {
-        cx.update(|cx| {
-            workspace::read_serialized_multi_workspaces(
-                vec![SessionWorkspace {
-                    workspace_id,
-                    location,
-                    paths,
-                    window_id: None,
-                }],
-                cx,
-            )
-            .into_iter()
-            .next()
-        })
-    });
+// The next three are copies of the functions in Zed's crates/zed/src/main.rs.
+pub(crate) async fn restore_or_create_workspace(
+    app_state: Arc<AppState>,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let kvp = cx.update(|cx| KeyValueStore::global(cx));
+    if let Some(multi_workspaces) = restorable_workspaces(cx, &app_state).await {
+        let mut error_count = 0;
+        for multi_workspace in multi_workspaces {
+            let result = match &multi_workspace.active_workspace.location {
+                SerializedWorkspaceLocation::Local => {
+                    restore_multiworkspace(multi_workspace, app_state.clone(), cx)
+                        .await
+                        .map(|_| ())
+                }
+                SerializedWorkspaceLocation::Remote(connection_options) => {
+                    let mut connection_options = connection_options.clone();
+                    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options {
+                        cx.update(|cx| {
+                            RemoteSettings::get_global(cx)
+                                .fill_connection_options_from_settings(options)
+                        });
+                    }
 
-    let mut failure = None;
-    if let Some(multi_workspace) = serialized {
-        let result = match &multi_workspace.active_workspace.location {
-            SerializedWorkspaceLocation::Local => {
-                workspace::restore_multiworkspace(multi_workspace, app_state.clone(), cx)
+                    let paths = multi_workspace
+                        .active_workspace
+                        .paths
+                        .paths()
+                        .iter()
+                        .map(PathBuf::from)
+                        .collect::<Vec<_>>();
+                    let state = multi_workspace.state.clone();
+                    async {
+                        let window = open_remote_project(
+                            connection_options,
+                            paths,
+                            app_state.clone(),
+                            workspace::OpenOptions::default(),
+                            cx,
+                        )
+                        .await?;
+                        workspace::apply_restored_multiworkspace_state(
+                            window,
+                            &state,
+                            app_state.fs.clone(),
+                            cx,
+                        )
+                        .await;
+                        Ok::<(), anyhow::Error>(())
+                    }
                     .await
-                    .map(|_| ())
-            }
-            SerializedWorkspaceLocation::Remote(connection_options) => {
-                let mut connection_options = connection_options.clone();
-                if let remote::RemoteConnectionOptions::Ssh(options) = &mut connection_options {
-                    cx.update(|cx| {
-                        recent_projects::RemoteSettings::get_global(cx)
-                            .fill_connection_options_from_settings(options)
-                    });
                 }
-                let paths = multi_workspace
-                    .active_workspace
-                    .paths
-                    .paths()
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<_>>();
-                let state = multi_workspace.state.clone();
-                async {
-                    let window = recent_projects::open_remote_project(
-                        connection_options,
-                        paths,
-                        app_state.clone(),
-                        OpenOptions::default(),
-                        cx,
-                    )
-                    .await?;
-                    workspace::apply_restored_multiworkspace_state(
-                        window,
-                        &state,
-                        app_state.fs.clone(),
-                        cx,
-                    )
-                    .await;
-                    anyhow::Ok(())
-                }
-                .await
-            }
-        };
-        match result {
-            // A remote connection the user cancelled returns Ok but closes
-            // its window, so check that something actually opened.
-            Ok(()) if cx.update(|cx| !cx.windows().is_empty()) => return Ok(()),
-            Ok(()) => {}
-            Err(error) => {
-                error!("zed_android: failed to restore the last workspace: {error:#}");
-                failure = Some("Failed to restore the last workspace. Check logs for details.");
+            };
+
+            if let Err(error) = result {
+                log::error!("Failed to restore workspace: {error:#}");
+                error_count += 1;
             }
         }
+
+        if error_count > 0 {
+            let message = if error_count == 1 {
+                "Failed to restore 1 workspace. Check logs for details.".to_string()
+            } else {
+                format!(
+                    "Failed to restore {} workspaces. Check logs for details.",
+                    error_count
+                )
+            };
+
+            // Try to find an active workspace to show the toast
+            let toast_shown = cx.update(|cx| {
+                if let Some(window) = cx.active_window()
+                    && let Some(multi_workspace) = window.downcast::<MultiWorkspace>()
+                {
+                    multi_workspace
+                        .update(cx, |multi_workspace, _, cx| {
+                            multi_workspace.workspace().update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(NotificationId::unique::<()>(), message.clone()),
+                                    cx,
+                                )
+                            });
+                        })
+                        .ok();
+                    return true;
+                }
+                false
+            });
+
+            // If we couldn't show a toast (no windows opened successfully),
+            // open a fallback empty workspace and show the error there
+            if !toast_shown {
+                log::error!("All workspace restorations failed. Opening fallback empty workspace.");
+                cx.update(|cx| {
+                    workspace::open_new(
+                        Default::default(),
+                        app_state.clone(),
+                        cx,
+                        |workspace, _window, cx| {
+                            workspace.show_toast(
+                                Toast::new(NotificationId::unique::<()>(), message),
+                                cx,
+                            );
+                        },
+                    )
+                })
+                .await?;
+            }
+        }
+
+        // If the user cancelled a failed remote connection at startup,
+        // open_remote_project returns Ok but removes the window, so error_count
+        // stays 0 and the toast fallback above does not trigger. Without this
+        // check, Zed would exit silently.
+        if cx.update(|cx| cx.windows().is_empty()) {
+            cx.update(|cx| {
+                workspace::open_new(
+                    Default::default(),
+                    app_state.clone(),
+                    cx,
+                    |workspace, window, cx| {
+                        let restore_on_startup =
+                            WorkspaceSettings::get_global(cx).restore_on_startup;
+                        match restore_on_startup {
+                            workspace::RestoreOnStartupBehavior::Launchpad => {}
+                            _ => {
+                                Editor::new_file(workspace, &Default::default(), window, cx);
+                            }
+                        }
+                    },
+                )
+            })
+            .await?;
+        }
+    } else if matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
+        cx.update(|cx| show_onboarding_view(app_state, cx)).await?;
+    } else {
+        cx.update(|cx| {
+            workspace::open_new(
+                Default::default(),
+                app_state,
+                cx,
+                |workspace, window, cx| {
+                    let restore_on_startup = WorkspaceSettings::get_global(cx).restore_on_startup;
+                    match restore_on_startup {
+                        workspace::RestoreOnStartupBehavior::Launchpad => {}
+                        _ => {
+                            Editor::new_file(workspace, &Default::default(), window, cx);
+                        }
+                    }
+                },
+            )
+        })
+        .await?;
     }
 
-    cx.update(|cx| {
-        open_new(Default::default(), app_state, cx, move |workspace, _, cx| {
-            if let Some(message) = failure {
-                workspace.show_toast(Toast::new(NotificationId::unique::<()>(), message), cx);
-            }
-        })
-    })
-    .await?;
     Ok(())
+}
+
+async fn restorable_workspaces(
+    cx: &mut AsyncApp,
+    app_state: &Arc<AppState>,
+) -> Option<Vec<workspace::SerializedMultiWorkspace>> {
+    let locations = restorable_workspace_locations(cx, app_state).await?;
+    Some(cx.update(|cx| workspace::read_serialized_multi_workspaces(locations, cx)))
+}
+
+pub(crate) async fn restorable_workspace_locations(
+    cx: &mut AsyncApp,
+    app_state: &Arc<AppState>,
+) -> Option<Vec<SessionWorkspace>> {
+    let (mut restore_behavior, db) = cx.update(|cx| {
+        (
+            WorkspaceSettings::get(None, cx).restore_on_startup,
+            workspace::WorkspaceDb::global(cx),
+        )
+    });
+
+    let session_handle = app_state.session.clone();
+    let (last_session_id, last_session_window_stack) = cx.update(|cx| {
+        let session = session_handle.read(cx);
+
+        (
+            session.last_session_id().map(|id| id.to_string()),
+            session.last_session_window_stack(),
+        )
+    });
+
+    if last_session_id.is_none()
+        && matches!(
+            restore_behavior,
+            workspace::RestoreOnStartupBehavior::LastSession
+        )
+    {
+        restore_behavior = workspace::RestoreOnStartupBehavior::LastWorkspace;
+    }
+
+    match restore_behavior {
+        workspace::RestoreOnStartupBehavior::LastWorkspace => {
+            workspace::last_opened_workspace_location(&db, app_state.fs.as_ref())
+                .await
+                .map(|(workspace_id, location, paths)| {
+                    vec![SessionWorkspace {
+                        workspace_id,
+                        location,
+                        paths,
+                        window_id: None,
+                    }]
+                })
+        }
+        workspace::RestoreOnStartupBehavior::LastSession => {
+            if let Some(last_session_id) = last_session_id {
+                let ordered = last_session_window_stack.is_some();
+
+                let mut locations = workspace::last_session_workspace_locations(
+                    &db,
+                    &last_session_id,
+                    last_session_window_stack,
+                    app_state.fs.as_ref(),
+                )
+                .await
+                .filter(|locations| !locations.is_empty());
+
+                // Since last_session_window_order returns the windows ordered front-to-back
+                // we need to open the window that was frontmost last.
+                if ordered && let Some(locations) = locations.as_mut() {
+                    locations.reverse();
+                }
+
+                // Android: the app has one main window (others would open as
+                // extra Activities), so restore only the frontmost window,
+                // which is the last one after the reverse above.
+                if let Some(locations) = locations.as_mut()
+                    && let Some(frontmost) = locations.pop()
+                {
+                    *locations = vec![frontmost];
+                }
+
+                locations
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
@@ -239,7 +390,27 @@ fn active_provider(data_path: &std::path::Path) -> Box<dyn RuntimeProvider> {
 }
 
 
-// The next three are copies of the functions in Zed's crates/zed/src/main.rs.
+// The next four are copies of the functions in Zed's crates/zed/src/main.rs.
+fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
+    [
+        paths::config_dir(),
+        paths::extensions_dir(),
+        paths::languages_dir(),
+        paths::debug_adapters_dir(),
+        paths::database_dir(),
+        paths::logs_dir(),
+        paths::temp_dir(),
+        paths::hang_traces_dir(),
+    ]
+    .into_iter()
+    .fold(HashMap::default(), |mut errors, path| {
+        if let Err(e) = std::fs::create_dir_all(path) {
+            errors.entry(e.kind()).or_insert_with(Vec::new).push(path);
+        }
+        errors
+    })
+}
+
 fn load_embedded_fonts(cx: &App) {
     let asset_source = cx.asset_source();
     let font_paths = asset_source.list("fonts").unwrap();
@@ -651,20 +822,14 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     info!("zed_android: paths data_dir set");
 
-    // Production zed creates these in `init_paths()` at boot. Without
-    // them, anything using `update_settings_file` (Onboarding theme /
-    // keymap toggles, settings_ui writes, workspace serialization)
-    // tries to atomic_write into a directory that doesn't exist, fails,
-    // and short-circuits before even applying the in-memory mutation —
-    // so toggles look like no-ops.
+    // Zed's main() exits when it can't create these; here the editor can
+    // still open, so only log.
+    for (kind, paths) in init_paths() {
+        error!("zed_android: couldn't create {paths:?}: {kind}");
+    }
     let termux_home = data_path.join("home");
     let projects_dir = termux_home.join("projects");
     for path in [
-        paths::config_dir(),
-        paths::database_dir(),
-        paths::logs_dir(),
-        paths::temp_dir(),
-        paths::languages_dir(),
         &termux_home,
         // Default landing dir for the project picker. Lives on app-private
         // storage where execve and dlopen work natively, so cargo / go /
@@ -708,6 +873,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     );
     zed::handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
 
+    // As in Zed's main().
     let user_agent = format!(
         "Zed/{} ({}; {})",
         AppVersion::global(cx),
@@ -1067,6 +1233,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     Client::set_global(client.clone(), cx);
     zed::init(cx);
     client::init(&client, cx);
+    feature_flags::FeatureFlagStore::init(cx);
     // Register the TrustedWorktrees global. git_store reads it via
     // `try_get_global` when a repo is added; without it, `is_trusted`
     // defaults to false, which routes every repo into the
@@ -1140,11 +1307,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     command_palette::init(cx);
     search::init(cx);
     lsp_locations::init(cx);
-    // Mirror production zed/src/main.rs:710. setup_search_bar is fired
-    // from `terminal_panel.rs::TerminalPanel::new` ONLY — i.e. when the
-    // terminal panel adds its own internal buffer search. It is NOT
-    // called for editor panes; `zed::initialize_pane` adds those, as in
-    // Zed.
+    // As in Zed's main(). The terminal panel uses this for its own buffer
+    // search; editor panes get theirs from `zed::initialize_pane`.
     cx.set_global(workspace::PaneSearchBarCallbacks {
         setup_search_bar: |languages, toolbar, window, cx| {
             let search_bar = cx.new(|cx| search::BufferSearchBar::new(languages, window, cx));
@@ -1155,13 +1319,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         wrap_div_with_search_actions: search::buffer_search::register_pane_search_actions,
     });
     vim::init(cx);
-    // Modal pickers / panels — mirror production zed/src/main.rs init order.
-    // Each registers its own actions + a SettingsStore observer if needed.
-    // Skipped from production (non-portable on Android): audio/call/livekit
-    // (collab), copilot/language_models (AI model providers; agent_ui is
-    // initialized below for ACP agents only), debugger_ui/repl (DAP/Jupyter),
-    // auto_update (we self-distribute), telemetry/crashes, extension_host
-    // (deferred to L3).
+    // In the order of Zed's main(). Left out: audio, call and livekit
+    // (collab), copilot and language_models (AI model providers: agent_ui
+    // runs ACP agents only), debugger_ui and repl, and telemetry and crashes.
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1294,80 +1454,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     zed::initialize_workspace(app_state.clone(), cx);
 
-    let observe_app_state = app_state.clone();
     cx.observe_new(move |workspace: &mut Workspace, window, cx| {
         let Some(window) = window else { return };
-
-        // CloseProject: action wired in production at
-        // `crates/zed/src/zed.rs:1123-1180`. Production binds it inside
-        // `initialize_workspace` next to NewFile / NewWindow handlers.
-        // We don't pull crates/zed (Android workspace example owns its
-        // own boot()), so the handler has to be re-registered here on
-        // every new workspace via observe_new.
-        //
-        // Flow, identical to production except the new-workspace init
-        // closure is a no-op (we don't auto-create an empty Editor on
-        // close — same shape as the returning-launch path at
-        // `workspace::open_new(Default::default(), app_state, cx,
-        // |_, _, _| {})` lower in this file):
-        //
-        //   1. prepare_to_close(ReplaceWindow) — checks dirty buffers,
-        //      pops the standard "Save changes?" modal if needed.
-        //   2. If the user proceeds, open_new() builds a fresh empty
-        //      workspace within the same MultiWorkspace tab, reusing
-        //      the requesting_window so we don't spawn an extra
-        //      ExtraWindowActivity (which open_window does on Android).
-        //   3. After the new workspace lands, remove the old project's
-        //      group key from the MultiWorkspace registry. Without this
-        //      the closed project's group survives in MultiWorkspace's
-        //      internal tracking and `Open Recent` / window-cycle UX
-        //      shows ghost entries.
-        workspace.register_action({
-            let app_state = observe_app_state.clone();
-            move |workspace: &mut Workspace, _: &CloseProject, window, cx| {
-                let Some(window_handle) =
-                    window.window_handle().downcast::<MultiWorkspace>()
-                else {
-                    return;
-                };
-                let app_state = app_state.clone();
-                let old_group_key = workspace.project_group_key(cx);
-                cx.spawn_in(window, async move |this, cx| {
-                    let should_continue = this
-                        .update_in(cx, |workspace, window, cx| {
-                            workspace.prepare_to_close(
-                                CloseIntent::ReplaceWindow,
-                                window,
-                                cx,
-                            )
-                        })?
-                        .await?;
-                    if !should_continue {
-                        return Ok::<(), anyhow::Error>(());
-                    }
-                    let task = cx.update(|_window, cx| {
-                        open_new(
-                            OpenOptions {
-                                requesting_window: Some(window_handle),
-                                ..Default::default()
-                            },
-                            app_state,
-                            cx,
-                            |_workspace, _window, _cx| {},
-                        )
-                    })?;
-                    task.await?;
-                    window_handle
-                        .update(cx, |mw, window, cx| {
-                            mw.remove_project_group(&old_group_key, window, cx)
-                        })?
-                        .await
-                        .log_err();
-                    Ok(())
-                })
-                .detach_and_log_err(cx);
-            }
-        });
 
         // Custom always-on application menu bar. On Android there's no
         // native menu surface and the production `title_bar` crate pulls
@@ -1413,107 +1501,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // workspace as the slot to swap. That path also dismisses any open
     // Onboarding/WelcomePage items naturally because the workspace gets
     // replaced.
-    cx.on_action(|_: &workspace::Open, cx: &mut App| {
-        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: true,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |cx| {
-            let picked = match paths.await {
-                Ok(Ok(Some(p))) => p,
-                Ok(Ok(None)) => return,
-                Ok(Err(err)) => {
-                    error!("zed_android: Open picker failed: {err:#}");
-                    return;
-                }
-                Err(_) => return,
-            };
-
-            // The first-launch onboarding path (show_onboarding_view →
-            // workspace::open_new) opens a plain `Workspace` window, not
-            // a `MultiWorkspace`. Returning-launch path is also `Workspace`
-            // until something attaches the multi-workspace shell. The Open
-            // action can fire on either, so try MultiWorkspace first then
-            // fall through to plain Workspace; the previous code silently
-            // no-op'd ("no active MultiWorkspace for Open" log + return)
-            // when invoked on the welcome screen of a fresh install.
-            let active = cx.update(|cx| cx.active_window());
-            let Some(active) = active else {
-                error!("zed_android: no active window for Open");
-                return;
-            };
-
-            if let Some(mw) = active.downcast::<MultiWorkspace>() {
-                let task = mw.update(cx, |mw, window, cx| {
-                    mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
-                });
-                if let Ok(task) = task {
-                    if let Err(err) = task.await {
-                        error!("zed_android: open_project failed: {err:#}");
-                    }
-                }
-            } else if let Some(ws) = active.downcast::<workspace::Workspace>() {
-                // Fall-through path: add the picked folder as a worktree
-                // of the current workspace. The welcome page tab survives
-                // alongside (user can close it). Not as polished as the
-                // MultiWorkspace `find_or_create + replace` flow, but it
-                // unblocks Open Project from the welcome screen on every
-                // boot path.
-                let task = ws.update(cx, |ws, window, cx| {
-                    ws.open_paths(
-                        picked,
-                        workspace::OpenOptions::default(),
-                        None,
-                        window,
-                        cx,
-                    )
-                });
-                if let Ok(task) = task {
-                    let _ = task.await;
-                }
-            } else {
-                // active_window points at something that is neither a
-                // Workspace nor a MultiWorkspace. The classic case on Android
-                // (first-boot Open Project): the runtime picker ran in an
-                // ExtraWindowActivity, the user dismissed it, and the active
-                // window slot still points at that dismissed picker entity
-                // when the SAF Activity-result fires. Without this fallback
-                // the URI is dropped silently and the user sees "tapping Open
-                // Project does nothing until I close + reopen the app".
-                //
-                // Fall back to the first local MultiWorkspace window. Same
-                // recovery the upstream `prompt_and_open_paths` does for its
-                // own scheduling.
-                let fallback = cx.update(|cx| {
-                    workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx)
-                        .into_iter()
-                        .next()
-                });
-                if let Some(mw) = fallback {
-                    log::warn!(
-                        "zed_android: Open action active_window was not a workspace; \
-                         falling back to the first local MultiWorkspace"
-                    );
-                    let task = mw.update(cx, |mw, window, cx| {
-                        mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
-                    });
-                    if let Ok(task) = task {
-                        if let Err(err) = task.await {
-                            error!("zed_android: fallback open_project failed: {err:#}");
-                        }
-                    }
-                } else {
-                    error!(
-                        "zed_android: no local MultiWorkspace window exists; \
-                         Open action dropped"
-                    );
-                }
-            }
-        })
-        .detach();
-    });
+    cx.on_action(|_: &workspace::Open, cx: &mut App| open_with_picker(cx));
+    // Zed's default keymap binds Ctrl+O to `OpenFiles`, whose fallback handler
+    // in `workspace::init` opens a new window.
+    cx.on_action(|_: &workspace::OpenFiles, cx: &mut App| open_with_picker(cx));
 
     // ImportFromSdcard action removed in L9 — the menu entry was redundant
     // with the existing SAF picker (Open / Add Folder to Project), and the
@@ -1521,11 +1512,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // banner's confirmation dialog (see title_bar.rs::render_noexec_banner)
     // when an opened worktree turns out to live on a noexec mount.
 
-    // Mirror production zed/src/main.rs's first-launch decision. Both
-    // helpers internally call `Workspace::new_local` → `cx.open_window`,
-    // construct the Project, build Workspace + MultiWorkspace, and run
-    // their own `init` callback. We don't need to do any of that
-    // manually; `observe_new` above attaches the project panel.
+    // From here to the end of boot(), as in Zed's main().
     cx.observe_global::<SettingsStore>({
         let http = app_state.client.http_client();
         let client = app_state.client.clone();
@@ -1571,22 +1558,24 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         )
     };
 
-    let kvp = KeyValueStore::global(cx);
-    let restore_task = if matches!(kvp.read_kvp(onboarding::FIRST_OPEN), Ok(None)) {
-        info!("zed_android: first launch → show_onboarding_view");
-        let onboarding = onboarding::show_onboarding_view(app_state.clone(), cx);
-        cx.spawn(async move |_| onboarding.await.log_err())
-    } else {
-        info!("zed_android: returning launch → restore_or_create_workspace");
+    let restore_task = cx.spawn({
         let app_state = app_state.clone();
-        cx.spawn(async move |cx| restore_or_create_workspace(app_state, cx).await.log_err())
-    };
+        async move |cx| restore_or_create_workspace(app_state, cx).await.log_err()
+    });
 
     cx.spawn({
         let db = WorkspaceDb::global(cx);
         let fs = app_state.fs.clone();
         async move |_cx| {
             restore_task.await;
+            // The cleanup drops recent projects whose folders are missing.
+            // Without the storage permission (not yet granted, denied, or
+            // revoked after months unused) every folder on shared storage
+            // looks missing, so wait until it's granted.
+            if std::fs::read_dir("/storage/emulated/0").is_err() {
+                info!("zed_android: shared storage unreadable; skipping workspace cleanup");
+                return Ok(());
+            }
             db.garbage_collect_workspaces(
                 fs.as_ref(),
                 &current_session_id,
@@ -1598,4 +1587,102 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     .detach_and_log_err(cx);
 
     Ok(())
+}
+
+fn open_with_picker(cx: &mut App) {
+    let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+        files: true,
+        directories: true,
+        multiple: false,
+        prompt: None,
+    });
+    cx.spawn(async move |cx| {
+        let picked = match paths.await {
+            Ok(Ok(Some(p))) => p,
+            Ok(Ok(None)) => return,
+            Ok(Err(err)) => {
+                error!("zed_android: Open picker failed: {err:#}");
+                return;
+            }
+            Err(_) => return,
+        };
+
+        // The first-launch onboarding path (show_onboarding_view →
+        // workspace::open_new) opens a plain `Workspace` window, not
+        // a `MultiWorkspace`. Returning-launch path is also `Workspace`
+        // until something attaches the multi-workspace shell. The Open
+        // action can fire on either, so try MultiWorkspace first then
+        // fall through to plain Workspace; the previous code silently
+        // no-op'd ("no active MultiWorkspace for Open" log + return)
+        // when invoked on the welcome screen of a fresh install.
+        let active = cx.update(|cx| cx.active_window());
+        let Some(active) = active else {
+            error!("zed_android: no active window for Open");
+            return;
+        };
+
+        if let Some(mw) = active.downcast::<MultiWorkspace>() {
+            let task = mw.update(cx, |mw, window, cx| {
+                mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
+            });
+            if let Ok(task) = task {
+                if let Err(err) = task.await {
+                    error!("zed_android: open_project failed: {err:#}");
+                }
+            }
+        } else if let Some(ws) = active.downcast::<workspace::Workspace>() {
+            // Fall-through path: add the picked folder as a worktree
+            // of the current workspace. The welcome page tab survives
+            // alongside (user can close it). Not as polished as the
+            // MultiWorkspace `find_or_create + replace` flow, but it
+            // unblocks Open Project from the welcome screen on every
+            // boot path.
+            let task = ws.update(cx, |ws, window, cx| {
+                ws.open_paths(picked, workspace::OpenOptions::default(), None, window, cx)
+            });
+            if let Ok(task) = task {
+                for result in task.await.into_iter().flatten() {
+                    result.log_err();
+                }
+            }
+        } else {
+            // active_window points at something that is neither a
+            // Workspace nor a MultiWorkspace. The classic case on Android
+            // (first-boot Open Project): the runtime picker ran in an
+            // ExtraWindowActivity, the user dismissed it, and the active
+            // window slot still points at that dismissed picker entity
+            // when the SAF Activity-result fires. Without this fallback
+            // the URI is dropped silently and the user sees "tapping Open
+            // Project does nothing until I close + reopen the app".
+            //
+            // Fall back to the first local MultiWorkspace window. Same
+            // recovery the upstream `prompt_and_open_paths` does for its
+            // own scheduling.
+            let fallback = cx.update(|cx| {
+                workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx)
+                    .into_iter()
+                    .next()
+            });
+            if let Some(mw) = fallback {
+                log::warn!(
+                    "zed_android: Open action active_window was not a workspace; \
+                     falling back to the first local MultiWorkspace"
+                );
+                let task = mw.update(cx, |mw, window, cx| {
+                    mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
+                });
+                if let Ok(task) = task {
+                    if let Err(err) = task.await {
+                        error!("zed_android: fallback open_project failed: {err:#}");
+                    }
+                }
+            } else {
+                error!(
+                    "zed_android: no local MultiWorkspace window exists; \
+                     Open action dropped"
+                );
+            }
+        }
+    })
+    .detach();
 }

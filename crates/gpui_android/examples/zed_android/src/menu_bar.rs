@@ -49,11 +49,12 @@ pub fn register_actions(cx: &mut App) {
             .ok();
         }
     });
-    cx.bind_keys([gpui::KeyBinding::new(
-        "ctrl-alt-m",
-        ToggleAppMenuBar,
-        None,
-    )]);
+}
+
+/// Bound by `zed::load_default_keymap`, which runs again whenever the keymaps
+/// reload and clears every binding first.
+pub fn key_bindings() -> Vec<gpui::KeyBinding> {
+    vec![gpui::KeyBinding::new("ctrl-alt-m", ToggleAppMenuBar, None)]
 }
 
 pub struct MenuBar {

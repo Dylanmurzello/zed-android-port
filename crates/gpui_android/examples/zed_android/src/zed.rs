@@ -24,13 +24,14 @@ use git_ui::staged_diff::StagedDiffToolbar;
 use git_ui::unstaged_diff::UnstagedDiffToolbar;
 use git_ui_core::file_diff_view::FileDiffStyleToolbar;
 use gpui::{
-    Action, App, AppContext as _, AsyncWindowContext, Context, DismissEvent, Element, Entity,
-    Focusable, KeyBinding, ParentElement, PathPromptOptions, PromptLevel, ReadGlobal, SharedString,
-    Task, TaskExt, UpdateGlobal, WeakEntity, Window, WindowHandle, actions, div, image_cache, px,
-    retain_all,
+    Action, App, AppContext as _, AsyncWindowContext, ClipboardItem, Context, DismissEvent,
+    Element, Entity, Focusable, KeyBinding, ParentElement, PathPromptOptions, PromptLevel,
+    ReadGlobal, SharedString, Task, TaskExt, UpdateGlobal, WeakEntity, Window, WindowHandle,
+    actions, div, image_cache, px, retain_all,
 };
 use image_viewer::ImageInfo;
 use language::Capability;
+use language_onboarding::BasedPyrightBanner;
 use language_tools::lsp_button::{self, LspButton};
 use language_tools::lsp_log_view::LspLogToolbarItemView;
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
@@ -51,9 +52,9 @@ use recent_projects::open_remote_project;
 use rope::Rope;
 use search::project_search::ProjectSearchBar;
 use settings::{
-    BaseKeymap, DEFAULT_KEYMAP_PATH, InvalidSettingsError, KeybindSource, KeymapFile,
-    KeymapFileLoadResult, MigrationStatus, SPECIFIC_OVERRIDES_KEYMAP_PATH, Settings, SettingsFile,
-    SettingsStore, VIM_KEYMAP_PATH, initial_local_debug_tasks_content,
+    BaseKeymap, DEFAULT_KEYMAP_PATH, DefaultOpenBehavior, InvalidSettingsError, KeybindSource,
+    KeymapFile, KeymapFileLoadResult, MigrationStatus, SPECIFIC_OVERRIDES_KEYMAP_PATH, Settings,
+    SettingsFile, SettingsStore, VIM_KEYMAP_PATH, initial_local_debug_tasks_content,
     initial_project_settings_content, initial_tasks_content, update_settings_file,
 };
 use sidebar::Sidebar;
@@ -73,7 +74,7 @@ use util::rel_path::RelPath;
 use vim_mode_setting::VimModeSetting;
 use workspace::notifications::{NotificationId, dismiss_app_notification, show_app_notification};
 use workspace::{
-    AppState, CloseWindow, MultiWorkspace, Pane, Panel, Workspace, WorkspaceSettings,
+    AppState, CloseProject, CloseWindow, MultiWorkspace, Pane, Panel, Workspace, WorkspaceSettings,
     create_and_open_local_file, notifications::simple_message_notification::MessageNotification,
     with_active_or_new_workspace,
 };
@@ -102,9 +103,35 @@ actions!(
     ]
 );
 
-// Left out: hiding the app (macOS), the title bar's banner, test panics, the
-// log actions (`logging.rs` registers the app's own), the licenses file, which
-// only Zed's release bundles generate, and the About window.
+actions!(
+    dev,
+    [
+        /// Dumps the current accessibility tree (the last update sent to the
+        /// platform adapter) to a new buffer as JSON, for debugging what is
+        /// exposed to assistive technology.
+        DumpAccessibilityTree,
+        /// Copies the current accessibility tree to the clipboard as JSON,
+        /// without opening a buffer. See [`DumpAccessibilityTree`].
+        CopyAccessibilityTree,
+    ]
+);
+
+/// Serializes the window's most recent accessibility tree to JSON for the
+/// `dev: dump/copy accessibility tree` actions, falling back to a friendly
+/// placeholder when no tree has been built yet.
+fn accessibility_tree_dump(window: &Window) -> String {
+    window.debug_a11y_tree_json().unwrap_or_else(|| {
+        "No accessibility tree has been built yet. The tree is only \
+         produced once assistive technology (e.g. a screen reader) is \
+         active for this window."
+            .to_string()
+    })
+}
+
+// Left out: hiding the app (macOS), the title bar's banner (the `title_bar`
+// crate isn't built), test panics (feature flag), the log actions
+// (`logging.rs` registers the app's own), the licenses file, which only Zed's
+// release bundles generate, and the About window.
 pub fn init(cx: &mut App) {
     cx.on_action(quit);
 
@@ -192,9 +219,10 @@ pub fn init(cx: &mut App) {
 }
 
 // Left out: quitting when the last window closes, which Android's activity
-// lifecycle owns, the window appearance (Android ignores it), telemetry, the
-// file watcher and GPU warnings (Linux and Windows only), and the edit
-// prediction button: the app registers no AI model providers.
+// lifecycle owns, the window appearance (Android ignores it), input latency
+// telemetry and the crash reporter (not built), the file watcher (Linux and
+// Windows only), and the edit prediction button (`edit_prediction_ui` isn't
+// built).
 pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
     init_cursor_hide_mode(cx);
     init_reduce_motion(cx);
@@ -288,6 +316,11 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         })
         .detach();
 
+        if let Some(specs) = window.gpu_specs() {
+            log::info!("Using GPU: {:?}", specs);
+            show_software_emulation_warning_if_needed(specs, window, cx);
+        }
+
         let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
         let diagnostic_summary =
             cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
@@ -348,6 +381,56 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
         }
     })
     .detach();
+}
+
+fn show_software_emulation_warning_if_needed(
+    specs: gpui::GpuSpecs,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if specs.is_software_emulated && std::env::var("ZED_ALLOW_EMULATED_GPU").is_err() {
+        let (graphics_api, docs_url, open_url) = if cfg!(target_os = "windows") {
+            (
+                "DirectX",
+                "https://zed.dev/docs/windows",
+                "https://zed.dev/docs/windows",
+            )
+        } else {
+            (
+                "Vulkan",
+                "https://zed.dev/docs/linux",
+                "https://zed.dev/docs/linux#zed-fails-to-open-windows",
+            )
+        };
+        let message = format!(
+            db::indoc! {r#"
+            Zed uses {} for rendering and requires a compatible GPU.
+
+            Currently you are using a software emulated GPU ({}) which
+            will result in awful performance.
+
+            For troubleshooting see: {}
+            Set ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.
+            "#},
+            graphics_api, specs.device_name, docs_url
+        );
+        let prompt = window.prompt(
+            PromptLevel::Critical,
+            "Unsupported GPU",
+            Some(&message),
+            &["Skip", "Troubleshoot and Quit"],
+            cx,
+        );
+        cx.spawn(async move |_, cx| {
+            if prompt.await == Ok(1) {
+                cx.update(|cx| {
+                    cx.open_url(open_url);
+                    cx.quit();
+                });
+            }
+        })
+        .detach()
+    }
 }
 
 // Left out: the collab and debug panels, whose crates the app doesn't build.
@@ -481,12 +564,13 @@ async fn initialize_agent_panel(
     anyhow::Ok(())
 }
 
-// Left out: actions for crates the app doesn't build (input latency,
-// accessibility, collab, the URL prompt, the CLI and zed:// links), window
-// actions Android ignores (minimize, zoom, full screen), the frame overlay,
-// which needs gpui's `profiler` feature (it records every foreground event, so
-// the app leaves it off), and `workspace::Open`, `NewWindow`, `NewFile` and
-// `CloseProject`, which the app handles itself.
+// Left out: actions for crates the app doesn't build (input latency, collab,
+// the URL prompt, the CLI and zed:// links), window actions Android ignores
+// (minimize, zoom, full screen), the frame overlay, which needs gpui's
+// `profiler` feature (it records every foreground event, so the app leaves it
+// off), `workspace::Open` and `OpenFiles`, which the app sends to its own
+// picker (lib.rs), `NewWindow` and `NewFile`, which `editor::init` handles,
+// and `ShowWorkspaceError` (debug builds only).
 fn register_actions(
     app_state: Arc<AppState>,
     workspace: &mut Workspace,
@@ -497,6 +581,60 @@ fn register_actions(
         .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
         .register_action(|_, _: &OpenStatusPage, _, cx| cx.open_url(STATUS_URL))
         .register_action(|_, _: &GetMerch, _, cx| cx.open_url(MERCH_URL))
+        .register_action(
+            |workspace: &mut Workspace,
+             _: &DumpAccessibilityTree,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                let json = accessibility_tree_dump(window);
+                let language = workspace.app_state().languages.language_for_name("JSON");
+                let project = workspace.project().clone();
+                cx.spawn_in(window, async move |workspace, cx| {
+                    let language = language.await.log_err();
+                    let buffer = project
+                        .update(cx, |project, cx| {
+                            project.create_buffer(language, true, cx)
+                        })
+                        .await?;
+                    buffer.update(cx, |buffer, cx| {
+                        buffer.set_text(json, cx);
+                    });
+                    workspace.update_in(cx, |workspace, window, cx| {
+                        let title = "Accessibility Tree".to_string();
+                        let buffer = cx.new(|cx| {
+                            MultiBuffer::singleton(buffer, cx).with_title(title.clone())
+                        });
+                        let editor = cx.new(|cx| {
+                            let mut editor = Editor::for_multibuffer(
+                                buffer,
+                                Some(project),
+                                window,
+                                cx,
+                            );
+                            editor.set_breadcrumb_header(title);
+                            editor
+                        });
+                        workspace.add_item_to_active_pane(
+                            Box::new(editor),
+                            None,
+                            true,
+                            window,
+                            cx,
+                        );
+                    })
+                })
+                .detach_and_log_err(cx);
+            },
+        )
+        .register_action(
+            |_workspace: &mut Workspace,
+             _: &CopyAccessibilityTree,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                let json = accessibility_tree_dump(window);
+                cx.write_to_clipboard(ClipboardItem::new_string(json));
+            },
+        )
         .register_action(|workspace, action: &OpenBrowser, _window, cx| {
             // Parse and validate the URL to ensure it's properly formatted
             match url::Url::parse(&action.url) {
@@ -527,7 +665,7 @@ fn register_actions(
             let create_new_window = action.create_new_window.unwrap_or_else(|| {
                 matches!(
                     WorkspaceSettings::get_global(cx).default_open_behavior,
-                    settings::DefaultOpenBehavior::NewWindow
+                    DefaultOpenBehavior::NewWindow
                 )
             });
             telemetry::event!("Project Opened");
@@ -698,7 +836,23 @@ fn register_actions(
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<TerminalPanel>(window, cx);
             },
-        );
+        )
+        .register_action({
+            move |workspace, _: &CloseProject, window, cx| {
+                let Some(window_handle) = window.window_handle().downcast::<MultiWorkspace>() else {
+                    return;
+                };
+                let old_group_key = workspace.project_group_key(cx);
+                cx.spawn_in(window, async move |_, cx| {
+                    let task = window_handle.update(cx, |multi_workspace, window, cx| {
+                        multi_workspace.remove_project_group(&old_group_key, window, cx)
+                    })?;
+                    task.await?;
+                    anyhow::Ok(())
+                })
+                .detach_and_log_err(cx);
+            }
+        });
 
     if workspace.project().read(cx).is_via_remote_server() {
         workspace.register_action({
@@ -735,8 +889,8 @@ fn register_actions(
     workspace.register_action(sidebar::dump_workspace_info);
 }
 
-// Left out: the toolbar items of crates the app doesn't build (the quick
-// action bar, the debugger and telemetry logs, and the basedpyright banner).
+// Left out: the toolbar items of crates the app doesn't build: the quick
+// action bar (its REPL menu needs `repl`), and the debugger and telemetry logs.
 fn initialize_pane(
     workspace: &Workspace,
     pane: &Entity<Pane>,
@@ -792,6 +946,8 @@ fn initialize_pane(
             toolbar.add_item(commit_view_toolbar, window, cx);
             let agent_diff_toolbar = cx.new(AgentDiffToolbar::new);
             toolbar.add_item(agent_diff_toolbar, window, cx);
+            let basedpyright_banner = cx.new(|cx| BasedPyrightBanner::new(workspace, cx));
+            toolbar.add_item(basedpyright_banner, window, cx);
             let image_view_toolbar = cx.new(|_| image_viewer::ImageViewToolbarControls::new());
             toolbar.add_item(image_view_toolbar, window, cx);
         })
@@ -1297,6 +1453,9 @@ pub fn load_default_keymap(cx: &mut App) {
         )
         .unwrap(),
     );
+
+    // Android: the app's own menu bar shortcut.
+    cx.bind_keys(crate::menu_bar::key_bindings());
 }
 
 /// `KeymapFile::load_asset`, but keeping the bindings that load when others
@@ -1307,7 +1466,20 @@ fn load_asset(
     source: Option<KeybindSource>,
     cx: &App,
 ) -> anyhow::Result<Vec<KeyBinding>> {
-    let mut key_bindings = KeymapFile::load_asset_allow_partial_failure(asset_path, cx)?;
+    let content = util::asset_str::<settings::SettingsAssets>(asset_path);
+    let mut key_bindings = match KeymapFile::load(&content, cx) {
+        KeymapFileLoadResult::Success { key_bindings } => key_bindings,
+        KeymapFileLoadResult::SomeFailedToLoad {
+            key_bindings,
+            error_message,
+        } => {
+            log::debug!("skipped bindings in {asset_path}: {error_message}");
+            key_bindings
+        }
+        KeymapFileLoadResult::JsonParseFailure { error } => {
+            anyhow::bail!("JSON parse error in built-in keymap \"{asset_path}\": {error}")
+        }
+    };
     if let Some(source) = source {
         for key_binding in &mut key_bindings {
             key_binding.set_meta(source.meta());
