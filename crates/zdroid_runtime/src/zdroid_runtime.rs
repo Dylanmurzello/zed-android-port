@@ -8,8 +8,9 @@
 //!
 //! - [`port`] — the [`RuntimeProvider`] trait + spawn types. The contract
 //!   every adapter satisfies.
-//! - [`config`] — `zd-runtime.toml` schema + serde, plus the
-//!   [`config::ResolvedConfig`] that downstream code actually consumes.
+//! - [`config`] — `zd-runtime.toml` schema, location, and the
+//!   [`config::RuntimeState`] the editor boots from.
+//! - [`env`] — the baseline Zed-process env every adapter extends.
 //! - [`health`] — [`health::HealthStatus`] feasibility-ping primitive +
 //!   the [`health::ProgressSink`] hook used by long-running install ops.
 //! - [`adapters`] — concrete provider impls, one submodule each.
@@ -26,6 +27,7 @@
 
 pub mod adapters;
 pub mod config;
+pub mod env;
 pub mod health;
 pub mod port;
 

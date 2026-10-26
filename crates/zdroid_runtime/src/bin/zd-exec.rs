@@ -20,7 +20,7 @@
 //!      positional is the target binary. Used for testing and one-off
 //!      tool invocations from a script.
 //!
-//! Reads `runtime.toml` from `$PREFIX/etc/zd-runtime.toml` to pick the
+//! Reads `zd-runtime.toml` from `<data>/files/etc/` to pick the
 //! active adapter, builds a `SpawnRequest` from the current process'
 //! cwd / env / stdio, calls `provider.spawn(req).wait()`, and exits
 //! with the child's exit code (or `128 + signum` if killed by signal,
@@ -35,18 +35,12 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 use zdroid_runtime::adapters;
-use zdroid_runtime::config::RuntimeFile;
+use zdroid_runtime::config::{DEFAULT_DATA_PATH, RuntimeState};
 use zdroid_runtime::port::SpawnRequest;
-
-/// Same path the picker writes to. Hardcoded — the wrapper has no way
-/// to discover `$PREFIX` other than by reading the env, and we want
-/// the wrapper's behavior to be deterministic regardless of who
-/// invoked it (Zed, an interactive shell, a daemon).
-const RUNTIME_TOML: &str = "/data/data/com.zdroid/files/usr/etc/zd-runtime.toml";
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().collect();
@@ -128,12 +122,10 @@ fn main() -> ExitCode {
 }
 
 fn build_provider() -> anyhow::Result<Box<dyn zdroid_runtime::port::RuntimeProvider>> {
-    let path = PathBuf::from(RUNTIME_TOML);
-    let file = RuntimeFile::load(&path)?
-        .ok_or_else(|| anyhow::anyhow!(
-            "{} not found. Open Zdroid and pick a runtime in Settings first.",
-            path.display(),
-        ))?;
-    let resolved = file.resolve()?;
-    adapters::for_config(&resolved)
+    match RuntimeState::load(Path::new(DEFAULT_DATA_PATH)) {
+        RuntimeState::Configured(resolved) => adapters::for_config(&resolved),
+        RuntimeState::NotConfigured(reason) => anyhow::bail!(
+            "no runtime configured ({reason}). Open Zdroid and pick a runtime in Settings first."
+        ),
+    }
 }

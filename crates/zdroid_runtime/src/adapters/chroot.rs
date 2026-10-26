@@ -578,59 +578,16 @@ impl RuntimeProvider for ChrootAdapter {
     }
 
     fn env_for_zed_process(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
-        // Chroot mode keeps the Zed-Rust process bionic-clean: no
-        // Termux-flavored vars, no $PREFIX/etc.pem CA pointer, no
-        // libtermux-exec preload. Anything spawn-target-specific gets
-        // injected at the zd-spawnd boundary via
-        // `sanitize_env_for_chroot`.
-        use std::ffi::OsString;
-        use util::env::EnvOp;
-
-        // Phase 4: zd-exec + zd-runtime live at `<data>/files/bin/` and
-        // `<data>/files/zd-runtime/` respectively, not under the
-        // bootstrap-flavored `<data>/files/usr/`. Chroot mode has no
-        // dependency on the bootstrap layout anymore.
-        let zd_runtime = data_path.join("zd-runtime");
-        let bin = data_path.join("bin");
-        let existing_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut new_path = OsString::new();
-        new_path.push(&zd_runtime);
-        new_path.push(":");
-        new_path.push(&bin);
-        new_path.push(":");
-        new_path.push(&existing_path);
-
-        vec![
-            // HOME stays pointed at the app's data root for compat
-            // with upstream `dirs::home_dir()` consumers; the chroot
-            // adapter's bind-mount makes this path the same inside
-            // the rootfs.
-            ("HOME".into(), EnvOp::Set(data_path.as_os_str().to_owned())),
-            // Generic non-Termux tmp dir under the app sandbox.
-            ("TMPDIR".into(), EnvOp::Set(data_path.join("tmp").into_os_string())),
-            ("TERM".into(), EnvOp::Set(OsString::from("xterm-256color"))),
-            ("COLORTERM".into(), EnvOp::Set(OsString::from("truecolor"))),
-            ("LANG".into(), EnvOp::Set(OsString::from("en_US.UTF-8"))),
-            // Disable the remote-server source-build fallback (see
-            // upstream `crates/remote/src/transport.rs`); cross-
-            // compiling rust on the device is never viable on Android
-            // and forcing the CDN-or-existing-on-remote path keeps
-            // the SSH transport behavior the same as desktop Zed.
-            ("ZED_BUILD_REMOTE_SERVER".into(), EnvOp::Set(OsString::from("never"))),
-            // No bootstrap libtermux-exec.so in chroot mode; if some
-            // ancestor shell leaked LD_PRELOAD, drop it so remote
-            // SSH subprocesses don't spam `cannot be preloaded` on
-            // every command.
-            ("LD_PRELOAD".into(), EnvOp::Remove),
-            // PATH: chroot has the zd-runtime symlink farm at the
-            // front. Kernel PATH lookup of `Command::new("java")`
-            // finds the symlink, exec's zd-exec, which dispatches via
-            // zd-spawnd into the rootfs.
-            ("PATH".into(), EnvOp::Set(new_path)),
-            // SHELL points at zd-exec so the integrated terminal
-            // lands inside the rootfs via the same wrapper.
-            ("SHELL".into(), EnvOp::Set(bin.join("zd-exec").into_os_string())),
-        ]
+        // Chroot mode keeps the Zed-Rust process bionic-clean; anything
+        // spawn-target-specific is injected at the zd-spawnd boundary via
+        // `sanitize_env_for_chroot`. SHELL points at zd-exec so the
+        // integrated terminal lands inside the rootfs via the same wrapper.
+        let mut ops = crate::env::baseline_env(data_path);
+        ops.push((
+            "SHELL".into(),
+            util::env::EnvOp::Set(data_path.join("bin/zd-exec").into_os_string()),
+        ));
+        ops
     }
 
     fn env_for_terminal(&self, _data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {

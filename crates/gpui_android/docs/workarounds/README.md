@@ -48,6 +48,7 @@ is built.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Storage permission JNI shim](storage-permission-jni.md) | Active | `READ/WRITE_EXTERNAL_STORAGE` are runtime-prompted at targetSdk≤28 |
+| [Runtime config location + not-configured state](runtime-config-migration.md) | Active | Config moved out of the bootstrap prefix; legacy or broken files route to the picker instead of a silent default |
 | [JNI DNS bridge](jni-dns-bridge.md) | Active | Android has no `/etc/resolv.conf`; ConnectivityManager's servers seed the guest rootfs resolv.conf |
 | [`/sdcard/.zed/` namespace](sdcard-dot-zed-namespace.md) | Reverted | Only existed for the hex-patched musl loader's 14-byte path slot; nothing is hex-patched anymore |
 | [Bun resolv.conf hex-patch resilience](deferred-bun-resolv-resilience.md) | Superseded | Hex-patching binaries is gone; guest binaries read a real `/etc/resolv.conf` |

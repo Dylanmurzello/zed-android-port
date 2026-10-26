@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render, Size,
-    Tiling, Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
+    Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
 };
 use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
 use theme::ActiveTheme;
 use ui::{
-    Button, Chip, Clickable, Color, Disableable, FluentBuilder, Headline, HeadlineSize, Icon,
+    Button, Chip, Clickable, Color, FluentBuilder, Headline, HeadlineSize, Icon,
     IconName, IconSize, Label, LabelCommon, LabelSize, ParentElement, Styled, h_flex, v_flex,
 };
 use util::ResultExt as _;
@@ -26,12 +26,8 @@ use zdroid_runtime::{
     HealthStatus, RuntimeId, RuntimeProvider,
     adapters,
     adapters::chroot::SPAWND_RELEASE_URL,
-    config::{ChrootConfig, RuntimeFile},
+    config::{self, ChrootConfig, RuntimeFile, RuntimeState},
 };
-
-/// Where Zdroid stores the active-adapter selection. Persists across
-/// editor APK updates the same way other user state does.
-const RUNTIME_TOML_PATH: &str = "/data/data/com.zdroid/files/usr/etc/zd-runtime.toml";
 
 actions!(
     zdroid_runtime,
@@ -188,7 +184,7 @@ impl RuntimePicker {
             return;
         }
 
-        let path = std::path::PathBuf::from(RUNTIME_TOML_PATH);
+        let path = config::runtime_toml_path(&config::data_path());
         let file = RuntimeFile::with_defaults(id);
         match file.save(&path) {
             Ok(()) => {
@@ -489,13 +485,10 @@ fn default_chroot_config() -> ChrootConfig {
     }
 }
 
-/// Read the active adapter id from `runtime.toml`. Returns `None` if
-/// the file is missing (first-launch state) or unparseable; the picker
+/// Read the active adapter id from `zd-runtime.toml`. `None` when no
+/// runtime is configured (missing, legacy, or broken file); the picker
 /// just doesn't render a "Current" badge in those cases.
 fn detect_current() -> Option<RuntimeId> {
-    RuntimeFile::load(std::path::Path::new(RUNTIME_TOML_PATH))
-        .ok()
-        .flatten()
-        .map(|file| file.runtime.kind)
+    RuntimeState::load(&config::data_path()).id()
 }
 

@@ -1,13 +1,12 @@
-//! `runtime.toml` schema + the resolved-config struct downstream uses.
+//! `zd-runtime.toml` schema, its on-device location, and the runtime
+//! state the editor boots from.
 //!
-//! On disk the file looks like:
+//! On disk:
 //!
 //! ```toml
-//! # Active adapter. One of: "chroot"
 //! [runtime]
 //! type = "chroot"
 //!
-//! # Per-adapter sections. Only the one matching `runtime.type` is used.
 //! [chroot]
 //! root = "/data/local/nhsystem/kali-arm64"
 //! home_bind = "/zed"
@@ -15,21 +14,49 @@
 //! su_path = "/product/bin/su"
 //! ```
 //!
-//! Loading flow:
-//!
-//! ```ignore
-//! let raw = RuntimeFile::load(&conf_path)?;          // serde-parse
-//! let resolved = raw.resolve()?;                      // pick the active section
-//! let provider = adapters::for_config(&resolved)?;    // factory
-//! provider.spawn(req)?;
-//! ```
+//! The file lives at `<data>/files/etc/zd-runtime.toml`. Earlier releases
+//! wrote it inside the bootstrap prefix (`<data>/files/usr/etc/`), which the
+//! bootstrap installer wiped; [`RuntimeState::load`] migrates that file once
+//! and reports adapter types this build no longer knows as "not configured"
+//! instead of booting on a silent default.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+/// App files dir when the platform did not hand us one.
+pub const DEFAULT_DATA_PATH: &str = "/data/data/com.zdroid/files";
+
+static DATA_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Record the app files dir once at boot so code without access to the
+/// `AndroidApp` (picker, helpers) can find the runtime config.
+pub fn set_data_path(path: PathBuf) {
+    if DATA_PATH.set(path).is_err() {
+        log::debug!("zdroid_runtime: data_path already set; ignoring re-set");
+    }
+}
+
+/// The app files dir recorded by [`set_data_path`], or the default.
+pub fn data_path() -> PathBuf {
+    DATA_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_PATH))
+}
+
+pub fn runtime_toml_path(data_path: &Path) -> PathBuf {
+    data_path.join("etc/zd-runtime.toml")
+}
+
+/// Pre-migration location inside the bootstrap prefix.
+pub fn legacy_runtime_toml_path(data_path: &Path) -> PathBuf {
+    data_path.join("usr/etc/zd-runtime.toml")
+}
+
 /// Stable identifier for each adapter. Stored as a string in
-/// `runtime.toml` (`[runtime] type = "chroot"`) and surfaced in the
+/// `zd-runtime.toml` (`[runtime] type = "chroot"`) and surfaced in the
 /// settings UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +75,17 @@ impl RuntimeId {
     }
 }
 
+/// What `[runtime] type` holds. Ids this build knows deserialize to
+/// `Known`; anything else (adapters that were removed, typos) lands in
+/// `Legacy` instead of failing the whole parse, so callers can tell the
+/// user exactly what they found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RuntimeKind {
+    Known(RuntimeId),
+    Legacy(String),
+}
+
 /// Top-level config file shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeFile {
@@ -60,7 +98,7 @@ pub struct RuntimeFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeSelection {
     #[serde(rename = "type")]
-    pub kind: RuntimeId,
+    pub kind: RuntimeKind,
 }
 
 /// Chroot-adapter config. Deserialized from `[chroot]`.
@@ -98,14 +136,116 @@ impl ResolvedConfig {
     }
 }
 
+/// Why no adapter is active. Logged at boot and shown by the UI so the
+/// user is routed to the picker with a precise message.
+#[derive(Debug, Clone)]
+pub enum NotConfiguredReason {
+    /// No config file at either location: first launch.
+    Missing,
+    /// The file names an adapter this build does not have (`bootstrap`,
+    /// `external_termux`, ...). The user has to pick again.
+    Legacy(String),
+    /// The file exists but is not valid TOML for the schema.
+    Unparseable(String),
+    /// The type is known but its section is missing or the adapter could
+    /// not be constructed.
+    Unresolvable(String),
+}
+
+impl std::fmt::Display for NotConfiguredReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(f, "no zd-runtime.toml yet"),
+            Self::Legacy(kind) => write!(f, "runtime type {kind:?} is not available in this build"),
+            Self::Unparseable(error) => write!(f, "zd-runtime.toml is unreadable: {error}"),
+            Self::Unresolvable(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+/// What the editor boots from.
+#[derive(Debug, Clone)]
+pub enum RuntimeState {
+    NotConfigured(NotConfiguredReason),
+    Configured(ResolvedConfig),
+}
+
+impl RuntimeState {
+    /// Read the runtime config, migrating a pre-move file once. Never
+    /// errors: every failure becomes a [`NotConfiguredReason`].
+    pub fn load(data_path: &Path) -> Self {
+        let path = runtime_toml_path(data_path);
+        match RuntimeFile::load(&path) {
+            Ok(Some(file)) => return Self::from_file(file),
+            Ok(None) => {}
+            Err(error) => {
+                return Self::NotConfigured(NotConfiguredReason::Unparseable(format!(
+                    "{}: {error:#}",
+                    path.display()
+                )));
+            }
+        }
+
+        let legacy_path = legacy_runtime_toml_path(data_path);
+        match RuntimeFile::load(&legacy_path) {
+            Ok(Some(file)) => {
+                let state = Self::from_file(file.clone());
+                if let Self::Configured(_) = &state {
+                    match file.save(&path) {
+                        Ok(()) => log::info!(
+                            "zdroid_runtime: migrated {} -> {}",
+                            legacy_path.display(),
+                            path.display()
+                        ),
+                        Err(error) => log::warn!(
+                            "zdroid_runtime: could not migrate {} -> {}: {error:#}",
+                            legacy_path.display(),
+                            path.display()
+                        ),
+                    }
+                }
+                state
+            }
+            Ok(None) => Self::NotConfigured(NotConfiguredReason::Missing),
+            Err(error) => Self::NotConfigured(NotConfiguredReason::Unparseable(format!(
+                "{}: {error:#}",
+                legacy_path.display()
+            ))),
+        }
+    }
+
+    fn from_file(file: RuntimeFile) -> Self {
+        match &file.runtime.kind {
+            RuntimeKind::Legacy(kind) => {
+                Self::NotConfigured(NotConfiguredReason::Legacy(kind.clone()))
+            }
+            RuntimeKind::Known(_) => match file.resolve() {
+                Ok(resolved) => Self::Configured(resolved),
+                Err(error) => {
+                    Self::NotConfigured(NotConfiguredReason::Unresolvable(format!("{error:#}")))
+                }
+            },
+        }
+    }
+
+    /// The active adapter id, if any.
+    pub fn id(&self) -> Option<RuntimeId> {
+        match self {
+            Self::Configured(resolved) => Some(resolved.id()),
+            Self::NotConfigured(_) => None,
+        }
+    }
+}
+
 impl RuntimeFile {
     /// Construct a `RuntimeFile` whose `[runtime] type =` is set to
     /// `id` and whose only populated section is the matching one,
     /// using on-device defaults. Used by the picker UI to write a
-    /// fresh `runtime.toml` when the user selects an adapter for the
-    /// first time.
+    /// fresh config when the user selects an adapter.
     pub fn with_defaults(id: RuntimeId) -> Self {
-        let runtime = RuntimeSelection { kind: id };
+        let runtime = RuntimeSelection {
+            kind: RuntimeKind::Known(id),
+        };
         match id {
             RuntimeId::Chroot => Self {
                 runtime,
@@ -119,10 +259,9 @@ impl RuntimeFile {
         }
     }
 
-    /// Read + parse `runtime.toml` from `path`. Returns `Ok(None)` if
-    /// the file doesn't exist (first-launch state); errors only on
-    /// parse / I/O failures.
-    pub fn load(path: &std::path::Path) -> anyhow::Result<Option<Self>> {
+    /// Read + parse the config from `path`. Returns `Ok(None)` if the
+    /// file doesn't exist; errors only on parse / I/O failures.
+    pub fn load(path: &Path) -> anyhow::Result<Option<Self>> {
         match std::fs::read_to_string(path) {
             Ok(raw) => Ok(Some(toml::from_str(&raw)?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -130,11 +269,11 @@ impl RuntimeFile {
         }
     }
 
-    /// Atomically serialize and write `runtime.toml` to `path`. Writes
-    /// to a sibling `path.tmp`, then renames into place — so a partial
-    /// write doesn't leave a half-formed config that breaks the
-    /// adapter dispatch on next launch.
-    pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
+    /// Atomically serialize and write the config to `path`. Writes to a
+    /// sibling `path.tmp`, then renames into place, so a partial write
+    /// doesn't leave a half-formed config that breaks adapter dispatch
+    /// on next launch.
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -146,15 +285,17 @@ impl RuntimeFile {
     }
 
     /// Pick the active section based on `runtime.type` and return it
-    /// as a [`ResolvedConfig`]. Errors if the matching section is
-    /// missing — `runtime.toml` declared chroot but no `[chroot]`
-    /// block exists, etc.
+    /// as a [`ResolvedConfig`]. Errors if the type is unknown or the
+    /// matching section is missing.
     pub fn resolve(self) -> anyhow::Result<ResolvedConfig> {
         match self.runtime.kind {
-            RuntimeId::Chroot => self
+            RuntimeKind::Known(RuntimeId::Chroot) => self
                 .chroot
                 .map(ResolvedConfig::Chroot)
                 .ok_or_else(|| anyhow::anyhow!("runtime.type = chroot but no [chroot] section")),
+            RuntimeKind::Legacy(kind) => {
+                anyhow::bail!("runtime.type = {kind:?} is not available in this build")
+            }
         }
     }
 }
