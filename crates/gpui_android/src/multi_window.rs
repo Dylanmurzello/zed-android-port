@@ -547,6 +547,7 @@ fn dispatch_event(event: ExtraWindowEvent) {
     if let Err(err) = tx.unbounded_send(event) {
         log::warn!("multi_window: dispatch_event: {err:#}");
     }
+    crate::platform::wake_run_loop();
 }
 
 /// Process-death recovery probe. Called by `ExtraWindowActivity.onCreate`

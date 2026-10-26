@@ -21,7 +21,7 @@ use gpui::{
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 use crate::display::AndroidDisplay;
-use crate::platform::set_native_window_frame_rate;
+use crate::platform::{frame_presented, request_frame_callback, set_native_window_frame_rate};
 
 /// Raw window handle wrapper for Android. Holds a `*mut ANativeWindow` pointer
 /// (obtained from `android_activity::AndroidApp::native_window()`), or null when
@@ -90,6 +90,12 @@ pub(crate) struct AndroidWindowState {
     /// but gpui's invalidator doesn't know that. The next paint must be
     /// forced; consumed by `refresh()` via `std::mem::take`.
     pub(crate) force_render_after_recovery: bool,
+    /// Set when a present failed, so the next frame presents the last scene
+    /// again; consumed by `refresh()`.
+    pub(crate) present_on_next_frame: bool,
+    /// Whether the last `draw` failed to present, so a second failure in a
+    /// row isn't retried.
+    pub(crate) last_present_failed: bool,
     /// Set true by the platform's `OsClosed` drain handler when the
     /// underlying `ExtraWindowActivity` has already destroyed (user clicked
     /// the OS chrome X). `AndroidWindow::Drop` reads this to skip its
@@ -329,6 +335,7 @@ impl AndroidWindowStatePtr {
         // `window.draw(cx)` inside open_window, but it's cheap and makes the
         // background→foreground path symmetric.
         state.force_render_after_recovery = true;
+        request_frame_callback();
         Ok(())
     }
 
@@ -395,11 +402,17 @@ impl AndroidWindowStatePtr {
     /// calls during the callback's own paint side-effects would otherwise
     /// double-borrow the callback Box.
     pub(crate) fn refresh(&self) {
-        let force_render = std::mem::take(&mut self.state.borrow_mut().force_render_after_recovery);
+        let (force_render, require_presentation) = {
+            let mut state = self.state.borrow_mut();
+            (
+                std::mem::take(&mut state.force_render_after_recovery),
+                std::mem::take(&mut state.present_on_next_frame),
+            )
+        };
         let callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(mut callback) = callback {
             callback(RequestFrameOptions {
-                require_presentation: false,
+                require_presentation,
                 force_render,
                 signal_at: None,
                 signal_source: FrameRequestSource::NativeCallback,
@@ -507,6 +520,8 @@ impl AndroidWindow {
             gpu_context,
             native_window: None,
             force_render_after_recovery: false,
+            present_on_next_frame: false,
+            last_present_failed: false,
             os_closed: AtomicBool::new(false),
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
@@ -694,6 +709,10 @@ impl PlatformWindow for AndroidWindow {
         true
     }
 
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        Some(Rc::new(request_frame_callback))
+    }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.ptr.callbacks.borrow_mut().request_frame = Some(callback);
     }
@@ -782,6 +801,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn draw(&self, scene: &Scene) {
+        frame_presented();
         let mut state = self.ptr.state.borrow_mut();
         let raw_window = state.raw_window;
         let Some(renderer) = state.renderer.as_mut() else {
@@ -796,13 +816,34 @@ impl PlatformWindow for AndroidWindow {
             match renderer.recover(&raw_window) {
                 Ok(()) => {
                     state.force_render_after_recovery = true;
+                    request_frame_callback();
                 }
                 Err(err) => log::error!("GPU recovery failed: {err:#}"),
             }
             return;
         }
 
-        renderer.draw(scene);
+        let presented = renderer.draw(scene);
+        // gpui knows about neither of these, and its Wayland backend handles
+        // them the same way. When the renderer cleared its atlas, cached
+        // views still point into it, so the next frame redraws everything.
+        // When presenting failed, for example on an out-of-date swapchain
+        // the renderer just reconfigured, the next frame presents the same
+        // scene again; a failure that repeats, as while the surface is
+        // unconfigured, waits for the next change.
+        if renderer.needs_redraw() {
+            state.force_render_after_recovery = true;
+            request_frame_callback();
+        } else if !presented && !state.last_present_failed {
+            log::debug!("draw: present failed, presenting again on the next frame");
+            state.present_on_next_frame = true;
+            request_frame_callback();
+        }
+        state.last_present_failed = !presented;
+    }
+
+    fn schedule_frame(&self) {
+        request_frame_callback();
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
