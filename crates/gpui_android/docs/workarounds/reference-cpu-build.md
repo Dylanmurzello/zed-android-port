@@ -38,10 +38,14 @@ kills the app with SIGILL. The obvious flags turn them on:
 Rust, in `rustflags`:
 
 ```
--C target-cpu=cortex-x3 -C target-feature=-sve,-sve2,-mte,-ssbs,+aes,+sha2,+sha3,+sm4
+-C target-cpu=cortex-x3 -C target-feature=-sve,-sve2,-mte,-ssbs,+aes,+sha2
 ```
 
-That's the core's tuning plus exactly the features the kernel reports.
+That's the core's tuning and the features the kernel reports, except SHA-3
+and SM4. Other Armv9 chips may lack those, Zed doesn't use them, and C
+crypto code such as aws-lc can skip its runtime checks for features that
+are enabled at compile time.
+
 rustc's list also keeps `lor`, `pan`, `pmuv3`, `ras`, `spe` and `vh`, which
 only cover system registers that app code never touches.
 
@@ -49,7 +53,7 @@ C and C++, through `CFLAGS_aarch64_linux_android` and
 `CXXFLAGS_aarch64_linux_android` in `[env]`, which `cc` reads:
 
 ```
--march=armv8.5-a+fp16+fp16fml+i8mm+bf16+crypto -mtune=cortex-x3
+-march=armv8.5-a+fp16+fp16fml+i8mm+bf16+aes+sha2 -mtune=cortex-x3
 ```
 
 The same instruction set without SVE or MTE, tuned for the core. `cc`
@@ -59,6 +63,16 @@ grammars, SQLite and the other C code stay at Armv8.0.
 The config applies to everything built in the app's directory, including
 the askpass helper. `zd-exec` builds in the root workspace and stays at the
 baseline.
+
+## Devices that can run it
+
+The flags need Armv8.5 plus fp16, fp16fml, i8mm, bf16, AES and SHA-2, which
+the Armv9 chips in phones and tablets have. So these should run release
+builds, though only the reference hardware is tested: Snapdragon 8 Gen 1,
+7+ Gen 2 and later, Dimensity 9000 and later, Exynos 2200 and later, and
+Tensor G3 and later. Older CPUs can't, including some high-end devices
+from 2022–2023 with Tensor G2 (Pixel 7, Pixel Fold, Pixel Tablet). Neither
+can mid-range chips on Cortex-A78 and A55 cores.
 
 ## Verification
 
@@ -79,6 +93,8 @@ The two SVE-looking hits are the same bytes in both libraries, right after a
 `ret` and beside undecodable words: data, not code. The MTE-looking hit is
 the same `stg` loop in both, which 0.8.4 already contains and runs fine with.
 The build took 15m36s and 11.5 GB of peak memory on 16 cores, as before.
+This was measured with SHA-3 and SM4 still enabled; turning features off
+can only remove instructions.
 
 ## Failure mode if regressed
 
@@ -88,10 +104,10 @@ The build took 15m36s and 11.5 GB of peak memory on 16 cores, as before.
   --no-show-raw-insn libzed_android.so`, nothing beyond the data bytes and
   the `stg` loop described under Verification may use `z<n>.<size>` or
   `p<n>/z` operands or MTE instructions.
-- Devices whose CPUs lack these features crash with SIGILL at launch. That
-  covers CPUs older than Armv9 cores, which arrived in 2022. To support them
-  again, remove the `target-cpu` and `target-feature` lines and the `[env]`
-  section, and put back `-C target-feature=+fp16`.
+- Devices whose CPUs lack these features crash with SIGILL at launch (see
+  "Devices that can run it"). To support them again, remove the
+  `target-cpu` and `target-feature` lines and the `[env]` section, and
+  put back `-C target-feature=+fp16`.
 
 ## See also
 
