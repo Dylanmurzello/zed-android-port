@@ -246,6 +246,24 @@ fn android_main(app: AndroidApp) {
         );
     }
 
+    // The rootfs engine's loader ships in the APK's native library dir
+    // (extracted on install) because that is the one app-owned location
+    // the kernel may exec from at any targetSdk. Log where it landed so
+    // a packaging regression (extractNativeLibs flipped back off, strip
+    // task mangling the static ELF) is visible at boot.
+    match gpui_android::zd_exec_install::loader_path(&app) {
+        Ok(path) => {
+            let size = std::fs::metadata(&path).map(|metadata| metadata.len()).ok();
+            log::info!(
+                "zed_android: engine loader = {} exists={} size={:?}",
+                path.display(),
+                path.is_file(),
+                size,
+            );
+        }
+        Err(err) => log::warn!("zed_android: engine loader path unavailable: {err:#}"),
+    }
+
     // Populate <data>/files/zd-runtime/ with symlinks for every binary
     // the active runtime adapter advertises. Each symlink points at
     // zd-exec; kernel PATH lookup intercepts Zed's

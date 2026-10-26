@@ -163,6 +163,80 @@ tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn("stageAskpassHelperAsset")
 }
 
+// Rootfs engine loader.
+//
+// `libzdload.so` is a static, libc-free aarch64 executable (crates/
+// zd_loader, its own workspace) that the kernel execs for every guest
+// process. It is packaged as a native library so the installer extracts
+// it to ApplicationInfo.nativeLibraryDir, the one app-owned location an
+// untrusted app may exec from at any targetSdk. `verifyZdLoader` fails
+// the build if a flag change produces a PIE, a dynamic interpreter, or a
+// different image base, because the engine's seccomp filter only allows
+// syscalls from the fixed window the loader is linked into.
+val zdLoaderDir = file("${workspaceRoot}/crates/zd_loader")
+val zdEngineCoreDir = file("${workspaceRoot}/crates/zd_engine_core")
+val zdLoaderBin = file("${zdLoaderDir}/target/aarch64-linux-android/release/zd_loader")
+val zdLoaderJniLib = file("src/main/jniLibs/arm64-v8a/libzdload.so")
+val ndkHomeForVerify = providers.environmentVariable("ANDROID_NDK_HOME")
+
+tasks.register<Exec>("buildZdLoader") {
+    description = "Build the static rootfs-engine loader via cargo-ndk."
+    group = "build setup"
+
+    workingDir(zdLoaderDir)
+    commandLine(
+        "cargo",
+        "ndk",
+        "-t",
+        "arm64-v8a",
+        "-P",
+        "26",
+        "build",
+        "--release",
+    )
+
+    providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
+        environment("ANDROID_NDK_HOME", ndk)
+    }
+
+    inputs.files(fileTree("${zdLoaderDir}/src") { include("**/*.rs") })
+    inputs.files(fileTree("${zdEngineCoreDir}/src") { include("**/*.rs") })
+    inputs.file("${zdLoaderDir}/Cargo.toml")
+    inputs.file("${zdLoaderDir}/.cargo/config.toml")
+    inputs.file("${zdEngineCoreDir}/Cargo.toml")
+    outputs.file(zdLoaderBin)
+}
+
+tasks.register<Exec>("verifyZdLoader") {
+    description = "Check the loader ELF is static, non-PIE, 16 KiB aligned and linked at the engine's fixed base."
+    group = "verification"
+
+    dependsOn("buildZdLoader")
+    doFirst {
+        if (!ndkHomeForVerify.isPresent) {
+            throw GradleException("verifyZdLoader needs ANDROID_NDK_HOME (the same NDK as the lib build)")
+        }
+    }
+    commandLine("sh", "${zdLoaderDir}/verify.sh", ndkHomeForVerify.getOrElse(""), zdLoaderBin.path)
+    inputs.file(zdLoaderBin)
+}
+
+tasks.register<Copy>("stageZdLoaderJniLib") {
+    description = "Copy the verified loader into jniLibs as libzdload.so."
+    group = "build setup"
+
+    dependsOn("verifyZdLoader")
+    from(zdLoaderBin)
+    into(zdLoaderJniLib.parentFile)
+    rename { zdLoaderJniLib.name }
+    inputs.file(zdLoaderBin)
+    outputs.file(zdLoaderJniLib)
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("stageZdLoaderJniLib")
+}
+
 android {
     namespace = "com.zdroid"
     compileSdk = 35
@@ -198,6 +272,19 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
+    // The loader must exist as a real file on disk: the kernel execs it
+    // by path from ApplicationInfo.nativeLibraryDir. AGP 8 keeps native
+    // libs uncompressed inside the APK by default (extractNativeLibs =
+    // false), so opt back into extraction; this DSL is what writes the
+    // manifest attribute. keepDebugSymbols keeps the strip task off the
+    // hand-linked static ELF.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libzdload.so"
         }
     }
 

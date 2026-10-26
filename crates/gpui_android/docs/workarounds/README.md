@@ -120,6 +120,7 @@ is built.
 | [audio + livekit + call cfg-gates](android-cfg-gates.md) | Active | These crates don't compile against bionic; mock fallbacks already exist |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
+| [Loader in `nativeLibraryDir` via extractNativeLibs](extract-native-libs-loader.md) | Active | The engine loader is exec'd by path from the APK's lib dir; AGP 8 keeps libs un-extracted by default |
 
 ## Adding a new workaround
 

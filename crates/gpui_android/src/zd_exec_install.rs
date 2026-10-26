@@ -4,7 +4,7 @@
 //!
 //! `zd-exec` is the Rust spawn wrapper that routes every PATH-resolved
 //! invocation (bash, git, rust-analyzer, …) through the active
-//! `RuntimeProvider` (chroot / bootstrap / external Termux). The APK
+//! `RuntimeProvider`. The APK
 //! ships it as an asset (`android/app/src/main/assets/zd-exec`) and
 //! we extract it to `<data>/files/bin/zd-exec` at boot. The Gradle
 //! `buildZdExec` task in `app/build.gradle.kts` produces the asset by
@@ -34,10 +34,11 @@ use std::ffi::CString;
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
+use jni::{JavaVM, objects::JObject, objects::JString};
 
 /// Asset file name inside the APK. Matches the staging path the
 /// `buildZdExec` Gradle task writes to in `assets/`.
@@ -261,4 +262,36 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String]) -> Result<
         skipped,
     );
     Ok(())
+}
+
+/// `ApplicationInfo.nativeLibraryDir` via JNI: where the installer put
+/// this APK's `lib/arm64-v8a/*.so`. The path changes on every install
+/// (`/data/app/~~<random>/com.zdroid-<random>/lib/arm64`), so nothing
+/// persistent may embed it; look it up at boot.
+pub fn native_library_dir(android_app: &AndroidApp) -> Result<PathBuf> {
+    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread for nativeLibraryDir")?;
+    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
+    let value = env
+        .call_method(&activity, "nativeLibraryDir", "()Ljava/lang/String;", &[])
+        .context("MainActivity.nativeLibraryDir")?;
+    let jstr: JString = value
+        .l()
+        .context("nativeLibraryDir returned non-object")?
+        .into();
+    let dir: String = env
+        .get_string(&jstr)
+        .context("decode nativeLibraryDir")?
+        .into();
+    anyhow::ensure!(!dir.is_empty(), "nativeLibraryDir is empty");
+    Ok(PathBuf::from(dir))
+}
+
+/// Absolute path of the rootfs-engine loader inside the native library
+/// dir. The file exists only when the APK was packaged with
+/// `extractNativeLibs="true"` (see `packaging.jniLibs` in build.gradle.kts).
+pub fn loader_path(android_app: &AndroidApp) -> Result<PathBuf> {
+    Ok(native_library_dir(android_app)?.join(zd_engine_core::LOADER_FILE_NAME))
 }

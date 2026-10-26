@@ -1155,6 +1155,13 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
+    /// Directory the installer extracted this APK's native libraries to.
+    /// The rootfs engine's loader (libzdload.so) lives here and is exec'd
+    /// by path: it is the only app-owned location SELinux lets a process
+    /// execute from regardless of targetSdk.
+    @Suppress("unused") // called from Rust via JNI
+    fun nativeLibraryDir(): String = applicationInfo.nativeLibraryDir ?: ""
+
     /// Hand a downloaded APK to Android's package installer. Rust
     /// calls this after the updater finishes writing the APK to
     /// `cacheDir/updater/zdroid-<tag>.apk`. We wrap the path in a

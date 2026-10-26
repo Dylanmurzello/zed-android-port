@@ -27,4 +27,4 @@ serde_json.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 util.workspace = true
 uuid.workspace = true
-zip = "2"
+zd_engine_core.workspace = true
