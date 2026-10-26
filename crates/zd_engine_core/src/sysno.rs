@@ -10,11 +10,13 @@ pub mod nr {
     pub const CLOSE: u32 = 57;
     pub const READ: u32 = 63;
     pub const WRITE: u32 = 64;
+    pub const PREAD64: u32 = 67;
     pub const READLINKAT: u32 = 78;
     pub const NEWFSTATAT: u32 = 79;
     pub const EXIT: u32 = 93;
     pub const EXIT_GROUP: u32 = 94;
     pub const SET_ROBUST_LIST: u32 = 99;
+    pub const CLOCK_GETTIME: u32 = 113;
     pub const RT_SIGACTION: u32 = 134;
     pub const RT_SIGPROCMASK: u32 = 135;
     pub const RT_SIGRETURN: u32 = 139;

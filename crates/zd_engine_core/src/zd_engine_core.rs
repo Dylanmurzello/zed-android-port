@@ -10,7 +10,9 @@
 
 pub mod bindings;
 pub mod bpf;
+pub mod elf;
 pub mod path;
+pub mod stack;
 pub mod sysno;
 pub mod translate;
 
@@ -18,10 +20,17 @@ pub mod translate;
 /// It has to look like a shared library for the installer to extract it.
 pub const LOADER_FILE_NAME: &str = "libzdload.so";
 
-/// `argv[0]` basenames the loader treats as itself. With any other
-/// basename the loader is being run through a symlink farm entry and
-/// that basename is the guest program to run.
-pub const LOADER_SELF_NAMES: &[&str] = &["libzdload.so", "zd-exec"];
+/// `argv[0]` basenames the loader treats as itself: the file in the
+/// APK, the stable `<data>/files/bin/zdload` symlink the supervisor
+/// execs through, and the `zd-exec` name the farm inherits. With any
+/// other basename the loader is being run through a symlink farm entry
+/// and that basename is the guest program to run.
+pub const LOADER_SELF_NAMES: &[&str] = &["libzdload.so", "zdload", "zd-exec"];
+
+/// Name of the stable symlink under `<data>/files/bin` that points at
+/// the current install's loader. The native library dir moves on every
+/// install, so persistent state only ever names this link.
+pub const LOADER_LINK_NAME: &str = "zdload";
 
 /// Address the loader image is linked at. Chosen so the engine's BPF
 /// instruction-pointer test is two 32-bit compares, and so the loader
