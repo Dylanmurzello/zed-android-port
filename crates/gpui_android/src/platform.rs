@@ -533,6 +533,36 @@ impl AndroidPlatform {
     /// Pull JNI-originated extra-window events off the channel and dispatch
     /// to the matching `AndroidWindowStatePtr`. Called once per iteration of
     /// the platform's main loop.
+    /// Drops extra windows that gpui has closed. gpui drops an extra
+    /// window's `AndroidWindow` when it closes it, which marks the window
+    /// closed, but the platform still holds it. Refreshing it would make
+    /// gpui's frame handler fail with "window not found", log that, and
+    /// ask for another frame, every frame.
+    fn reap_closed_extra_windows(&self) {
+        let mut common = self.common.borrow_mut();
+        let closed: Vec<u64> = common
+            .extra_windows
+            .iter()
+            .filter(|(_, window)| window.state.borrow().closed)
+            .map(|(window_id, _)| *window_id)
+            .collect();
+        if closed.is_empty() {
+            return;
+        }
+        for window_id in &closed {
+            common.extra_windows.remove(window_id);
+        }
+        if common
+            .active_window
+            .is_some_and(|handle| closed.contains(&handle.window_id().as_u64()))
+        {
+            common.active_window = common
+                .window
+                .as_ref()
+                .map(|primary| primary.state.borrow().handle);
+        }
+    }
+
     fn drain_extra_window_events(&self) {
         use crate::multi_window::ExtraWindowEvent;
 
@@ -570,8 +600,8 @@ impl AndroidPlatform {
                     // JNI finishActivity call (Activity is already gone),
                     // then fire the gpui-registered `on_close` callback.
                     // gpui's callback drives `Window::remove_window()`, which
-                    // in turn drops our `Box<dyn PlatformWindow>` and
-                    // ultimately reaps the `extra_windows` map entry.
+                    // in turn drops our `Box<dyn PlatformWindow>`, and
+                    // `reap_closed_extra_windows` drops the map entry.
                     let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
                     let Some(state) = entry else {
                         log::info!(
@@ -1231,6 +1261,7 @@ impl Platform for AndroidPlatform {
 
             // Drain JNI-side extra-window lifecycle / touch events.
             self.drain_extra_window_events();
+            self.reap_closed_extra_windows();
 
             // Drain JNI-side captured-pointer (trackpad) events. Active
             // only while `MainActivity` has pointer capture; otherwise
