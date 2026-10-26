@@ -133,7 +133,7 @@ static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
 
 /// Wakes the run loop from Java threads. JNI callbacks queue input and
 /// window events, or set flags, that the loop only reads on its next tick,
-/// and an idle loop otherwise sleeps until its 100ms poll timeout.
+/// and an idle loop otherwise sleeps until something wakes it.
 static RUN_LOOP_WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
 
 thread_local! {
@@ -197,6 +197,7 @@ fn post_frame_callback(continues_run: bool) {
             // No vsync source: refresh on the run loop's next tick instead.
             FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
             FRAME_PENDING.store(true, Ordering::Release);
+            wake_run_loop();
             return;
         }
         AChoreographer_postFrameCallback64(c, frame_callback, std::ptr::null_mut());
@@ -209,7 +210,7 @@ fn install_choreographer_callback() {
     if unsafe { AChoreographer_getInstance() }.is_null() {
         log::warn!(
             "AChoreographer_getInstance returned null; vsync sync \
-             disabled, falling back to poll-timeout-driven refresh"
+             disabled, refreshing on every run loop tick"
         );
     } else {
         log::info!("AndroidPlatform: Choreographer frame callbacks enabled");
@@ -478,7 +479,7 @@ impl AndroidPlatform {
         // failure paths.
         crate::multi_window::mark_window_registered(window_id);
 
-        let native_window = match crate::multi_window::create_extra_window_blocking(
+        let native_window = crate::multi_window::create_extra_window_blocking(
             &self.android_app,
             window_id,
             launch_bounds,
@@ -487,9 +488,14 @@ impl AndroidPlatform {
                     if let android_activity::PollEvent::Main(main_event) = event {
                         self.handle_main_event_while_opening_window(main_event);
                     }
-                })
+                });
+                self.common.borrow().running
             },
-        ) {
+        );
+        // The waits above consumed wakes meant for the run loop (runnables,
+        // JNI events, vsync, input), which won't be sent again.
+        wake_run_loop();
+        let native_window = match native_window {
             Ok(nw) => nw,
             Err(err) => {
                 crate::multi_window::unmark_window_registered(window_id);
@@ -635,9 +641,12 @@ impl AndroidPlatform {
                             );
                         }
                     } else {
+                        // Its window was never opened: the wait for its first
+                        // surface timed out.
                         log::info!(
-                            "drain_extra_window_events: SurfaceCreated for unknown windowId={window_id}"
+                            "drain_extra_window_events: SurfaceCreated for unknown windowId={window_id}; finishing its Activity"
                         );
+                        crate::multi_window::finish_extra_activity(&self.android_app, window_id);
                     }
                 }
                 ExtraWindowEvent::OsClosed { window_id } => {
@@ -1241,6 +1250,9 @@ impl AndroidPlatform {
     fn resync_primary_window(&self) {
         let window_ptr = self.common.borrow().window.clone();
         let Some(window_ptr) = window_ptr else { return };
+        let new_appearance = appearance_from_config(&self.android_app);
+        self.common.borrow_mut().appearance = new_appearance;
+        window_ptr.set_appearance(new_appearance);
         let Some(native_window) = self.android_app.native_window() else {
             return;
         };
@@ -1249,9 +1261,6 @@ impl AndroidPlatform {
             native_window.height() as u32,
             self.compute_scale_factor(),
         );
-        let new_appearance = appearance_from_config(&self.android_app);
-        self.common.borrow_mut().appearance = new_appearance;
-        window_ptr.set_appearance(new_appearance);
     }
 
     /// `handle_main_event` while `open_extra_window` waits for the new
@@ -1329,6 +1338,9 @@ impl Platform for AndroidPlatform {
         install_choreographer_callback();
 
         while self.common.borrow().running {
+            // Before sleeping, so events deferred while a window opened
+            // during the last iteration aren't left waiting.
+            self.apply_deferred_main_events();
             // Sleeps until there is work: an input event, a vsync
             // (`frame_callback` runs as a looper task and sets
             // FRAME_PENDING), a runnable from another thread (the dispatcher
@@ -1345,7 +1357,6 @@ impl Platform for AndroidPlatform {
                 }
                 _ => {}
             });
-            self.apply_deferred_main_events();
 
             // Drain main-thread runnables enqueued from background threads. The
             // AndroidAppWaker wakes poll_events above when there's work; we drain
