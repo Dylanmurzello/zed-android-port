@@ -70,6 +70,8 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```sh
   cp Cargo.lock crates/gpui_android/examples/zed_android/Cargo.lock
   ```
+
+  The check then drops the packages the app doesn't use from that copy. Commit the pruned file: CI builds with `--locked`, which fails if the lockfile still needs changes.
 - List the upstream files the fork still changes, and drop any patch the new release made unnecessary, for example because upstream fixed the same bug. Each one can conflict again on the next sync:
 
   ```sh
