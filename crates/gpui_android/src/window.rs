@@ -105,6 +105,9 @@ pub(crate) struct AndroidWindowState {
     /// survives the `Box<dyn PlatformWindow>` drop and is reachable from the
     /// drain handler via the platform's `extra_windows` map.
     pub(crate) os_closed: AtomicBool,
+    /// Set when gpui closes an extra window and drops its `AndroidWindow`.
+    /// The platform run loop then drops the window from `extra_windows`.
+    pub(crate) closed: bool,
     /// Cheap clone (Arc internally) used by `AndroidWindow::Drop` to issue
     /// `multi_window::finish_extra_activity` for extra windows. Always set
     /// at construction time (both primary and extras carry it; primary just
@@ -523,6 +526,7 @@ impl AndroidWindow {
             present_on_next_frame: false,
             last_present_failed: false,
             os_closed: AtomicBool::new(false),
+            closed: false,
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
             captured: crate::captured_pointer::CapturedPointerState::default(),
@@ -557,6 +561,7 @@ impl Drop for AndroidWindow {
         let Some(window_id) = self.extra_window_id else {
             return;
         };
+        self.ptr.state.borrow_mut().closed = true;
         let state = self.ptr.state.borrow();
         if state.os_closed.load(std::sync::atomic::Ordering::SeqCst) {
             // OS-initiated close already happened — Activity is gone, no
