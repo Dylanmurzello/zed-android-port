@@ -1,0 +1,21 @@
+[package]
+name = "zd_engine_core"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+description = "Shared definitions, path translation and seccomp filter for the Zdroid rootfs engine"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/zd_engine_core.rs"
+
+[features]
+default = ["std"]
+# Host-side consumers (the supervisor in zdroid_runtime, unit tests).
+# The loader builds with `default-features = false`.
+std = []
+
+[dependencies]
