@@ -122,8 +122,8 @@ pub(crate) fn invert_scroll_delta(delta: gpui::ScrollDelta) -> gpui::ScrollDelta
     }
 }
 
-use anyhow::Context as _;
 use android_activity::AndroidApp;
+use anyhow::Context as _;
 use futures::channel::mpsc;
 use jni::JNIEnv;
 use jni::JavaVM;
@@ -192,10 +192,11 @@ pub(crate) fn restart_input_for_kind(
     extra_window_id: Option<u64>,
     kind: ImeTargetKind,
 ) {
-    log::info!("ime::restart_input_for_kind w={extra_window_id:?} kind={:?}", kind);
-    if let Err(err) =
-        call_activity_restart_ime(android_app, extra_window_id, kind.to_jni_int())
-    {
+    log::info!(
+        "ime::restart_input_for_kind w={extra_window_id:?} kind={:?}",
+        kind
+    );
+    if let Err(err) = call_activity_restart_ime(android_app, extra_window_id, kind.to_jni_int()) {
         log::warn!("ime::restart_input_for_kind failed: {err:#}");
     }
 }
@@ -211,7 +212,9 @@ fn call_activity_restart_ime(
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
     let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     let args = [mode_id.into()];
     match extra_window_id {
         Some(id) => {
@@ -236,16 +239,25 @@ fn call_activity_restart_ime(
 pub(crate) enum ImeEvent {
     /// `commitText(text, newCursorPosition)`. Final text the IME wants
     /// inserted at the cursor (or replacing any active composition).
-    CommitText { text: String, new_cursor_position: i32 },
+    CommitText {
+        text: String,
+        new_cursor_position: i32,
+    },
     /// `setComposingText(text, newCursorPosition)`. In-progress
     /// composition (CJK, gesture typing, prediction).
-    SetComposingText { text: String, new_cursor_position: i32 },
+    SetComposingText {
+        text: String,
+        new_cursor_position: i32,
+    },
     /// `finishComposingText()`. End of composition without further
     /// edits.
     FinishComposingText,
     /// `deleteSurroundingText(before, after)`. Backspace / delete span
     /// around the cursor.
-    DeleteSurroundingText { before_length: i32, after_length: i32 },
+    DeleteSurroundingText {
+        before_length: i32,
+        after_length: i32,
+    },
     /// `sendKeyEvent(KeyEvent)`. Hardware-style key delivery from the
     /// IME (Enter, arrows, etc.). Routed through the existing
     /// `events::keyboard::translate_extra_key_event` translator.
@@ -292,18 +304,34 @@ fn dispatch_event(window_id: u64, event: ImeEvent) {
 
 fn debug_event(event: &ImeEvent) -> String {
     match event {
-        ImeEvent::CommitText { text, new_cursor_position } => {
+        ImeEvent::CommitText {
+            text,
+            new_cursor_position,
+        } => {
             format!("CommitText text={text:?} cursor={new_cursor_position}")
         }
-        ImeEvent::SetComposingText { text, new_cursor_position } => {
+        ImeEvent::SetComposingText {
+            text,
+            new_cursor_position,
+        } => {
             format!("SetComposingText text={text:?} cursor={new_cursor_position}")
         }
         ImeEvent::FinishComposingText => "FinishComposingText".to_string(),
-        ImeEvent::DeleteSurroundingText { before_length, after_length } => {
+        ImeEvent::DeleteSurroundingText {
+            before_length,
+            after_length,
+        } => {
             format!("DeleteSurroundingText before={before_length} after={after_length}")
         }
-        ImeEvent::KeyEvent { action, keycode, meta_state, repeat_count } => {
-            format!("KeyEvent action={action} keycode={keycode} meta={meta_state:#x} repeat={repeat_count}")
+        ImeEvent::KeyEvent {
+            action,
+            keycode,
+            meta_state,
+            repeat_count,
+        } => {
+            format!(
+                "KeyEvent action={action} keycode={keycode} meta={meta_state:#x} repeat={repeat_count}"
+            )
         }
         ImeEvent::EditorAction { action_id } => format!("EditorAction id={action_id}"),
     }
@@ -566,7 +594,9 @@ fn call_activity_update_text_state(
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
     let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     let text_jstring = env.new_string(text).context("new_string for IME text")?;
     let args = [
         (&text_jstring).into(),
@@ -622,11 +652,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             // mirror-push echoes another updateSelection right back —
             // forming a feedback loop that floods the wire at ~16Hz
             // even when the user is idle.
-            let had_composition = window_ptr
-                .state
-                .borrow()
-                .ime_composition_text
-                .is_some();
+            let had_composition = window_ptr.state.borrow().ime_composition_text.is_some();
             commit_composition(window_ptr, None);
             had_composition
         }
@@ -760,7 +786,9 @@ fn call_activity(
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
     let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     match extra_window_id {
         Some(id) => {
             let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {

@@ -38,27 +38,27 @@ pub(crate) fn last_pushed_icon_type() -> Option<jint> {
 /// `frameworks/base/core/java/android/view/PointerIcon.java`.
 fn pointer_icon_type(style: CursorStyle) -> jint {
     match style {
-        CursorStyle::Arrow => 1000,                    // TYPE_DEFAULT
-        CursorStyle::IBeam => 1008,                    // TYPE_TEXT
+        CursorStyle::Arrow => 1000,                        // TYPE_DEFAULT
+        CursorStyle::IBeam => 1008,                        // TYPE_TEXT
         CursorStyle::IBeamCursorForVerticalLayout => 1009, // TYPE_VERTICAL_TEXT
-        CursorStyle::Crosshair => 1007,                // TYPE_CROSSHAIR
-        CursorStyle::ClosedHand => 1021,               // TYPE_GRABBING
-        CursorStyle::OpenHand => 1020,                 // TYPE_GRAB
-        CursorStyle::PointingHand => 1002,             // TYPE_HAND
+        CursorStyle::Crosshair => 1007,                    // TYPE_CROSSHAIR
+        CursorStyle::ClosedHand => 1021,                   // TYPE_GRABBING
+        CursorStyle::OpenHand => 1020,                     // TYPE_GRAB
+        CursorStyle::PointingHand => 1002,                 // TYPE_HAND
         CursorStyle::ResizeLeft
         | CursorStyle::ResizeRight
         | CursorStyle::ResizeLeftRight
-        | CursorStyle::ResizeColumn => 1014,           // TYPE_HORIZONTAL_DOUBLE_ARROW
+        | CursorStyle::ResizeColumn => 1014, // TYPE_HORIZONTAL_DOUBLE_ARROW
         CursorStyle::ResizeUp
         | CursorStyle::ResizeDown
         | CursorStyle::ResizeUpDown
-        | CursorStyle::ResizeRow => 1015,              // TYPE_VERTICAL_DOUBLE_ARROW
-        CursorStyle::ResizeUpRightDownLeft => 1017,    // TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW
-        CursorStyle::ResizeUpLeftDownRight => 1016,    // TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW
-        CursorStyle::OperationNotAllowed => 1012,      // TYPE_NO_DROP
-        CursorStyle::DragLink => 1010,                 // TYPE_ALIAS
-        CursorStyle::DragCopy => 1011,                 // TYPE_COPY
-        CursorStyle::ContextualMenu => 1001,           // TYPE_CONTEXT_MENU
+        | CursorStyle::ResizeRow => 1015, // TYPE_VERTICAL_DOUBLE_ARROW
+        CursorStyle::ResizeUpRightDownLeft => 1017,        // TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW
+        CursorStyle::ResizeUpLeftDownRight => 1016,        // TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW
+        CursorStyle::OperationNotAllowed => 1012,          // TYPE_NO_DROP
+        CursorStyle::DragLink => 1010,                     // TYPE_ALIAS
+        CursorStyle::DragCopy => 1011,                     // TYPE_COPY
+        CursorStyle::ContextualMenu => 1001,               // TYPE_CONTEXT_MENU
     }
 }
 
@@ -80,10 +80,7 @@ pub(crate) fn set_pointer_icon(android_app: &AndroidApp, style: CursorStyle) {
     LAST_STYLE_ICON_TYPE.store(icon_type, Ordering::Release);
 }
 
-fn set_pointer_icon_inner(
-    android_app: &AndroidApp,
-    style: CursorStyle,
-) -> anyhow::Result<()> {
+fn set_pointer_icon_inner(android_app: &AndroidApp, style: CursorStyle) -> anyhow::Result<()> {
     let icon_type = pointer_icon_type(style);
     let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
     let mut env = vm.attach_current_thread()?;
@@ -167,9 +164,11 @@ fn move_trackpad_cursor_inner(
     x: f32,
     y: f32,
 ) -> anyhow::Result<()> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }
-        .context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let vm =
+        unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }.context("JavaVM::from_raw")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     match extra_window_id {
         Some(id) => {
             let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
@@ -221,9 +220,11 @@ fn set_trackpad_mode_active_inner(
     extra_window_id: Option<u64>,
     active: bool,
 ) -> anyhow::Result<()> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }
-        .context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let vm =
+        unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }.context("JavaVM::from_raw")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     match extra_window_id {
         Some(id) => {
             let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
@@ -239,13 +240,8 @@ fn set_trackpad_mode_active_inner(
         }
         None => {
             let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-            env.call_method(
-                &activity,
-                "setTrackpadModeActive",
-                "(Z)V",
-                &[active.into()],
-            )
-            .context("call MainActivity.setTrackpadModeActive")?;
+            env.call_method(&activity, "setTrackpadModeActive", "(Z)V", &[active.into()])
+                .context("call MainActivity.setTrackpadModeActive")?;
         }
     }
     Ok(())

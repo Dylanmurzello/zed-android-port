@@ -78,17 +78,14 @@ pub fn install_latest(
     if let Ok(existing) = fs::read_to_string(&version_file)
         && existing.trim() == tag_name
     {
-        log::info!(
-            "bootstrap_install: $PREFIX already at {tag_name}, skipping extract"
-        );
+        log::info!("bootstrap_install: $PREFIX already at {tag_name}, skipping extract");
         progress.step(&format!("Bootstrap {tag_name} already installed"));
         return Ok(());
     }
 
     progress.step(&format!("Downloading bootstrap {tag_name}"));
-    let zip_bytes = download_bootstrap_asset(release_repo, &tag_name).with_context(|| {
-        format!("download bootstrap asset for {release_repo} tag {tag_name}")
-    })?;
+    let zip_bytes = download_bootstrap_asset(release_repo, &tag_name)
+        .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
     log::info!(
         "bootstrap_install: downloaded {} bytes for tag {}",
         zip_bytes.len(),
@@ -138,19 +135,14 @@ fn resolve_latest_tag(release_repo: &str) -> Result<String> {
         Err(ureq::Error::Status(_, resp)) => resp,
         Err(e) => return Err(anyhow!("HTTP GET {url}: {e}")),
     };
-    let location = resp.header("Location").ok_or_else(|| {
-        anyhow!(
-            "no Location header on {url}; got status {}",
-            resp.status()
-        )
-    })?;
+    let location = resp
+        .header("Location")
+        .ok_or_else(|| anyhow!("no Location header on {url}; got status {}", resp.status()))?;
     let marker = "/releases/tag/";
     let after = location.find(marker).map(|i| &location[i + marker.len()..]);
     let tag = after
         .and_then(|s| s.split('/').next().filter(|t| !t.is_empty()))
-        .ok_or_else(|| {
-            anyhow!("expected `/releases/tag/<tag>` in Location {location}")
-        })?;
+        .ok_or_else(|| anyhow!("expected `/releases/tag/<tag>` in Location {location}"))?;
     Ok(tag.to_owned())
 }
 
@@ -216,7 +208,10 @@ fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
     };
     let actual = format!("{:x}", Sha256::digest(bytes));
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(anyhow!("bootstrap asset SHA-256 mismatch for {}", asset.name));
+        return Err(anyhow!(
+            "bootstrap asset SHA-256 mismatch for {}",
+            asset.name
+        ));
     }
     log::info!(
         "bootstrap_install: verified {} ({} bytes, sha256:{actual})",
@@ -326,20 +321,17 @@ fn swap_staging_into_prefix(staging: &Path, prefix: &Path) -> Result<()> {
         }
         let destination = staging.join(relative_path);
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         }
-        fs::copy(&source, &destination).with_context(|| {
-            format!("keep {} across the bootstrap install", source.display())
-        })?;
+        fs::copy(&source, &destination)
+            .with_context(|| format!("keep {} across the bootstrap install", source.display()))?;
     }
     if prefix.exists() {
         fs::remove_dir_all(prefix)
             .with_context(|| format!("wipe old prefix at {}", prefix.display()))?;
     }
-    fs::rename(staging, prefix).with_context(|| {
-        format!("rename {} -> {}", staging.display(), prefix.display())
-    })?;
+    fs::rename(staging, prefix)
+        .with_context(|| format!("rename {} -> {}", staging.display(), prefix.display()))?;
     // TMPDIR for this runtime: SSH's askpass socket and other temp files go
     // there, and the app only creates it at startup.
     let temp_dir = prefix.join("tmp");
@@ -417,8 +409,7 @@ fn extract_entries<R: Read + std::io::Seek>(
         std::io::copy(&mut entry, &mut out)?;
 
         if let Some(mode) = entry_mode {
-            let owner_only =
-                (mode & 0o700) | if mode & 0o100 != 0 { 0o700 } else { 0o600 };
+            let owner_only = (mode & 0o700) | if mode & 0o100 != 0 { 0o700 } else { 0o600 };
             let mut perms = fs::metadata(&dest)?.permissions();
             perms.set_mode(owner_only);
             fs::set_permissions(&dest, perms)?;
@@ -557,7 +548,10 @@ mod tests {
         let prefix = root.path().join("usr");
         let staging = root.path().join("staging");
         fs::create_dir_all(prefix.join("etc"))?;
-        fs::write(prefix.join("etc/zd-runtime.toml"), "[runtime]\nkind = \"chroot\"\n")?;
+        fs::write(
+            prefix.join("etc/zd-runtime.toml"),
+            "[runtime]\nkind = \"chroot\"\n",
+        )?;
         fs::write(prefix.join("old-file"), "old")?;
         fs::create_dir_all(staging.join("bin"))?;
         fs::write(staging.join("bin/sh"), "new")?;

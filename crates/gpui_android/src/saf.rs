@@ -34,10 +34,7 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 
 /// Launch `ACTION_OPEN_DOCUMENT_TREE` and resolve the sender with the
 /// picked tree path, or `Ok(None)` if the user cancelled.
-pub(crate) fn pick_folder(
-    android_app: &AndroidApp,
-    sender: PendingPathsSender,
-) {
+pub(crate) fn pick_folder(android_app: &AndroidApp, sender: PendingPathsSender) {
     log::info!("saf: pick_folder requested");
     set_pending(Pending::Paths(sender), android_app, "launchOpenTree");
 }
@@ -104,10 +101,7 @@ fn call_void_method(android_app: &AndroidApp, method: &str) -> Result<()> {
     Ok(())
 }
 
-fn launch_create_document(
-    android_app: &AndroidApp,
-    suggested_name: Option<&str>,
-) -> Result<()> {
+fn launch_create_document(android_app: &AndroidApp, suggested_name: Option<&str>) -> Result<()> {
     let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
     let mut env = vm.attach_current_thread()?;
     let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
@@ -123,9 +117,7 @@ fn launch_create_document(
 
 /// Called from MainActivity's ActivityResultLauncher callback.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_MainActivity_onPickerResult<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_MainActivity_onPickerResult<'local>(
     mut env: jni::JNIEnv<'local>,
     _activity: JObject<'local>,
     uri_string: JString<'local>,
@@ -154,14 +146,10 @@ fn handle_tree_result(uri: &str) -> Result<Option<PathBuf>> {
     if uri.is_empty() {
         return Ok(None);
     }
-    if let Some(rest) =
-        uri.strip_prefix("content://com.android.externalstorage.documents/tree/")
-    {
+    if let Some(rest) = uri.strip_prefix("content://com.android.externalstorage.documents/tree/") {
         return Ok(Some(decode_storage_segment(rest)?));
     }
-    if let Some(rest) =
-        uri.strip_prefix("content://com.zdroid.documents/tree/")
-    {
+    if let Some(rest) = uri.strip_prefix("content://com.zdroid.documents/tree/") {
         return Ok(Some(decode_zed_segment(rest)?));
     }
     Err(anyhow::anyhow!("unsupported tree URI authority: {uri}"))
@@ -176,9 +164,7 @@ fn handle_document_result(uri: &str) -> Result<Option<PathBuf>> {
     {
         return Ok(Some(decode_storage_segment(rest)?));
     }
-    if let Some(rest) =
-        uri.strip_prefix("content://com.zdroid.documents/document/")
-    {
+    if let Some(rest) = uri.strip_prefix("content://com.zdroid.documents/document/") {
         return Ok(Some(decode_zed_segment(rest)?));
     }
     Err(anyhow::anyhow!("unsupported document URI authority: {uri}"))
@@ -204,11 +190,7 @@ fn decode_storage_segment(segment: &str) -> Result<PathBuf> {
     } else {
         PathBuf::from(format!("/storage/{volume}"))
     };
-    Ok(if rel.is_empty() {
-        root
-    } else {
-        root.join(rel)
-    })
+    Ok(if rel.is_empty() { root } else { root.join(rel) })
 }
 
 fn percent_decode(s: &str) -> String {
@@ -217,10 +199,7 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (
-                hex_value(bytes[i + 1]),
-                hex_value(bytes[i + 2]),
-            ) {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
                 out.push((hi << 4) | lo);
                 i += 3;
                 continue;

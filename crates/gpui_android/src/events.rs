@@ -89,10 +89,9 @@ pub(crate) fn translate_motion_event(
     // finger-driven trackpad mode as mouse for hit-test purposes.
     let is_touch_input =
         input_source == source::InputSource::Finger && !crate::ime::trackpad_mode_enabled();
-    state.last_input_was_touch.store(
-        is_touch_input,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    state
+        .last_input_was_touch
+        .store(is_touch_input, std::sync::atomic::Ordering::Relaxed);
 
     // Finger input routes through the first-class touch state machine.
     // Mouse / stylus / captured-trackpad continue through the match
@@ -112,7 +111,9 @@ pub(crate) fn translate_motion_event(
             if let Some(button) = pressed_mouse_button
                 && button != MouseButton::Left
             {
-                let click_count = state.clicks.next_click_count(button, position, input_source);
+                let click_count = state
+                    .clicks
+                    .next_click_count(button, position, input_source);
                 state.clicks.mark_non_primary_down(button);
                 out.push(mouse::button_down(button, position, modifiers, click_count));
                 return out;
@@ -124,7 +125,12 @@ pub(crate) fn translate_motion_event(
                     .clicks
                     .next_click_count(MouseButton::Left, position, input_source);
             state.clicks.record_primary_down(position);
-            out.push(mouse::button_down(MouseButton::Left, position, modifiers, click_count));
+            out.push(mouse::button_down(
+                MouseButton::Left,
+                position,
+                modifiers,
+                click_count,
+            ));
         }
         MotionAction::Up => {
             // Mouse button release. Resolve the latched click.
@@ -164,7 +170,10 @@ pub(crate) fn translate_motion_event(
             // End the gesture cleanly. Emit the up for whichever button
             // was held (or Left as a default) with click_count=0 so
             // listeners can distinguish a real click.
-            let held = state.clicks.current_non_primary().unwrap_or(MouseButton::Left);
+            let held = state
+                .clicks
+                .current_non_primary()
+                .unwrap_or(MouseButton::Left);
             state.clicks.reset_all();
             out.push(PlatformInput::MouseUp(gpui::MouseUpEvent {
                 button: held,

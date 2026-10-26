@@ -182,7 +182,6 @@ const DRAG_LOCK_TIMEOUT: Duration = Duration::from_millis(500);
 /// hold or any meaningful motion continues the drag instead.
 const DRAG_LOCK_TAP_WINDOW: Duration = Duration::from_millis(200);
 
-
 /// `window_id` sentinel for the primary `MainActivity` window. Extra
 /// windows use their gpui-assigned non-zero `WindowId` so per-window
 /// state never collides with the primary.
@@ -386,7 +385,11 @@ pub(crate) fn translate(
 ) -> Vec<PlatformInput> {
     let modifiers = Modifiers::default();
     let pressed_mouse_button = button_from_state(event.button_state);
-    let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+    let scale = if scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
     let cursor = point(
         px(event.cursor_physical_x / scale),
         px(event.cursor_physical_y / scale),
@@ -396,65 +399,341 @@ pub(crate) fn translate(
     state.last_cursor = cursor;
     let mut out = Vec::new();
 
-        match event.action_masked {
-            JAVA_ACTION_DOWN => {
-                // First finger landed. Four roles in priority order:
-                //
-                // 1. Drag-lock resume: if the previous tap-tap-drag's
-                //    ACTION_UP put us in drag-lock-pending and we're
-                //    still inside `DRAG_LOCK_TIMEOUT`, this DOWN
-                //    continues the drag instead of starting fresh.
-                //    Button stays held (no new MouseDown emit). The
-                //    matching ACTION_UP decides tap-vs-swipe.
-                // 2. Defensive cleanup: if previous gesture left
-                //    `drag_active` or `button_held` set without an
-                //    in-flight drag lock, this is leaked state —
-                //    emit MouseUp and clear.
-                // 3. Tap-tap-drag detection: if this DOWN follows a
-                //    recent tap near the same position, arm
-                //    `tap_drag_pending` so the next MOVE past slop
-                //    commits to drag mode.
-                // 4. Single-tap detection: latch the anchor so the
-                //    matching UP can synthesize a click.
-                let now = Instant::now();
-                let drag_lock_active = state.drag_lock_pending_at
-                    .map(|t| now.duration_since(t) <= DRAG_LOCK_TIMEOUT)
-                    .unwrap_or(false);
-                if drag_lock_active {
-                    log::debug!(
-                        "drag_lock: RESUME elapsed_ms={}",
-                        state.drag_lock_pending_at
-                            .map(|t| now.duration_since(t).as_millis())
-                            .unwrap_or(0),
-                    );
-                    state.drag_lock_pending_at = None;
-                    state.drag_lock_resume_at = Some(now);
-                    // button_held + drag_active stay set; cursor
-                    // continues from wherever it is. tap-tap-drag
-                    // pending is cleared so this DOWN doesn't also
-                    // trigger another tap-tap-drag commit on top.
-                    state.tap_drag_pending = false;
-                    state.last_tap_at = None;
-                    state.primary_down = Some(TapAnchor { when: now, cursor });
-                    state.first_finger_at = Some(now);
-                    state.last_motion_at = None;
-                    state.motion_accum = 0.0;
-                    state.in_multi_touch = false;
-                    state.right_click_armed = false;
-                    return out;
-                }
-                if state.drag_active || state.button_held.is_some() {
-                    log::debug!(
-                        "captured_pointer: stale drag state cleared on DOWN \
+    match event.action_masked {
+        JAVA_ACTION_DOWN => {
+            // First finger landed. Four roles in priority order:
+            //
+            // 1. Drag-lock resume: if the previous tap-tap-drag's
+            //    ACTION_UP put us in drag-lock-pending and we're
+            //    still inside `DRAG_LOCK_TIMEOUT`, this DOWN
+            //    continues the drag instead of starting fresh.
+            //    Button stays held (no new MouseDown emit). The
+            //    matching ACTION_UP decides tap-vs-swipe.
+            // 2. Defensive cleanup: if previous gesture left
+            //    `drag_active` or `button_held` set without an
+            //    in-flight drag lock, this is leaked state —
+            //    emit MouseUp and clear.
+            // 3. Tap-tap-drag detection: if this DOWN follows a
+            //    recent tap near the same position, arm
+            //    `tap_drag_pending` so the next MOVE past slop
+            //    commits to drag mode.
+            // 4. Single-tap detection: latch the anchor so the
+            //    matching UP can synthesize a click.
+            let now = Instant::now();
+            let drag_lock_active = state
+                .drag_lock_pending_at
+                .map(|t| now.duration_since(t) <= DRAG_LOCK_TIMEOUT)
+                .unwrap_or(false);
+            if drag_lock_active {
+                log::debug!(
+                    "drag_lock: RESUME elapsed_ms={}",
+                    state
+                        .drag_lock_pending_at
+                        .map(|t| now.duration_since(t).as_millis())
+                        .unwrap_or(0),
+                );
+                state.drag_lock_pending_at = None;
+                state.drag_lock_resume_at = Some(now);
+                // button_held + drag_active stay set; cursor
+                // continues from wherever it is. tap-tap-drag
+                // pending is cleared so this DOWN doesn't also
+                // trigger another tap-tap-drag commit on top.
+                state.tap_drag_pending = false;
+                state.last_tap_at = None;
+                state.primary_down = Some(TapAnchor { when: now, cursor });
+                state.first_finger_at = Some(now);
+                state.last_motion_at = None;
+                state.motion_accum = 0.0;
+                state.in_multi_touch = false;
+                state.right_click_armed = false;
+                return out;
+            }
+            if state.drag_active || state.button_held.is_some() {
+                log::debug!(
+                    "captured_pointer: stale drag state cleared on DOWN \
                          (drag_active={} button_held={:?} hold_drag_cursor={} \
                          drag_lock_pending={})",
-                        state.drag_active,
-                        state.button_held,
-                        state.hold_drag_cursor.is_some(),
-                        state.drag_lock_pending_at.is_some(),
+                    state.drag_active,
+                    state.button_held,
+                    state.hold_drag_cursor.is_some(),
+                    state.drag_lock_pending_at.is_some(),
+                );
+                let release_pos = state.hold_drag_cursor.take().unwrap_or(state.last_cursor);
+                if let Some(button) = state.button_held.take() {
+                    out.push(PlatformInput::MouseUp(MouseUpEvent {
+                        button,
+                        position: release_pos,
+                        modifiers,
+                        click_count: 1,
+                    }));
+                }
+                state.drag_active = false;
+                state.drag_lock_pending_at = None;
+                state.drag_lock_resume_at = None;
+                set_hold_drag_active(window_id, false);
+            }
+            let now = Instant::now();
+            let qualifies_as_tap_drag = state
+                .last_tap_at
+                .map(|t| now.duration_since(t) < TAP_DRAG_WINDOW)
+                .unwrap_or(false)
+                && (cursor - state.last_tap_position).magnitude()
+                    <= TAP_DRAG_POSITION_SLOP_PX as f64;
+            state.tap_drag_pending = qualifies_as_tap_drag;
+            state.last_tap_at = None;
+            state.primary_down = Some(TapAnchor { when: now, cursor });
+            state.first_finger_at = Some(now);
+            state.last_motion_at = None;
+            state.motion_accum = 0.0;
+            state.in_multi_touch = false;
+            state.right_click_armed = false;
+        }
+        JAVA_ACTION_POINTER_DOWN => {
+            // Second-or-later finger landed. Three sub-cases:
+            //
+            // 1. We are ALREADY in hold-and-drag mode
+            //    (drag_active && hold_drag_cursor.is_some()):
+            //    this is finger 2 re-landing after the trackpad
+            //    momentarily dropped its contact. Do NOT
+            //    re-engage. Don't fire another MouseDown. Just
+            //    keep multi-touch state set so subsequent MOVE
+            //    events continue to grow the existing drag.
+            // 2. Conditions for hold-and-drag entry met: enter
+            //    drag mode at the current cursor.
+            // 3. Neither: scroll territory. Arm right-click.
+            let now = Instant::now();
+            let hold_elapsed = state
+                .first_finger_at
+                .map(|t| now.duration_since(t))
+                .unwrap_or_default();
+            let stationary_for = state
+                .last_motion_at
+                .map(|t| now.duration_since(t))
+                .unwrap_or(Duration::MAX);
+            state.primary_down = None;
+            state.in_multi_touch = true;
+            state.tap_drag_pending = false;
+            if state.drag_active && state.hold_drag_cursor.is_some() {
+                // Already in hold-drag — finger 2 contact wavered
+                // and re-landed. Keep going, don't re-emit.
+                log::debug!(
+                    "hold_drag: CONTINUE (finger re-landed during drag, \
+                         drag_cursor=({:.0},{:.0}))",
+                    f32::from(state.hold_drag_cursor.map(|c| c.x).unwrap_or(Pixels::ZERO),),
+                    f32::from(state.hold_drag_cursor.map(|c| c.y).unwrap_or(Pixels::ZERO),),
+                );
+            } else if hold_elapsed >= HOLD_DRAG_THRESHOLD
+                && stationary_for >= HOLD_DRAG_STATIONARY
+                && !state.drag_active
+            {
+                log::debug!(
+                    "hold_drag: ENGAGED anchor=({:.0},{:.0}) hold_ms={} stationary_ms={}",
+                    f32::from(cursor.x),
+                    f32::from(cursor.y),
+                    hold_elapsed.as_millis(),
+                    stationary_for.as_millis().min(99999),
+                );
+                state.drag_active = true;
+                state.hold_drag_cursor = Some(cursor);
+                state.right_click_armed = false;
+                state.button_held = Some(MouseButton::Left);
+                set_hold_drag_active(window_id, true);
+                out.push(PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }));
+            } else {
+                log::debug!(
+                    "hold_drag: SKIPPED hold_ms={} stationary_ms={} \
+                         drag_active={} button_held={:?} (scroll path)",
+                    hold_elapsed.as_millis(),
+                    stationary_for.as_millis().min(99999),
+                    state.drag_active,
+                    state.button_held,
+                );
+                state.right_click_armed = true;
+                // Verified empirically: the cover trackpad's
+                // ACTION_BUTTON_PRESS fires shortly after finger 1
+                // DOWN regardless of user intent. If it already
+                // emitted a MouseDown, the editor sees scroll-
+                // while-clicked when this scroll path proceeds —
+                // which most editors interpret as drag-select
+                // (visible to the user as "scroll triggers
+                // selection"). Release the button first so the
+                // scroll is independent of the firmware-emitted
+                // click.
+                if let Some(button) = state.button_held.take() {
+                    log::debug!(
+                        "hold_drag: releasing inherited BUTTON_PRESS before scroll \
+                             (button={:?})",
+                        button,
                     );
-                    let release_pos = state.hold_drag_cursor.take().unwrap_or(state.last_cursor);
+                    out.push(PlatformInput::MouseUp(MouseUpEvent {
+                        button,
+                        position: cursor,
+                        modifiers,
+                        click_count: 1,
+                    }));
+                }
+            }
+        }
+        JAVA_ACTION_MOVE => {
+            if event.pointer_count >= 2 || state.in_multi_touch {
+                if let Some(mut drag_cursor) = state.hold_drag_cursor {
+                    // Hold-and-drag in progress: route motion as
+                    // drag-MouseMove, NOT scroll. Sum of relative
+                    // deltas approximates finger 2's motion since
+                    // finger 1 is held in place; if finger 1 does
+                    // drift slightly the sum still tracks the
+                    // intended drag direction. Update the
+                    // internal drag cursor and emit
+                    // `MouseMove(Left held)` at the new position
+                    // so the editor selection grows in real time.
+                    let sum_rx: f32 = event.rxs.iter().sum();
+                    let sum_ry: f32 = event.rys.iter().sum();
+                    let dx = sum_rx / scale;
+                    let dy = sum_ry / scale;
+                    drag_cursor.x += px(dx);
+                    drag_cursor.y += px(dy);
+                    state.hold_drag_cursor = Some(drag_cursor);
+                    if dx != 0.0 || dy != 0.0 {
+                        state.last_motion_at = Some(Instant::now());
+                        out.push(PlatformInput::MouseMove(MouseMoveEvent {
+                            position: drag_cursor,
+                            pressed_button: state.button_held,
+                            modifiers,
+                        }));
+                    }
+                } else {
+                    // Plain two-finger scroll (no hold-drag in
+                    // flight). Centroid delta drives
+                    // ScrollDelta::Pixels. Sign matches
+                    // `events/trackpad.rs` (the non-captured path)
+                    // so behavior is consistent whether or not
+                    // capture is engaged.
+                    let n = event.pointer_count.max(1) as f32;
+                    let sum_rx: f32 = event.rxs.iter().sum();
+                    let sum_ry: f32 = event.rys.iter().sum();
+                    let dx = sum_rx / n / scale;
+                    let dy = sum_ry / n / scale;
+                    // Any meaningful motion disarms right-click
+                    // (gesture is no longer a quick two-finger
+                    // tap).
+                    if (dx * dx + dy * dy).sqrt() > TWO_FINGER_TAP_MOTION_PX {
+                        state.right_click_armed = false;
+                    }
+                    if dx != 0.0 || dy != 0.0 {
+                        state.last_motion_at = Some(Instant::now());
+                        out.push(PlatformInput::Scroll(ScrollEvent {
+                            position: cursor,
+                            delta: crate::ime::invert_scroll_delta(ScrollDelta::Pixels(point(
+                                px(dx),
+                                px(dy),
+                            ))),
+                            modifiers,
+                            touch_phase: TouchPhase::Moved,
+                            source: ScrollSource::Pointer,
+                        }));
+                    }
+                }
+            } else if event.pointer_count == 1 {
+                // Single-finger move. Cursor is already at the
+                // post-delta position (Kotlin updated it before
+                // forwarding). Track motion accumulator so tap
+                // synthesis gets cancelled if the finger drifts
+                // past the tap threshold.
+                let dx = *event.rxs.first().unwrap_or(&0.0);
+                let dy = *event.rys.first().unwrap_or(&0.0);
+                let mag = (dx * dx + dy * dy).sqrt();
+                state.motion_accum += mag;
+                if mag > 0.0 {
+                    state.last_motion_at = Some(Instant::now());
+                }
+                if state.motion_accum > TAP_MOTION_PX {
+                    state.primary_down = None;
+                }
+
+                // Tap-tap-drag commit: if a previous tap armed
+                // `tap_drag_pending` on this DOWN, the first motion
+                // past slop transitions us into drag mode. Emit
+                // MouseDown(Left) at the original tap position
+                // (the anchor, where the user expected the drag
+                // to start from) and subsequent MouseMove events
+                // grow the drag.
+                if state.tap_drag_pending
+                    && state.motion_accum > TAP_DRAG_SLOP_PX
+                    && state.button_held.is_none()
+                {
+                    log::debug!(
+                        "tap_drag: ENGAGED anchor=({:.0},{:.0}) cursor=({:.0},{:.0})",
+                        f32::from(state.last_tap_position.x),
+                        f32::from(state.last_tap_position.y),
+                        f32::from(cursor.x),
+                        f32::from(cursor.y),
+                    );
+                    state.tap_drag_pending = false;
+                    state.drag_active = true;
+                    state.hold_drag_cursor = None;
+                    state.button_held = Some(MouseButton::Left);
+                    out.push(PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: state.last_tap_position,
+                        modifiers,
+                        click_count: 1,
+                        first_mouse: false,
+                    }));
+                }
+
+                out.push(PlatformInput::MouseMove(MouseMoveEvent {
+                    position: cursor,
+                    pressed_button: state.button_held,
+                    modifiers,
+                }));
+            }
+        }
+        JAVA_ACTION_UP => {
+            // Last finger lifted. Four cases:
+            //
+            // 1. Drag-lock resume tap: a fresh ACTION_DOWN earlier
+            //    set `drag_lock_resume_at`. If this UP comes
+            //    within DRAG_LOCK_TAP_WINDOW and motion stayed
+            //    under TAP_MOTION_PX, the user did a deliberate
+            //    tap to END the drag. Emit MouseUp.
+            // 2. Drag-lock resume swipe: the user is mid-drag,
+            //    motion happened. Re-arm drag-lock-pending (keep
+            //    button held; another swipe can continue from
+            //    here).
+            // 3. button_held set, no drag-lock in flight: this is
+            //    the end of a tap-tap-drag or hold-and-drag.
+            //    For tap-tap-drag (single-finger,
+            //    hold_drag_cursor==None), enter drag-lock-pending
+            //    instead of releasing — the user can swipe
+            //    again to continue selecting. Hold-and-drag
+            //    (multi-touch with hold_drag_cursor) ends
+            //    normally.
+            // 4. Plain tap (primary_down anchor fresh, low
+            //    motion): synthesize a click.
+            state.in_multi_touch = false;
+            set_hold_drag_active(window_id, false);
+            let now = Instant::now();
+            if let Some(resume_at) = state.drag_lock_resume_at.take() {
+                let resume_elapsed = now.duration_since(resume_at);
+                let is_tap =
+                    resume_elapsed < DRAG_LOCK_TAP_WINDOW && state.motion_accum <= TAP_MOTION_PX;
+                if is_tap {
+                    // User tapped without dragging — end the
+                    // drag.
                     if let Some(button) = state.button_held.take() {
+                        let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
+                        log::debug!(
+                            "drag_lock: ENDED by tap at ({:.0},{:.0}) tap_ms={}",
+                            f32::from(cursor.x),
+                            f32::from(cursor.y),
+                            resume_elapsed.as_millis(),
+                        );
                         out.push(PlatformInput::MouseUp(MouseUpEvent {
                             button,
                             position: release_pos,
@@ -463,495 +742,208 @@ pub(crate) fn translate(
                         }));
                     }
                     state.drag_active = false;
-                    state.drag_lock_pending_at = None;
-                    state.drag_lock_resume_at = None;
-                    set_hold_drag_active(window_id, false);
-                }
-                let now = Instant::now();
-                let qualifies_as_tap_drag = state
-                    .last_tap_at
-                    .map(|t| now.duration_since(t) < TAP_DRAG_WINDOW)
-                    .unwrap_or(false)
-                    && (cursor - state.last_tap_position).magnitude()
-                        <= TAP_DRAG_POSITION_SLOP_PX as f64;
-                state.tap_drag_pending = qualifies_as_tap_drag;
-                state.last_tap_at = None;
-                state.primary_down = Some(TapAnchor {
-                    when: now,
-                    cursor,
-                });
-                state.first_finger_at = Some(now);
-                state.last_motion_at = None;
-                state.motion_accum = 0.0;
-                state.in_multi_touch = false;
-                state.right_click_armed = false;
-            }
-            JAVA_ACTION_POINTER_DOWN => {
-                // Second-or-later finger landed. Three sub-cases:
-                //
-                // 1. We are ALREADY in hold-and-drag mode
-                //    (drag_active && hold_drag_cursor.is_some()):
-                //    this is finger 2 re-landing after the trackpad
-                //    momentarily dropped its contact. Do NOT
-                //    re-engage. Don't fire another MouseDown. Just
-                //    keep multi-touch state set so subsequent MOVE
-                //    events continue to grow the existing drag.
-                // 2. Conditions for hold-and-drag entry met: enter
-                //    drag mode at the current cursor.
-                // 3. Neither: scroll territory. Arm right-click.
-                let now = Instant::now();
-                let hold_elapsed = state
-                    .first_finger_at
-                    .map(|t| now.duration_since(t))
-                    .unwrap_or_default();
-                let stationary_for = state
-                    .last_motion_at
-                    .map(|t| now.duration_since(t))
-                    .unwrap_or(Duration::MAX);
-                state.primary_down = None;
-                state.in_multi_touch = true;
-                state.tap_drag_pending = false;
-                if state.drag_active && state.hold_drag_cursor.is_some() {
-                    // Already in hold-drag — finger 2 contact wavered
-                    // and re-landed. Keep going, don't re-emit.
-                    log::debug!(
-                        "hold_drag: CONTINUE (finger re-landed during drag, \
-                         drag_cursor=({:.0},{:.0}))",
-                        f32::from(
-                            state
-                                .hold_drag_cursor
-                                .map(|c| c.x)
-                                .unwrap_or(Pixels::ZERO),
-                        ),
-                        f32::from(
-                            state
-                                .hold_drag_cursor
-                                .map(|c| c.y)
-                                .unwrap_or(Pixels::ZERO),
-                        ),
-                    );
-                } else if hold_elapsed >= HOLD_DRAG_THRESHOLD
-                    && stationary_for >= HOLD_DRAG_STATIONARY
-                    && !state.drag_active
-                {
-                    log::debug!(
-                        "hold_drag: ENGAGED anchor=({:.0},{:.0}) hold_ms={} stationary_ms={}",
-                        f32::from(cursor.x),
-                        f32::from(cursor.y),
-                        hold_elapsed.as_millis(),
-                        stationary_for.as_millis().min(99999),
-                    );
-                    state.drag_active = true;
-                    state.hold_drag_cursor = Some(cursor);
-                    state.right_click_armed = false;
-                    state.button_held = Some(MouseButton::Left);
-                    set_hold_drag_active(window_id, true);
-                    out.push(PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                        first_mouse: false,
-                    }));
-                } else {
-                    log::debug!(
-                        "hold_drag: SKIPPED hold_ms={} stationary_ms={} \
-                         drag_active={} button_held={:?} (scroll path)",
-                        hold_elapsed.as_millis(),
-                        stationary_for.as_millis().min(99999),
-                        state.drag_active,
-                        state.button_held,
-                    );
-                    state.right_click_armed = true;
-                    // Verified empirically: the cover trackpad's
-                    // ACTION_BUTTON_PRESS fires shortly after finger 1
-                    // DOWN regardless of user intent. If it already
-                    // emitted a MouseDown, the editor sees scroll-
-                    // while-clicked when this scroll path proceeds —
-                    // which most editors interpret as drag-select
-                    // (visible to the user as "scroll triggers
-                    // selection"). Release the button first so the
-                    // scroll is independent of the firmware-emitted
-                    // click.
-                    if let Some(button) = state.button_held.take() {
-                        log::debug!(
-                            "hold_drag: releasing inherited BUTTON_PRESS before scroll \
-                             (button={:?})",
-                            button,
-                        );
-                        out.push(PlatformInput::MouseUp(MouseUpEvent {
-                            button,
-                            position: cursor,
-                            modifiers,
-                            click_count: 1,
-                        }));
-                    }
-                }
-            }
-            JAVA_ACTION_MOVE => {
-                if event.pointer_count >= 2 || state.in_multi_touch {
-                    if let Some(mut drag_cursor) = state.hold_drag_cursor {
-                        // Hold-and-drag in progress: route motion as
-                        // drag-MouseMove, NOT scroll. Sum of relative
-                        // deltas approximates finger 2's motion since
-                        // finger 1 is held in place; if finger 1 does
-                        // drift slightly the sum still tracks the
-                        // intended drag direction. Update the
-                        // internal drag cursor and emit
-                        // `MouseMove(Left held)` at the new position
-                        // so the editor selection grows in real time.
-                        let sum_rx: f32 = event.rxs.iter().sum();
-                        let sum_ry: f32 = event.rys.iter().sum();
-                        let dx = sum_rx / scale;
-                        let dy = sum_ry / scale;
-                        drag_cursor.x += px(dx);
-                        drag_cursor.y += px(dy);
-                        state.hold_drag_cursor = Some(drag_cursor);
-                        if dx != 0.0 || dy != 0.0 {
-                            state.last_motion_at = Some(Instant::now());
-                            out.push(PlatformInput::MouseMove(MouseMoveEvent {
-                                position: drag_cursor,
-                                pressed_button: state.button_held,
-                                modifiers,
-                            }));
-                        }
-                    } else {
-                        // Plain two-finger scroll (no hold-drag in
-                        // flight). Centroid delta drives
-                        // ScrollDelta::Pixels. Sign matches
-                        // `events/trackpad.rs` (the non-captured path)
-                        // so behavior is consistent whether or not
-                        // capture is engaged.
-                        let n = event.pointer_count.max(1) as f32;
-                        let sum_rx: f32 = event.rxs.iter().sum();
-                        let sum_ry: f32 = event.rys.iter().sum();
-                        let dx = sum_rx / n / scale;
-                        let dy = sum_ry / n / scale;
-                        // Any meaningful motion disarms right-click
-                        // (gesture is no longer a quick two-finger
-                        // tap).
-                        if (dx * dx + dy * dy).sqrt() > TWO_FINGER_TAP_MOTION_PX {
-                            state.right_click_armed = false;
-                        }
-                        if dx != 0.0 || dy != 0.0 {
-                            state.last_motion_at = Some(Instant::now());
-                            out.push(PlatformInput::Scroll(ScrollEvent {
-                                position: cursor,
-                                delta: crate::ime::invert_scroll_delta(ScrollDelta::Pixels(
-                                    point(px(dx), px(dy)),
-                                )),
-                                modifiers,
-                                touch_phase: TouchPhase::Moved,
-                                source: ScrollSource::Pointer,
-                            }));
-                        }
-                    }
-                } else if event.pointer_count == 1 {
-                    // Single-finger move. Cursor is already at the
-                    // post-delta position (Kotlin updated it before
-                    // forwarding). Track motion accumulator so tap
-                    // synthesis gets cancelled if the finger drifts
-                    // past the tap threshold.
-                    let dx = *event.rxs.first().unwrap_or(&0.0);
-                    let dy = *event.rys.first().unwrap_or(&0.0);
-                    let mag = (dx * dx + dy * dy).sqrt();
-                    state.motion_accum += mag;
-                    if mag > 0.0 {
-                        state.last_motion_at = Some(Instant::now());
-                    }
-                    if state.motion_accum > TAP_MOTION_PX {
-                        state.primary_down = None;
-                    }
-
-                    // Tap-tap-drag commit: if a previous tap armed
-                    // `tap_drag_pending` on this DOWN, the first motion
-                    // past slop transitions us into drag mode. Emit
-                    // MouseDown(Left) at the original tap position
-                    // (the anchor, where the user expected the drag
-                    // to start from) and subsequent MouseMove events
-                    // grow the drag.
-                    if state.tap_drag_pending
-                        && state.motion_accum > TAP_DRAG_SLOP_PX
-                        && state.button_held.is_none()
-                    {
-                        log::debug!(
-                            "tap_drag: ENGAGED anchor=({:.0},{:.0}) cursor=({:.0},{:.0})",
-                            f32::from(state.last_tap_position.x),
-                            f32::from(state.last_tap_position.y),
-                            f32::from(cursor.x),
-                            f32::from(cursor.y),
-                        );
-                        state.tap_drag_pending = false;
-                        state.drag_active = true;
-                        state.hold_drag_cursor = None;
-                        state.button_held = Some(MouseButton::Left);
-                        out.push(PlatformInput::MouseDown(MouseDownEvent {
-                            button: MouseButton::Left,
-                            position: state.last_tap_position,
-                            modifiers,
-                            click_count: 1,
-                            first_mouse: false,
-                        }));
-                    }
-
-                    out.push(PlatformInput::MouseMove(MouseMoveEvent {
-                        position: cursor,
-                        pressed_button: state.button_held,
-                        modifiers,
-                    }));
-                }
-            }
-            JAVA_ACTION_UP => {
-                // Last finger lifted. Four cases:
-                //
-                // 1. Drag-lock resume tap: a fresh ACTION_DOWN earlier
-                //    set `drag_lock_resume_at`. If this UP comes
-                //    within DRAG_LOCK_TAP_WINDOW and motion stayed
-                //    under TAP_MOTION_PX, the user did a deliberate
-                //    tap to END the drag. Emit MouseUp.
-                // 2. Drag-lock resume swipe: the user is mid-drag,
-                //    motion happened. Re-arm drag-lock-pending (keep
-                //    button held; another swipe can continue from
-                //    here).
-                // 3. button_held set, no drag-lock in flight: this is
-                //    the end of a tap-tap-drag or hold-and-drag.
-                //    For tap-tap-drag (single-finger,
-                //    hold_drag_cursor==None), enter drag-lock-pending
-                //    instead of releasing — the user can swipe
-                //    again to continue selecting. Hold-and-drag
-                //    (multi-touch with hold_drag_cursor) ends
-                //    normally.
-                // 4. Plain tap (primary_down anchor fresh, low
-                //    motion): synthesize a click.
-                state.in_multi_touch = false;
-                set_hold_drag_active(window_id, false);
-                let now = Instant::now();
-                if let Some(resume_at) = state.drag_lock_resume_at.take() {
-                    let resume_elapsed = now.duration_since(resume_at);
-                    let is_tap = resume_elapsed < DRAG_LOCK_TAP_WINDOW
-                        && state.motion_accum <= TAP_MOTION_PX;
-                    if is_tap {
-                        // User tapped without dragging — end the
-                        // drag.
-                        if let Some(button) = state.button_held.take() {
-                            let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
-                            log::debug!(
-                                "drag_lock: ENDED by tap at ({:.0},{:.0}) tap_ms={}",
-                                f32::from(cursor.x),
-                                f32::from(cursor.y),
-                                resume_elapsed.as_millis(),
-                            );
-                            out.push(PlatformInput::MouseUp(MouseUpEvent {
-                                button,
-                                position: release_pos,
-                                modifiers,
-                                click_count: 1,
-                            }));
-                        }
-                        state.drag_active = false;
-                        state.primary_down = None;
-                        state.motion_accum = 0.0;
-                        state.first_finger_at = None;
-                        state.last_motion_at = None;
-                        state.tap_drag_pending = false;
-                        return out;
-                    }
-                    // Swipe (with motion) — keep drag alive and
-                    // re-arm the lock so another swipe can continue.
-                    log::debug!(
-                        "drag_lock: RE-ARM after swipe (motion_px={:.1})",
-                        state.motion_accum,
-                    );
-                    state.drag_lock_pending_at = Some(now);
-                    state.motion_accum = 0.0;
                     state.primary_down = None;
+                    state.motion_accum = 0.0;
                     state.first_finger_at = None;
                     state.last_motion_at = None;
                     state.tap_drag_pending = false;
                     return out;
                 }
-                if let Some(button) = state.button_held.take() {
-                    // Single-finger tap-tap-drag → enter drag-lock.
-                    // Hold-and-drag → end normally.
-                    let is_tap_tap_drag =
-                        state.drag_active && state.hold_drag_cursor.is_none();
-                    if is_tap_tap_drag {
-                        log::debug!(
-                            "drag_lock: ARMED at ({:.0},{:.0})",
-                            f32::from(cursor.x),
-                            f32::from(cursor.y),
-                        );
-                        // Restore button_held; we kept it held in
-                        // anticipation of a swipe-continue.
-                        state.button_held = Some(button);
-                        state.drag_lock_pending_at = Some(now);
-                        state.primary_down = None;
-                        state.motion_accum = 0.0;
-                        state.first_finger_at = None;
-                        state.last_motion_at = None;
-                        state.tap_drag_pending = false;
-                        return out;
-                    }
-                    let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
-                    out.push(PlatformInput::MouseUp(MouseUpEvent {
-                        button,
-                        position: release_pos,
-                        modifiers,
-                        click_count: 1,
-                    }));
-                    state.drag_active = false;
-                } else if let Some(anchor) = state.primary_down.take()
-                    && anchor.when.elapsed() < TAP_WINDOW
-                    && state.motion_accum <= TAP_MOTION_PX
-                {
-                    out.push(PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                        first_mouse: false,
-                    }));
-                    out.push(PlatformInput::MouseUp(MouseUpEvent {
-                        button: MouseButton::Left,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                    }));
-                    // Record this tap so a subsequent ACTION_DOWN
-                    // within `TAP_DRAG_WINDOW` can arm tap-tap-drag
-                    // for text selection.
-                    state.last_tap_at = Some(Instant::now());
-                    state.last_tap_position = cursor;
-                }
+                // Swipe (with motion) — keep drag alive and
+                // re-arm the lock so another swipe can continue.
+                log::debug!(
+                    "drag_lock: RE-ARM after swipe (motion_px={:.1})",
+                    state.motion_accum,
+                );
+                state.drag_lock_pending_at = Some(now);
                 state.motion_accum = 0.0;
-                state.right_click_armed = false;
-                state.first_finger_at = None;
-                state.last_motion_at = None;
-                state.tap_drag_pending = false;
-            }
-            JAVA_ACTION_POINTER_UP => {
-                // A non-primary finger lifted. CRITICAL: do not tear
-                // down hold-and-drag here. The cover trackpad's
-                // finger-2 contact wavers during sustained gestures
-                // (verified empirically: same-anchor hold_drag ENGAGED
-                // fires repeatedly through POINTER_UP/POINTER_DOWN
-                // cycles during one continuous user drag). If we tear
-                // down on POINTER_UP, the next POINTER_DOWN re-engages
-                // hold-drag and re-fires MouseDown, producing the
-                // click-storm. Only ACTION_UP (last finger lifted)
-                // ends the gesture.
-                //
-                // Two things still need to happen here:
-                //   - Fire right-click if armed and motion stayed
-                //     under the tap threshold (genuine two-finger tap)
-                //   - When pointer_count drops to 1, clear
-                //     in_multi_touch so subsequent single-finger MOVE
-                //     events route through the cursor path
-                if state.right_click_armed && !state.drag_active {
-                    out.push(PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Right,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                        first_mouse: false,
-                    }));
-                    out.push(PlatformInput::MouseUp(MouseUpEvent {
-                        button: MouseButton::Right,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                    }));
-                    state.right_click_armed = false;
-                }
-                // Keep in_multi_touch true while hold-drag is active
-                // (finger 2 wavering doesn't end the gesture; only
-                // ACTION_UP does). Clear it otherwise so single-finger
-                // motion routes through the cursor path, not scroll.
-                if event.pointer_count <= 2 && state.hold_drag_cursor.is_none() {
-                    state.in_multi_touch = false;
-                }
-            }
-            JAVA_ACTION_BUTTON_PRESS => {
-                // SOURCE_TOUCHPAD BUTTON_PRESS is firmware noise on
-                // the cover trackpad (logs verify it fires on
-                // every finger contact, regardless of click intent).
-                // Honoring it as a click breaks the gesture state
-                // machine: it sets button_held mid-gesture, blocks
-                // hold-and-drag entry, and combines with two-finger
-                // scroll to produce "scroll triggers selection" in
-                // the editor. Ignore for touchpad source; for real
-                // mouse buttons (SOURCE_MOUSE), the event represents
-                // a genuine click and must be honored.
-                if event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD {
-                    // touchpad noise: drop on the floor
-                } else {
-                    let button = pressed_mouse_button.unwrap_or(MouseButton::Left);
-                    state.button_held = Some(button);
-                    state.primary_down = None;
-                    out.push(PlatformInput::MouseDown(MouseDownEvent {
-                        button,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                        first_mouse: false,
-                    }));
-                }
-            }
-            JAVA_ACTION_BUTTON_RELEASE => {
-                if event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD {
-                    // touchpad noise: drop on the floor (matches PRESS)
-                } else if let Some(button) = state.button_held.take() {
-                    out.push(PlatformInput::MouseUp(MouseUpEvent {
-                        button,
-                        position: cursor,
-                        modifiers,
-                        click_count: 1,
-                    }));
-                }
-            }
-            JAVA_ACTION_SCROLL => {
-                // Mouse wheel. Android carries detents in AXIS_VSCROLL /
-                // AXIS_HSCROLL; Kotlin forwards them as `vscroll` /
-                // `hscroll`, but no arm consumed them before, so the wheel
-                // did nothing. Emit a Lines-based Scroll event so the editor
-                // scales by line height like the desktop discrete-wheel
-                // path. Sign passes through as the framework reports it
-                // (positive vscroll = wheel away from user).
-                let dx = event.hscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
-                let dy = event.vscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
-                if dx != 0.0 || dy != 0.0 {
-                    out.push(PlatformInput::Scroll(ScrollEvent {
-                        position: cursor,
-                        delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(dx, dy))),
-                        modifiers,
-                        touch_phase: TouchPhase::Moved,
-                        source: ScrollSource::Pointer,
-                    }));
-                }
-            }
-            JAVA_ACTION_CANCEL => {
-                if let Some(button) = state.button_held.take() {
-                    let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
-                    out.push(PlatformInput::MouseUp(MouseUpEvent {
-                        button,
-                        position: release_pos,
-                        modifiers,
-                        click_count: 0,
-                    }));
-                }
                 state.primary_down = None;
                 state.first_finger_at = None;
                 state.last_motion_at = None;
-                state.motion_accum = 0.0;
-                state.in_multi_touch = false;
-                state.right_click_armed = false;
                 state.tap_drag_pending = false;
-                state.drag_active = false;
-                state.hold_drag_cursor = None;
-                state.drag_lock_pending_at = None;
-                state.drag_lock_resume_at = None;
-                set_hold_drag_active(window_id, false);
+                return out;
             }
+            if let Some(button) = state.button_held.take() {
+                // Single-finger tap-tap-drag → enter drag-lock.
+                // Hold-and-drag → end normally.
+                let is_tap_tap_drag = state.drag_active && state.hold_drag_cursor.is_none();
+                if is_tap_tap_drag {
+                    log::debug!(
+                        "drag_lock: ARMED at ({:.0},{:.0})",
+                        f32::from(cursor.x),
+                        f32::from(cursor.y),
+                    );
+                    // Restore button_held; we kept it held in
+                    // anticipation of a swipe-continue.
+                    state.button_held = Some(button);
+                    state.drag_lock_pending_at = Some(now);
+                    state.primary_down = None;
+                    state.motion_accum = 0.0;
+                    state.first_finger_at = None;
+                    state.last_motion_at = None;
+                    state.tap_drag_pending = false;
+                    return out;
+                }
+                let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
+                out.push(PlatformInput::MouseUp(MouseUpEvent {
+                    button,
+                    position: release_pos,
+                    modifiers,
+                    click_count: 1,
+                }));
+                state.drag_active = false;
+            } else if let Some(anchor) = state.primary_down.take()
+                && anchor.when.elapsed() < TAP_WINDOW
+                && state.motion_accum <= TAP_MOTION_PX
+            {
+                out.push(PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }));
+                out.push(PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                }));
+                // Record this tap so a subsequent ACTION_DOWN
+                // within `TAP_DRAG_WINDOW` can arm tap-tap-drag
+                // for text selection.
+                state.last_tap_at = Some(Instant::now());
+                state.last_tap_position = cursor;
+            }
+            state.motion_accum = 0.0;
+            state.right_click_armed = false;
+            state.first_finger_at = None;
+            state.last_motion_at = None;
+            state.tap_drag_pending = false;
+        }
+        JAVA_ACTION_POINTER_UP => {
+            // A non-primary finger lifted. CRITICAL: do not tear
+            // down hold-and-drag here. The cover trackpad's
+            // finger-2 contact wavers during sustained gestures
+            // (verified empirically: same-anchor hold_drag ENGAGED
+            // fires repeatedly through POINTER_UP/POINTER_DOWN
+            // cycles during one continuous user drag). If we tear
+            // down on POINTER_UP, the next POINTER_DOWN re-engages
+            // hold-drag and re-fires MouseDown, producing the
+            // click-storm. Only ACTION_UP (last finger lifted)
+            // ends the gesture.
+            //
+            // Two things still need to happen here:
+            //   - Fire right-click if armed and motion stayed
+            //     under the tap threshold (genuine two-finger tap)
+            //   - When pointer_count drops to 1, clear
+            //     in_multi_touch so subsequent single-finger MOVE
+            //     events route through the cursor path
+            if state.right_click_armed && !state.drag_active {
+                out.push(PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Right,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }));
+                out.push(PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Right,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                }));
+                state.right_click_armed = false;
+            }
+            // Keep in_multi_touch true while hold-drag is active
+            // (finger 2 wavering doesn't end the gesture; only
+            // ACTION_UP does). Clear it otherwise so single-finger
+            // motion routes through the cursor path, not scroll.
+            if event.pointer_count <= 2 && state.hold_drag_cursor.is_none() {
+                state.in_multi_touch = false;
+            }
+        }
+        JAVA_ACTION_BUTTON_PRESS => {
+            // SOURCE_TOUCHPAD BUTTON_PRESS is firmware noise on
+            // the cover trackpad (logs verify it fires on
+            // every finger contact, regardless of click intent).
+            // Honoring it as a click breaks the gesture state
+            // machine: it sets button_held mid-gesture, blocks
+            // hold-and-drag entry, and combines with two-finger
+            // scroll to produce "scroll triggers selection" in
+            // the editor. Ignore for touchpad source; for real
+            // mouse buttons (SOURCE_MOUSE), the event represents
+            // a genuine click and must be honored.
+            if event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD {
+                // touchpad noise: drop on the floor
+            } else {
+                let button = pressed_mouse_button.unwrap_or(MouseButton::Left);
+                state.button_held = Some(button);
+                state.primary_down = None;
+                out.push(PlatformInput::MouseDown(MouseDownEvent {
+                    button,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }));
+            }
+        }
+        JAVA_ACTION_BUTTON_RELEASE => {
+            if event.source & ANDROID_SOURCE_TOUCHPAD == ANDROID_SOURCE_TOUCHPAD {
+                // touchpad noise: drop on the floor (matches PRESS)
+            } else if let Some(button) = state.button_held.take() {
+                out.push(PlatformInput::MouseUp(MouseUpEvent {
+                    button,
+                    position: cursor,
+                    modifiers,
+                    click_count: 1,
+                }));
+            }
+        }
+        JAVA_ACTION_SCROLL => {
+            // Mouse wheel. Android carries detents in AXIS_VSCROLL /
+            // AXIS_HSCROLL; Kotlin forwards them as `vscroll` /
+            // `hscroll`, but no arm consumed them before, so the wheel
+            // did nothing. Emit a Lines-based Scroll event so the editor
+            // scales by line height like the desktop discrete-wheel
+            // path. Sign passes through as the framework reports it
+            // (positive vscroll = wheel away from user).
+            let dx = event.hscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
+            let dy = event.vscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
+            if dx != 0.0 || dy != 0.0 {
+                out.push(PlatformInput::Scroll(ScrollEvent {
+                    position: cursor,
+                    delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(dx, dy))),
+                    modifiers,
+                    touch_phase: TouchPhase::Moved,
+                    source: ScrollSource::Pointer,
+                }));
+            }
+        }
+        JAVA_ACTION_CANCEL => {
+            if let Some(button) = state.button_held.take() {
+                let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
+                out.push(PlatformInput::MouseUp(MouseUpEvent {
+                    button,
+                    position: release_pos,
+                    modifiers,
+                    click_count: 0,
+                }));
+            }
+            state.primary_down = None;
+            state.first_finger_at = None;
+            state.last_motion_at = None;
+            state.motion_accum = 0.0;
+            state.in_multi_touch = false;
+            state.right_click_armed = false;
+            state.tap_drag_pending = false;
+            state.drag_active = false;
+            state.hold_drag_cursor = None;
+            state.drag_lock_pending_at = None;
+            state.drag_lock_resume_at = None;
+            set_hold_drag_active(window_id, false);
+        }
         _ => {}
     }
     out
@@ -993,9 +985,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_isHoldDragActive<'local>(
 /// Probe sink (kept alongside the structured one for debug). Logs a
 /// stringified summary of each captured event.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointerProbe<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointerProbe<'local>(
     mut env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     summary: JString<'local>,
@@ -1016,9 +1006,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointerProbe
 /// thread to drain. Spawned `ExtraWindowActivity` windows use
 /// `nativeOnExtraCapturedPointer` instead.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     action_masked: i32,
@@ -1063,9 +1051,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<
 /// `onGenericMotionEvent` override; gesture pipelines (tap, scroll,
 /// hold-drag, drag-lock, cursor follow) are identical per window.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraCapturedPointer<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraCapturedPointer<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: jni::sys::jlong,

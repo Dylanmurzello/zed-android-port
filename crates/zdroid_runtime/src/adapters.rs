@@ -31,9 +31,7 @@ use crate::port::RuntimeProvider;
 pub fn for_config(config: &ResolvedConfig) -> anyhow::Result<Box<dyn RuntimeProvider>> {
     match config {
         ResolvedConfig::Chroot(cfg) => chroot::ChrootAdapter::new(cfg.clone()).map(box_it),
-        ResolvedConfig::Bootstrap(cfg) => {
-            bootstrap::BootstrapAdapter::new(cfg.clone()).map(box_it)
-        }
+        ResolvedConfig::Bootstrap(cfg) => bootstrap::BootstrapAdapter::new(cfg.clone()).map(box_it),
         ResolvedConfig::ExternalTermux(cfg) => {
             external_termux::ExternalTermuxAdapter::new(cfg.clone()).map(box_it)
         }

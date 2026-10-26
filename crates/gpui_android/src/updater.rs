@@ -119,19 +119,14 @@ pub fn fetch_latest_tag() -> Result<String> {
         Err(ureq::Error::Status(_, resp)) => resp,
         Err(e) => return Err(anyhow!("HTTP GET {url}: {e}")),
     };
-    let location = resp.header("Location").ok_or_else(|| {
-        anyhow!(
-            "no Location header on {url}; got status {}",
-            resp.status()
-        )
-    })?;
+    let location = resp
+        .header("Location")
+        .ok_or_else(|| anyhow!("no Location header on {url}; got status {}", resp.status()))?;
     let marker = "/releases/tag/";
     let after = location.find(marker).map(|i| &location[i + marker.len()..]);
     let tag = after
         .and_then(|s| s.split('/').next().filter(|t| !t.is_empty()))
-        .ok_or_else(|| {
-            anyhow!("expected `/releases/tag/<tag>` in Location {location}")
-        })?;
+        .ok_or_else(|| anyhow!("expected `/releases/tag/<tag>` in Location {location}"))?;
     Ok(tag.trim_start_matches('v').to_owned())
 }
 
@@ -214,9 +209,7 @@ fn system_cache_dir(android_app: &AndroidApp) -> Result<PathBuf> {
 pub fn check_for_update() -> Result<UpdateCheck> {
     let latest = fetch_latest_tag().context("resolve latest release tag")?;
     let current = current_version();
-    log::info!(
-        "updater: check_for_update current={current:?} latest={latest:?}"
-    );
+    log::info!("updater: check_for_update current={current:?} latest={latest:?}");
     if current.is_empty() {
         return Err(anyhow!(
             "can't determine current app version; PackageManager returned empty"
@@ -232,9 +225,7 @@ pub fn check_for_update() -> Result<UpdateCheck> {
         let download_urls = candidate_asset_names(&latest)
             .into_iter()
             .map(|name| {
-                format!(
-                    "https://github.com/{RELEASE_REPO}/releases/download/v{latest}/{name}"
-                )
+                format!("https://github.com/{RELEASE_REPO}/releases/download/v{latest}/{name}")
             })
             .collect();
         Ok(UpdateCheck::Available {
@@ -271,8 +262,8 @@ pub fn download_apk(
     // updater wrote to `<filesDir>/cache/updater/`. One-time migration:
     // if that directory exists from a previous attempt, wipe it so stale
     // 225 MB APKs don't sit on disk forever.
-    let cache_root = system_cache_dir(android_app)
-        .context("query Context.getCacheDir() via JNI")?;
+    let cache_root =
+        system_cache_dir(android_app).context("query Context.getCacheDir() via JNI")?;
     let stale_dir = android_app
         .internal_data_path()
         .map(|p| p.join("cache").join(CACHE_SUBDIR));
@@ -303,11 +294,7 @@ pub fn download_apk(
             let _ = std::fs::remove_file(&dest);
         }
         log::info!("updater: downloading {url} -> {}", dest.display());
-        let resp = match agent
-            .get(url)
-            .set("User-Agent", USER_AGENT)
-            .call()
-        {
+        let resp = match agent.get(url).set("User-Agent", USER_AGENT).call() {
             Ok(resp) => resp,
             Err(err) => {
                 log::warn!("updater: GET {url} failed: {err:#}; trying next candidate");
@@ -329,8 +316,8 @@ pub fn download_apk(
         }
         on_progress(total_bytes.map(|_| 0.0));
         let mut reader = resp.into_reader();
-        let mut file = std::fs::File::create(&dest)
-            .with_context(|| format!("create {}", dest.display()))?;
+        let mut file =
+            std::fs::File::create(&dest).with_context(|| format!("create {}", dest.display()))?;
         let mut buf = vec![0u8; 64 * 1024];
         let mut total: u64 = 0;
         let mut last_reported_percent = None;
@@ -368,7 +355,10 @@ pub fn download_apk(
             Err(err) => {
                 log::warn!("updater: streaming {url} failed: {err:#}; trying next candidate");
                 if let Err(remove_err) = std::fs::remove_file(&dest) {
-                    log::warn!("updater: removing partial {} failed: {remove_err}", dest.display());
+                    log::warn!(
+                        "updater: removing partial {} failed: {remove_err}",
+                        dest.display()
+                    );
                 }
                 last_err = Some(err);
                 continue;

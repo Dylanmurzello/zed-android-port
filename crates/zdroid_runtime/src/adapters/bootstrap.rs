@@ -162,13 +162,7 @@ mod android_impl {
                     target.as_os_str().to_owned(),
                 ];
                 proot_args.extend(req.args.iter().cloned());
-                build_base_command(
-                    &proot,
-                    &proot_args,
-                    req.cwd.as_deref(),
-                    &req.env,
-                    req.stdio,
-                )?
+                build_base_command(&proot, &proot_args, req.cwd.as_deref(), &req.env, req.stdio)?
             }
         };
 
@@ -176,7 +170,11 @@ mod android_impl {
             format!(
                 "spawn {} (bootstrap mode {})",
                 target.display(),
-                if config.proot_rootfs.is_some() { "proot" } else { "bare" },
+                if config.proot_rootfs.is_some() {
+                    "proot"
+                } else {
+                    "bare"
+                },
             )
         })?;
 
@@ -290,8 +288,7 @@ impl RuntimeProvider for BootstrapAdapter {
         // have a `/usr/` layout, it puts everything directly under
         // `$PREFIX/bin/` (Termux-flavored prefix). `sbin` is rarely
         // populated on Termux but we look anyway.
-        let mut names: std::collections::BTreeSet<String> =
-            std::collections::BTreeSet::new();
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for sub in ["bin", "sbin"] {
             let dir = self.config.prefix.join(sub);
             match std::fs::read_dir(&dir) {
@@ -357,29 +354,53 @@ impl RuntimeProvider for BootstrapAdapter {
         //      (`.ssh/config` in particular) align correctly with
         //      what shells see when both use termux_home.
         vec![
-            ("HOME".into(), EnvOp::Set(termux_home.as_os_str().to_owned())),
+            (
+                "HOME".into(),
+                EnvOp::Set(termux_home.as_os_str().to_owned()),
+            ),
             ("PREFIX".into(), EnvOp::Set(prefix.as_os_str().to_owned())),
-            ("TERMUX__ROOTFS".into(), EnvOp::Set(data_path.as_os_str().to_owned())),
-            ("TERMUX__PREFIX".into(), EnvOp::Set(prefix.as_os_str().to_owned())),
-            ("TERMUX__HOME".into(), EnvOp::Set(termux_home.into_os_string())),
+            (
+                "TERMUX__ROOTFS".into(),
+                EnvOp::Set(data_path.as_os_str().to_owned()),
+            ),
+            (
+                "TERMUX__PREFIX".into(),
+                EnvOp::Set(prefix.as_os_str().to_owned()),
+            ),
+            (
+                "TERMUX__HOME".into(),
+                EnvOp::Set(termux_home.into_os_string()),
+            ),
             // Read by our patched dpkg's tarfn.c at extract time. When
             // set and != "com.termux", dpkg rewrites tar entry paths
             // starting with /data/data/com.termux/ to /data/data/
             // <this>/ on the fly, letting `pkg install <upstream-deb>`
             // Just Work with our prefix.
-            ("TERMUX_APP__PACKAGE_NAME".into(), EnvOp::Set(OsString::from("com.zdroid"))),
-            ("TMPDIR".into(), EnvOp::Set(prefix.join("tmp").into_os_string())),
+            (
+                "TERMUX_APP__PACKAGE_NAME".into(),
+                EnvOp::Set(OsString::from("com.zdroid")),
+            ),
+            (
+                "TMPDIR".into(),
+                EnvOp::Set(prefix.join("tmp").into_os_string()),
+            ),
             ("TERM".into(), EnvOp::Set(OsString::from("xterm-256color"))),
             ("LANG".into(), EnvOp::Set(OsString::from("en_US.UTF-8"))),
             ("COLORTERM".into(), EnvOp::Set(OsString::from("truecolor"))),
-            ("ZED_BUILD_REMOTE_SERVER".into(), EnvOp::Set(OsString::from("never"))),
+            (
+                "ZED_BUILD_REMOTE_SERVER".into(),
+                EnvOp::Set(OsString::from("never")),
+            ),
             // Termux's bootstrap pre-sets LD_PRELOAD via profile.d on
             // bash startup; clearing it on the Zed-Rust process keeps
             // remote-SSH children clean while local Termux shells
             // re-set it themselves where they need the shebang shim.
             ("LD_PRELOAD".into(), EnvOp::Remove),
             ("PATH".into(), EnvOp::Set(new_path)),
-            ("SHELL".into(), EnvOp::Set(prefix.join("bin/bash").into_os_string())),
+            (
+                "SHELL".into(),
+                EnvOp::Set(prefix.join("bin/bash").into_os_string()),
+            ),
         ]
     }
 
@@ -396,10 +417,22 @@ impl RuntimeProvider for BootstrapAdapter {
 
         let mut ops = vec![
             ("PREFIX".into(), EnvOp::Set(prefix.as_os_str().to_owned())),
-            ("TERMUX__ROOTFS".into(), EnvOp::Set(data_path.as_os_str().to_owned())),
-            ("TERMUX__PREFIX".into(), EnvOp::Set(prefix.as_os_str().to_owned())),
-            ("TERMUX__HOME".into(), EnvOp::Set(termux_home.as_os_str().to_owned())),
-            ("TERMUX_APP__PACKAGE_NAME".into(), EnvOp::Set(OsString::from("com.zdroid"))),
+            (
+                "TERMUX__ROOTFS".into(),
+                EnvOp::Set(data_path.as_os_str().to_owned()),
+            ),
+            (
+                "TERMUX__PREFIX".into(),
+                EnvOp::Set(prefix.as_os_str().to_owned()),
+            ),
+            (
+                "TERMUX__HOME".into(),
+                EnvOp::Set(termux_home.as_os_str().to_owned()),
+            ),
+            (
+                "TERMUX_APP__PACKAGE_NAME".into(),
+                EnvOp::Set(OsString::from("com.zdroid")),
+            ),
             // Override HOME for the bash subshell: process-side HOME
             // points at data_path (so upstream dirs::home_dir() does
             // not panic), but bash inheriting that makes `~/projects`
@@ -411,9 +444,12 @@ impl RuntimeProvider for BootstrapAdapter {
             // scripts to our prefix. Without this, `pkg install` of
             // any upstream package whose preinst has a hardcoded
             // shebang fails with EACCES.
-            ("LD_PRELOAD".into(), EnvOp::Set(OsString::from(
-                "/data/data/com.zdroid/files/usr/lib/libtermux-exec.so"
-            ))),
+            (
+                "LD_PRELOAD".into(),
+                EnvOp::Set(OsString::from(
+                    "/data/data/com.zdroid/files/usr/lib/libtermux-exec.so",
+                )),
+            ),
         ];
         let cert_path = prefix.join("etc/tls/cert.pem");
         if cert_path.is_file() {
