@@ -68,22 +68,18 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
 
     vec![
         Menu {
-            name: "Zdroid".into(),
+            name: "Zed".into(),
             disabled: false,
             items: vec![
-                MenuItem::action("About Zdroid", zed_actions::About),
-                #[cfg(not(target_os = "android"))]
+                MenuItem::action("About Zed", zed_actions::About),
                 MenuItem::action("Check for Updates", auto_update::Check),
                 MenuItem::separator(),
                 MenuItem::submenu(Menu::new("Settings").items([
                     MenuItem::action("Open Settings", zed_actions::OpenSettings),
                     MenuItem::action("Open Settings File", super::OpenSettingsFile),
                     MenuItem::action("Open Project Settings", zed_actions::OpenProjectSettings),
-                    MenuItem::action(
-                        "Open Project Settings File",
-                        zed_actions::OpenProjectSettingsFile,
-                    ),
-                    MenuItem::action("Open Default Settings", zed_actions::OpenDefaultSettings),
+                    MenuItem::action("Open Project Settings File", super::OpenProjectSettingsFile),
+                    MenuItem::action("Open Default Settings", super::OpenDefaultSettings),
                     MenuItem::separator(),
                     MenuItem::action("Open Keymap", zed_actions::OpenKeymap),
                     MenuItem::action("Open Keymap File", zed_actions::OpenKeymapFile),
@@ -107,13 +103,13 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action("Install CLI", install_cli::InstallCliBinary),
                 MenuItem::separator(),
                 #[cfg(target_os = "macos")]
-                MenuItem::action("Hide Zdroid", super::Hide),
+                MenuItem::action("Hide Zed", super::Hide),
                 #[cfg(target_os = "macos")]
                 MenuItem::action("Hide Others", super::HideOthers),
                 #[cfg(target_os = "macos")]
                 MenuItem::action("Show All", super::ShowAll),
                 MenuItem::separator(),
-                MenuItem::action("Quit Zdroid", Quit),
+                MenuItem::action("Quit Zed", Quit),
             ],
         },
         Menu {

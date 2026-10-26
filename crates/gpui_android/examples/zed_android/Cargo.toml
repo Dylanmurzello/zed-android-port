@@ -15,6 +15,7 @@ android-activity = { version = "0.6", features = ["game-activity"] }
 android_logger = "0.13"
 anyhow = "1"
 jni = "0.21"
+agent_settings = { path = "../../../agent_settings" }
 agent_ui = { path = "../../../agent_ui" }
 acp_tools = { path = "../../../acp_tools" }
 activity_indicator = { path = "../../../activity_indicator" }
@@ -43,7 +44,7 @@ git_hosting_providers = { path = "../../../git_hosting_providers" }
 git_ui_core = { path = "../../../git_ui_core" }
 language_extension = { path = "../../../language_extension" }
 go_to_line = { path = "../../../go_to_line" }
-gpui = { path = "../../../gpui" }
+gpui = { path = "../../../gpui", features = ["stacker"] }
 gpui_android = { path = "../../" }
 gpui_tokio = { path = "../../../gpui_tokio" }
 image_viewer = { path = "../../../image_viewer" }
@@ -58,12 +59,15 @@ lsp_command_selector = { path = "../../../lsp_command_selector" }
 lsp_locations = { path = "../../../lsp_locations" }
 languages = { path = "../../../languages", features = ["load-grammars"] }
 line_ending_selector = { path = "../../../line_ending_selector" }
+markdown = { path = "../../../markdown" }
 markdown_preview = { path = "../../../markdown_preview" }
+migrator = { path = "../../../migrator" }
 node_runtime = { path = "../../../node_runtime" }
 onboarding = { path = "../../../onboarding" }
 outline = { path = "../../../outline" }
 outline_panel = { path = "../../../outline_panel" }
 log = "0.4"
+parking_lot = "0.12.1"
 multi_buffer = { path = "../../../multi_buffer" }
 notifications = { path = "../../../notifications" }
 paths = { path = "../../../paths" }
@@ -71,8 +75,10 @@ project = { path = "../../../project" }
 prompt_store = { path = "../../../prompt_store" }
 project_panel = { path = "../../../project_panel" }
 project_symbols = { path = "../../../project_symbols" }
+rayon = "1.8"
 recent_projects = { path = "../../../recent_projects" }
 remote = { path = "../../../remote" }
+rope = { path = "../../../rope" }
 settings_profile_selector = { path = "../../../settings_profile_selector" }
 settings_ui = { path = "../../../settings_ui" }
 serde_json = "1"
@@ -82,12 +88,14 @@ snippets_ui = { path = "../../../snippets_ui" }
 svg_preview = { path = "../../../svg_preview" }
 tab_switcher = { path = "../../../tab_switcher" }
 tasks_ui = { path = "../../../tasks_ui" }
+telemetry = { path = "../../../telemetry" }
 terminal = { path = "../../../terminal" }
 terminal_view = { path = "../../../terminal_view" }
 theme_selector = { path = "../../../theme_selector" }
 toolchain_selector = { path = "../../../toolchain_selector" }
 which_key = { path = "../../../which_key" }
 shellexpand = "3.1"
+url = "2.2"
 util = { path = "../../../util" }
 watch = { path = "../../../watch" }
 workspace = { path = "../../../workspace" }

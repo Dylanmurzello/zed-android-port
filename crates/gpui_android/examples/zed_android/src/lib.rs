@@ -10,24 +10,30 @@ mod menu_bar;
 mod noexec_modal;
 mod runtime_picker;
 mod title_bar;
+mod zed;
 
-use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use android_activity::AndroidApp;
-use anyhow::Result;
-use client::{Client, UserStore};
+use anyhow::{Context as _, Result};
+use client::{Client, ProxySettings, UserStore};
 use db::AppDatabase;
 use db::kvp::KeyValueStore;
 use fs::{Fs, RealFs};
+use futures::StreamExt as _;
 use node_runtime::NodeRuntime;
 use project::Project;
 use prompt_store::PromptBuilder;
 use session::{AppSession, Session};
 use gpui::{App, AppContext as _, TaskExt as _, UpdateGlobal as _};
+use gpui_tokio::Tokio;
 use log::{error, info};
-use settings::{Settings as _, SettingsStore};
+use parking_lot::Mutex;
+use release_channel::AppVersion;
+use settings::{Settings as _, SettingsStore, watch_config_file};
+use theme::{ActiveTheme as _, ThemeRegistry};
+use theme_settings::load_user_theme;
 use util::ResultExt as _;
 use workspace::{
     AppState, CloseIntent, CloseProject, MultiWorkspace, OpenOptions, RestoreOnStartupBehavior,
@@ -195,104 +201,6 @@ async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut gpui::As
     Ok(())
 }
 
-/// Adds the agent panel unless `disable_ai` is set, and removes it when the
-/// setting turns on. Mirrors `setup_or_teardown_ai_panel` in
-/// crates/zed/src/zed.rs, which the Android app doesn't link.
-fn ensure_agent_panel(
-    workspace: &mut Workspace,
-    window: &mut gpui::Window,
-    cx: &mut gpui::Context<Workspace>,
-) -> gpui::Task<Result<()>> {
-    let disable_ai = project::DisableAiSettings::get_global(cx).disable_ai;
-    match (disable_ai, workspace.panel::<agent_ui::AgentPanel>(cx)) {
-        (false, None) => cx.spawn_in(window, async move |workspace, cx| {
-            let panel = agent_ui::AgentPanel::load(workspace.clone(), cx.clone()).await?;
-            workspace.update_in(cx, |workspace, window, cx| {
-                let disable_ai = project::DisableAiSettings::get_global(cx).disable_ai;
-                if !disable_ai && workspace.panel::<agent_ui::AgentPanel>(cx).is_none() {
-                    workspace.add_panel(panel, window, cx);
-                }
-            })
-        }),
-        (true, Some(panel)) => {
-            workspace.remove_panel(&panel, window, cx);
-            gpui::Task::ready(Ok(()))
-        }
-        _ => gpui::Task::ready(Ok(())),
-    }
-}
-
-/// Mirrors `initialize_pane` in crates/zed/src/zed.rs. Several views draw
-/// their controls in these toolbar items (project search's query field, the
-/// language server log's server picker, Keep and Reject for agent edits), so
-/// a missing item leaves its view without them. Left out are the items from
-/// crates the app doesn't build: the quick action bar, the settings
-/// migration banner, the debugger and telemetry logs, and the basedpyright
-/// banner.
-fn initialize_pane(
-    workspace: &Workspace,
-    pane: &gpui::Entity<workspace::Pane>,
-    window: &mut gpui::Window,
-    cx: &mut gpui::Context<Workspace>,
-) {
-    pane.update(cx, |pane, cx| {
-        pane.toolbar().update(cx, |toolbar, cx| {
-            let multibuffer_hint =
-                cx.new(|_| onboarding::multibuffer_hint::MultibufferHint::new());
-            toolbar.add_item(multibuffer_hint, window, cx);
-            let solo_diff_style_toolbar =
-                cx.new(git_ui::solo_diff_view::SoloDiffStyleToolbar::new);
-            toolbar.add_item(solo_diff_style_toolbar, window, cx);
-            let file_diff_style_toolbar =
-                cx.new(git_ui_core::file_diff_view::FileDiffStyleToolbar::new);
-            toolbar.add_item(file_diff_style_toolbar, window, cx);
-            let breadcrumbs = cx.new(|_| breadcrumbs::Breadcrumbs::new());
-            toolbar.add_item(breadcrumbs, window, cx);
-            let buffer_search_bar = cx.new(|cx| {
-                search::BufferSearchBar::new(
-                    Some(workspace.project().read(cx).languages().clone()),
-                    window,
-                    cx,
-                )
-            });
-            toolbar.add_item(buffer_search_bar, window, cx);
-            let diagnostic_editor_controls = cx.new(|_| diagnostics::ToolbarControls::new());
-            toolbar.add_item(diagnostic_editor_controls, window, cx);
-            let project_search_bar = cx.new(|_| search::project_search::ProjectSearchBar::new());
-            toolbar.add_item(project_search_bar, window, cx);
-            let lsp_log_item =
-                cx.new(|_| language_tools::lsp_log_view::LspLogToolbarItemView::new());
-            toolbar.add_item(lsp_log_item, window, cx);
-            let acp_tools_item = cx.new(|_| acp_tools::AcpToolsToolbarItemView::new());
-            toolbar.add_item(acp_tools_item, window, cx);
-            let syntax_tree_item = cx.new(|_| language_tools::SyntaxTreeToolbarItemView::new());
-            toolbar.add_item(syntax_tree_item, window, cx);
-            let highlights_tree_item =
-                cx.new(|_| language_tools::HighlightsTreeToolbarItemView::new());
-            toolbar.add_item(highlights_tree_item, window, cx);
-            let project_diff_toolbar =
-                cx.new(|cx| git_ui::project_diff::ProjectDiffToolbar::new(workspace, cx));
-            toolbar.add_item(project_diff_toolbar, window, cx);
-            let staged_diff_toolbar =
-                cx.new(|cx| git_ui::staged_diff::StagedDiffToolbar::new(workspace, cx));
-            toolbar.add_item(staged_diff_toolbar, window, cx);
-            let unstaged_diff_toolbar =
-                cx.new(|cx| git_ui::unstaged_diff::UnstagedDiffToolbar::new(workspace, cx));
-            toolbar.add_item(unstaged_diff_toolbar, window, cx);
-            let branch_diff_toolbar = cx.new(git_ui::branch_diff::BranchDiffToolbar::new);
-            toolbar.add_item(branch_diff_toolbar, window, cx);
-            let solo_diff_git_toolbar = cx.new(git_ui::solo_diff_view::SoloDiffGitToolbar::new);
-            toolbar.add_item(solo_diff_git_toolbar, window, cx);
-            let commit_view_toolbar = cx.new(|_| git_ui::commit_view::CommitViewToolbar::new());
-            toolbar.add_item(commit_view_toolbar, window, cx);
-            let agent_diff_toolbar = cx.new(agent_ui::AgentDiffToolbar::new);
-            toolbar.add_item(agent_diff_toolbar, window, cx);
-            let image_view_toolbar = cx.new(|_| image_viewer::ImageViewToolbarControls::new());
-            toolbar.add_item(image_view_toolbar, window, cx);
-        })
-    });
-}
-
 fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowOptions {
     gpui::WindowOptions::default()
 }
@@ -331,30 +239,116 @@ fn active_provider(data_path: &std::path::Path) -> Box<dyn RuntimeProvider> {
 }
 
 
-// Bundled fonts. Upstream Zed walks `assets/fonts/` via `AssetSource`
-// at boot (see `load_embedded_fonts` in crates/zed/src/main.rs) and
-// hands every `.ttf` to `cx.text_system().add_fonts(...)`. The Android
-// example doesn't run that loader, so until this list was filled out
-// only Lilex-Regular existed in the text system: bold/italic fell back
-// to faux-styled rasterizer output, IBM Plex Sans (the upstream UI
-// font) was unavailable, and any `buffer_font_family` setting pointing
-// at a different family silently no-op'd.
-//
-// `include_bytes!` baked into the .so means the fonts ship in the APK
-// without going through AAssetManager — they're literally in the .so's
-// rodata, so first read is mmap-direct with no extract / decompress
-// step. Total budget across the 8 weights is ~3 MB, irrelevant against
-// the bundled bootstrap zip.
-const BUNDLED_FONTS: &[&[u8]] = &[
-    include_bytes!("../../../../../assets/fonts/lilex/Lilex-Regular.ttf"),
-    include_bytes!("../../../../../assets/fonts/lilex/Lilex-Bold.ttf"),
-    include_bytes!("../../../../../assets/fonts/lilex/Lilex-Italic.ttf"),
-    include_bytes!("../../../../../assets/fonts/lilex/Lilex-BoldItalic.ttf"),
-    include_bytes!("../../../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf"),
-    include_bytes!("../../../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf"),
-    include_bytes!("../../../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf"),
-    include_bytes!("../../../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf"),
-];
+// The next three are copies of the functions in Zed's crates/zed/src/main.rs.
+fn load_embedded_fonts(cx: &App) {
+    let asset_source = cx.asset_source();
+    let font_paths = asset_source.list("fonts").unwrap();
+    let embedded_fonts = Mutex::new(Vec::new());
+    let executor = cx.background_executor();
+
+    cx.foreground_executor().block_on(executor.scoped(|scope| {
+        for font_path in &font_paths {
+            if !font_path.ends_with(".ttf") {
+                continue;
+            }
+
+            scope.spawn(async {
+                let font_bytes = asset_source.load(font_path).unwrap().unwrap();
+                embedded_fonts.lock().push(font_bytes);
+            });
+        }
+    }));
+
+    cx.text_system()
+        .add_fonts(embedded_fonts.into_inner())
+        .unwrap();
+}
+
+/// Spawns a background task to load the user themes from the themes directory.
+fn load_user_themes_in_background(fs: Arc<dyn fs::Fs>, cx: &mut App) {
+    cx.spawn({
+        let fs = fs.clone();
+        async move |cx| {
+            let theme_registry = cx.update(|cx| ThemeRegistry::global(cx));
+            let themes_dir = paths::themes_dir().as_ref();
+            match fs
+                .metadata(themes_dir)
+                .await
+                .ok()
+                .flatten()
+                .map(|m| m.is_dir)
+            {
+                Some(is_dir) => {
+                    anyhow::ensure!(is_dir, "Themes dir path {themes_dir:?} is not a directory")
+                }
+                None => {
+                    fs.create_dir(themes_dir).await.with_context(|| {
+                        format!("Failed to create themes dir at path {themes_dir:?}")
+                    })?;
+                }
+            }
+
+            let mut theme_paths = fs
+                .read_dir(themes_dir)
+                .await
+                .with_context(|| format!("reading themes from {themes_dir:?}"))?;
+
+            while let Some(theme_path) = theme_paths.next().await {
+                let Some(theme_path) = theme_path.log_err() else {
+                    continue;
+                };
+                let Some(bytes) = fs
+                    .load_bytes(&theme_path)
+                    .await
+                    .with_context(|| format!("loading theme bytes from {theme_path:?}"))
+                    .log_err()
+                else {
+                    continue;
+                };
+
+                load_user_theme(&theme_registry, &bytes).log_err();
+            }
+
+            cx.update(theme_settings::reload_theme);
+            anyhow::Ok(())
+        }
+    })
+    .detach_and_log_err(cx);
+}
+
+/// Spawns a background task to watch the themes directory for changes.
+fn watch_themes(fs: Arc<dyn fs::Fs>, cx: &mut App) {
+    use std::time::Duration;
+    cx.spawn(async move |cx| {
+        let (mut events, _) = fs
+            .watch(paths::themes_dir(), Duration::from_millis(100))
+            .await;
+
+        while let Some(paths) = events.next().await {
+            for event in paths {
+                if fs
+                    .metadata(&event.path)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|m| !m.is_dir)
+                {
+                    let theme_registry = cx.update(|cx| ThemeRegistry::global(cx));
+                    if let Some(bytes) = fs
+                        .load_bytes(&event.path)
+                        .await
+                        .with_context(|| format!("loading theme bytes from {:?}", event.path))
+                        .log_err()
+                        && load_user_theme(&theme_registry, &bytes).log_err().is_some()
+                    {
+                        cx.update(theme_settings::reload_theme);
+                    }
+                }
+            }
+        }
+    })
+    .detach()
+}
 
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
@@ -549,56 +543,25 @@ fn android_main(app: AndroidApp) {
         );
     }
 
+    // As in Zed's main(), which android_main stands in for. android_main runs
+    // again when the activity is recreated, and both of these are once per
+    // process.
+    static PROCESS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    PROCESS_INITIALIZED.get_or_init(|| {
+        util::increase_open_file_limit().log_err();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(std::thread::available_parallelism().map_or(1, |n| n.get().div_ceil(2)))
+            .stack_size(10 * 1024 * 1024)
+            .thread_name(|ix| format!("RayonWorker{}", ix))
+            .build_global()
+            .log_err();
+    });
+
     gpui_android::run(app, assets::Assets, move |cx: &mut App| {
         if let Err(err) = boot(cx, &data_path) {
             error!("zed_android: boot failed: {err:#}");
         }
     });
-}
-
-/// Bind the default keymap plus the vim keymap when vim/helix mode is
-/// enabled. Mirrors `crates/zed/src/zed.rs::load_default_keymap` /
-/// `reload_keymaps`: clears all bindings and re-binds from scratch so
-/// disabling vim mode actually removes the vim keybindings instead of
-/// leaving them stacked on top of the defaults.
-///
-/// Called once during boot AFTER all `_init(cx)` calls have registered
-/// their actions (otherwise `load_asset_allow_partial_failure` silently
-/// drops bindings for unknown actions). Re-invoked on every
-/// `SettingsStore` change so toggling `vim_mode` from the command
-/// palette or settings.json takes effect immediately.
-fn reload_zdroid_keymaps(cx: &mut App) {
-    cx.clear_key_bindings();
-    match settings::KeymapFile::load_asset_allow_partial_failure(
-        settings::DEFAULT_KEYMAP_PATH,
-        cx,
-    ) {
-        Ok(bindings) => {
-            info!(
-                "zed_android: loaded {} key bindings from default keymap",
-                bindings.len(),
-            );
-            cx.bind_keys(bindings);
-        }
-        Err(err) => error!("zed_android: default keymap load failed: {err:#}"),
-    }
-    let vim_enabled = vim_mode_setting::VimModeSetting::is_enabled(cx)
-        || vim_mode_setting::HelixModeSetting::is_enabled(cx);
-    if vim_enabled {
-        match settings::KeymapFile::load_asset_allow_partial_failure(
-            settings::VIM_KEYMAP_PATH,
-            cx,
-        ) {
-            Ok(bindings) => {
-                info!(
-                    "zed_android: loaded {} vim/helix key bindings",
-                    bindings.len(),
-                );
-                cx.bind_keys(bindings);
-            }
-            Err(err) => error!("zed_android: vim keymap load failed: {err:#}"),
-        }
-    }
 }
 
 fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
@@ -744,11 +707,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     info!("zed_android: release_channel init");
     migrate_development_credentials(cx);
 
-    info!("zed_android: http client init");
-    let http = ReqwestClient::user_agent("zed_android/0.1")?;
-    cx.set_http_client(Arc::new(http));
-    info!("zed_android: http client set");
-
     info!("zed_android: settings + theme + editor init");
     settings::init(cx);
     zlog_settings::init(cx);
@@ -759,6 +717,31 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     //   `RustPanic: no state of type gpui_tokio::GlobalTokio exists`
     // (caught it once on Android, then added this).
     gpui_tokio::init(cx);
+
+    let fs: Arc<dyn Fs> = RealFs::new(None, cx.background_executor().clone());
+    zed::watch_settings_files(fs.clone(), cx);
+    let (user_keymap_file_rx, user_keymap_watcher) = watch_config_file(
+        cx.background_executor(),
+        fs.clone(),
+        paths::keymap_file().clone(),
+    );
+    zed::handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
+
+    let user_agent = format!(
+        "Zed/{} ({}; {})",
+        AppVersion::global(cx),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    let proxy_url = ProxySettings::get_global(cx).proxy_url();
+    let http = {
+        let _guard = Tokio::handle(cx).enter();
+
+        ReqwestClient::proxy_and_user_agent(proxy_url, &user_agent)?
+    };
+    cx.set_http_client(Arc::new(http));
+    <dyn Fs>::set_global(fs.clone(), cx);
+
     // `extension::init` creates the global ExtensionHostProxy that all
     // extension contribution registries (theme, language, debug-adapter)
     // hang off of. Has to run BEFORE any of those `*_extension::init`
@@ -797,6 +780,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     info!("zed_android: Session opened");
 
     let client = Client::production(cx);
+    cx.set_http_client(client.http_client());
     info!("zed_android: Client::production constructed (id={})", client.id());
 
     // Initialize auto_update so the remote_server CDN-fetch path can
@@ -861,8 +845,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
     info!("zed_android: UserStore + WorkspaceStore constructed");
 
-    let fs: Arc<dyn Fs> = RealFs::new(None, cx.background_executor().clone());
-    <dyn Fs>::set_global(fs.clone(), cx);
     // Real NodeRuntime, mirroring crates/zed/src/main.rs:496-518. The
     // earlier port stage stubbed this out as `NodeRuntime::unavailable()`
     // back when Termux's Node didn't run on bionic — pre L3 npm intercept
@@ -904,24 +886,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         node_options_tx.send(Some(options)).log_err();
     })
     .detach();
+    ui::on_new_scrollbars::<SettingsStore>(cx);
     let node_runtime = NodeRuntime::new(client.http_client(), None, node_options_rx);
     info!("zed_android: RealFs + NodeRuntime constructed (PATH lookup + managed download)");
 
-    // Mirror production zed::watch_settings_files. Without this, edits to
-    // ~/.config/zed/settings.json on disk never propagate into the running
-    // app — themes, keybindings, terminal.shell etc. only honoured on
-    // restart. Production also wires migration notifications; we skip those
-    // because we don't ship the upgrade path UI yet.
-    settings::SettingsStore::update_global(cx, |store, cx| {
-        store.watch_settings_files(fs.clone(), cx, |settings_file, result, _cx| {
-            if let settings::ParseStatus::Failed { error } = &result.parse_status {
-                log::error!(
-                    "zed_android: settings parse failed ({settings_file:?}): {error}"
-                );
-            }
-        });
-    });
-    info!("zed_android: settings file watcher attached");
 
     // Mirror `android_input.*` settings into gpui_android's runtime
     // atomics directly via observe_global, NOT via per-paint
@@ -987,12 +955,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     .detach();
     info!("zed_android: vim-mode IME routing observer registered");
 
-    cx.text_system().add_fonts(
-        BUNDLED_FONTS
-            .iter()
-            .map(|bytes| Cow::Borrowed(*bytes))
-            .collect(),
-    )?;
+    load_embedded_fonts(cx);
 
     let mut language_registry =
         language::LanguageRegistry::new(cx.background_executor().clone());
@@ -1007,27 +970,24 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     );
     info!("zed_android: languages::init complete (load-grammars feature on)");
 
-    // language_extension::init registers grammar/language/language-server
-    // proxies on the global ExtensionHostProxy so extension-installed
-    // languages and LSPs route through Zed's normal language registry.
-    // Must come AFTER `languages::init` (the registry has to exist) and
-    // AFTER `extension::init` (the proxy has to exist).
-    //
-    // Production passes `LspAccess::ViaWorkspaces(...)` so extension-
-    // installed LSPs get auto-registered against every active workspace.
-    // We use `Noop` for now — extensions can still contribute languages,
-    // grammars, and themes; LSP-from-extension will require wiring
-    // `ViaWorkspaces` against the multi-workspace scope, which is its
-    // own follow-up because Android's `MultiWorkspace` differs in shape
-    // from desktop.
-    {
-        let extension_host_proxy = extension::ExtensionHostProxy::global(cx);
-        language_extension::init(
-            language_extension::LspAccess::Noop,
-            extension_host_proxy,
-            language_registry.clone(),
-        );
-    }
+    language_extension::init(
+        language_extension::LspAccess::ViaWorkspaces({
+            let workspace_store = workspace_store.clone();
+            Arc::new(move |cx: &mut App| {
+                workspace_store.update(cx, |workspace_store, cx| {
+                    Ok(workspace_store
+                        .workspaces()
+                        .filter_map(|weak| weak.upgrade())
+                        .map(|workspace: gpui::Entity<workspace::Workspace>| {
+                            workspace.read(cx).project().read(cx).lsp_store()
+                        })
+                        .collect())
+                })
+            })
+        }),
+        extension::ExtensionHostProxy::global(cx),
+        language_registry.clone(),
+    );
 
     let registry = theme::ThemeRegistry::global(cx);
     info!(
@@ -1124,6 +1084,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     }
 
     Client::set_global(client.clone(), cx);
+    zed::init(cx);
     client::init(&client, cx);
     // Register the TrustedWorktrees global. git_store reads it via
     // `try_get_global` when a repo is added; without it, `is_trusted`
@@ -1183,6 +1144,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             node_runtime.clone(),
             cx,
         );
+        zed::eager_load_active_theme_and_icon_theme(fs.clone(), cx);
         debug_adapter_extension::init(extension_host_proxy.clone(), cx);
         theme_extension::init(
             extension_host_proxy,
@@ -1200,10 +1162,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // Mirror production zed/src/main.rs:710. setup_search_bar is fired
     // from `terminal_panel.rs::TerminalPanel::new` ONLY — i.e. when the
     // terminal panel adds its own internal buffer search. It is NOT
-    // called for editor panes; production wires those via initialize_pane
-    // in zed/src/zed.rs:1234, which we mirror further down inside the
-    // workspace observe_new (so editor-pane toolbars get BufferSearchBar
-    // + ProjectSearchBar there).
+    // called for editor panes; `zed::initialize_pane` adds those, as in
+    // Zed.
     cx.set_global(workspace::PaneSearchBarCallbacks {
         setup_search_bar: |languages, toolbar, window, cx| {
             let search_bar = cx.new(|cx| search::BufferSearchBar::new(languages, window, cx));
@@ -1271,6 +1231,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         false,
         cx,
     );
+    zed::watch_user_agents_md(app_state.fs.clone(), cx);
     acp_tools::init(cx);
     // Also covers the git graph (commit history) view: upstream folded
     // crates/git_graph into git_ui, so its serializable item, action
@@ -1336,9 +1297,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     .detach();
 
     settings_ui::init(cx);
-    workspace::init_settings_file_actions(cx);
     logging::init(cx);
-    editor::init_bundled_file_actions(cx);
     terminal_view::init(cx);
     // Onboarding reads `AllAgentServersSettings` from the SettingsStore;
     // `SettingsStore::get` panics if the type isn't registered, so register
@@ -1352,55 +1311,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         "zed_android: workspace + diagnostics + search + file_finder + outline_panel + onboarding + menu_bar init complete"
     );
 
-    // Keymap load runs LAST: `_allow_partial_failure` skips any binding
-    // whose action isn't registered yet, so loading before each crate's
-    // `init` would silently drop every workspace::*, project_panel::*,
-    // command_palette::*, vim::*, etc. binding. By the time we reach this
-    // point everything has registered.
-    reload_zdroid_keymaps(cx);
-    // Mirror production's `reload_keymaps` flow on `VimModeSetting`
-    // change: without this, toggling vim mode (via `ToggleVimMode`
-    // action or settings.json edit) flips the setting and updates
-    // the mode indicator, but no vim keybindings are bound to the
-    // action dispatcher — `hjkl`/`i`/`:w` etc. fire nothing.
-    cx.observe_global::<settings::SettingsStore>(|cx| {
-        reload_zdroid_keymaps(cx);
-    })
-    .detach();
+    zed::initialize_workspace(app_state.clone(), cx);
 
-    // Mirror crates/zed's `initialize_workspace`: every MultiWorkspace gets
-    // the sidebar that lists projects and agent threads (closed by default).
-    cx.observe_new(|_: &mut MultiWorkspace, window, cx| {
-        let Some(window) = window else { return };
-        let window_handle = window.window_handle();
-        let multi_workspace_handle = cx.entity();
-        cx.defer(move |cx| {
-            window_handle
-                .update(cx, |_, window, cx| {
-                    let sidebar = cx
-                        .new(|cx| sidebar::Sidebar::new(multi_workspace_handle.clone(), window, cx));
-                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
-                        multi_workspace.register_sidebar(sidebar, cx);
-                    });
-                })
-                .log_err();
-        });
-    })
-    .detach();
-
-    // Mirror production's zed/src/zed.rs `initialize_panels`: every
-    // newly-constructed workspace asynchronously loads each panel and
-    // attaches it. Production loads project / outline / terminal / git /
-    // collab / debug / agent panels in parallel; we only ship the ones
-    // whose deps are already wired (project_panel, outline_panel for now).
-    // The PanelButtons in the status bar render one button per
-    // registered panel, so adding more panels here surfaces more
-    // bottom-bar buttons for free.
     let observe_app_state = app_state.clone();
     cx.observe_new(move |workspace: &mut Workspace, window, cx| {
         let Some(window) = window else { return };
-
-        workspace.register_action(editor::open_project_settings_file);
 
         // CloseProject: action wired in production at
         // `crates/zed/src/zed.rs:1123-1180`. Production binds it inside
@@ -1473,78 +1388,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             }
         });
 
-        // Status bar items, mirroring production zed/src/zed.rs, minus
-        // edit_prediction_ui: the app registers no AI model providers.
-        let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
-        let diagnostic_summary =
-            cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
-        let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
-        let activity_indicator =
-            activity_indicator::ActivityIndicator::new(workspace, window, cx);
-        let active_buffer_encoding =
-            cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
-        let active_buffer_language =
-            cx.new(|_| language_selector::ActiveBufferLanguage::new(workspace));
-        let active_toolchain_language =
-            cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
-        let vim_mode_indicator = cx.new(|cx| vim::ModeIndicator::new(window, cx));
-        let pending_keystrokes_indicator =
-            cx.new(|cx| which_key::PendingKeystrokesIndicator::new(window, cx));
-        let image_info = cx.new(|_| image_viewer::ImageInfo::new(workspace));
-        let cursor_position =
-            cx.new(|_| go_to_line::cursor_position::CursorPosition::new(workspace));
-        let line_ending_indicator =
-            cx.new(|_| line_ending_selector::LineEndingIndicator::default());
-        let git_blame_status = cx.new(|_| git_ui::GitBlameStatus::default());
-        let merge_conflict_indicator =
-            cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
-
-        // LspButton needs a handle for the toggle action, same as production.
-        let lsp_button_menu_handle =
-            ui::PopoverMenuHandle::<ui::ContextMenu>::default();
-        let lsp_button = cx.new(|cx| {
-            language_tools::lsp_button::LspButton::new(
-                workspace,
-                lsp_button_menu_handle.clone(),
-                window,
-                cx,
-            )
-        });
-        workspace.register_action({
-            let handle = lsp_button_menu_handle.clone();
-            move |_, _: &language_tools::lsp_button::ToggleMenu, window, cx| {
-                handle.toggle(window, cx);
-            }
-        });
-
-        workspace.status_bar().update(cx, |status_bar, cx| {
-            status_bar.add_left_item(search_button, window, cx);
-            status_bar.add_left_item(lsp_button, window, cx);
-            status_bar.add_left_item(diagnostic_summary, window, cx);
-            status_bar.add_left_item(active_file_name, window, cx);
-            status_bar.add_left_item(git_blame_status, window, cx);
-            status_bar.add_left_item(merge_conflict_indicator, window, cx);
-            status_bar.add_left_item(activity_indicator, window, cx);
-            status_bar.add_right_item(active_buffer_encoding, window, cx);
-            status_bar.add_right_item(active_buffer_language, window, cx);
-            status_bar.add_right_item(active_toolchain_language, window, cx);
-            status_bar.add_right_item(line_ending_indicator, window, cx);
-            status_bar.add_right_item(cursor_position, window, cx);
-            status_bar.add_right_item(image_info, window, cx);
-            status_bar.add_right_item(vim_mode_indicator, window, cx);
-            status_bar.add_right_item(pending_keystrokes_indicator, window, cx);
-        });
-
-        let active_pane = workspace.active_pane().clone();
-        initialize_pane(workspace, &active_pane, window, cx);
-        let workspace_handle = cx.entity();
-        cx.subscribe_in(&workspace_handle, window, |workspace, _, event, window, cx| {
-            if let workspace::Event::PaneAdded(pane) = event {
-                initialize_pane(workspace, pane, window, cx);
-            }
-        })
-        .detach();
-
         // Custom always-on application menu bar. On Android there's no
         // native menu surface and the production `title_bar` crate pulls
         // in audio/livekit/auto_update/git_ui — too heavy for this stage.
@@ -1568,75 +1411,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         });
         let header = cx.new(|_| header::Header::new(menu_bar, title_bar));
         workspace.set_titlebar_item(header.into(), window, cx);
-
-        // Mirror production's `initialize_panels`: every newly-constructed
-        // workspace asynchronously loads each panel and attaches it.
-        // Production loads project / outline / terminal / git / collab /
-        // debug / agent panels in parallel; we only ship the ones whose
-        // deps are already wired. The PanelButtons in the status bar
-        // render one button per registered panel, so adding more panels
-        // surfaces more bottom-bar buttons for free.
-        let weak = cx.weak_entity();
-        cx.spawn_in(window, async move |_, cx| {
-            let project_panel =
-                project_panel::ProjectPanel::load(weak.clone(), cx.clone());
-            let outline_panel =
-                outline_panel::OutlinePanel::load(weak.clone(), cx.clone());
-            let terminal_panel =
-                terminal_view::terminal_panel::TerminalPanel::load(weak.clone(), cx.clone());
-            let git_panel =
-                git_ui::git_panel::GitPanel::load(weak.clone(), cx.clone());
-            let (project_panel, outline_panel, terminal_panel, git_panel) =
-                futures::future::join4(
-                    project_panel,
-                    outline_panel,
-                    terminal_panel,
-                    git_panel,
-                )
-                .await;
-            weak.update_in(cx, |workspace, window, cx| {
-                if let Ok(panel) = project_panel {
-                    workspace.add_panel(panel, window, cx);
-                }
-                if let Ok(panel) = outline_panel {
-                    workspace.add_panel(panel, window, cx);
-                }
-                if let Ok(panel) = terminal_panel {
-                    workspace.add_panel(panel, window, cx);
-                }
-                if let Ok(panel) = git_panel {
-                    workspace.add_panel(panel, window, cx);
-                }
-            })?;
-            anyhow::Ok(())
-        })
-        .detach_and_log_err(cx);
-
-        // Mirror crates/zed's `initialize_agent_panel`.
-        ensure_agent_panel(workspace, window, cx).detach_and_log_err(cx);
-        cx.observe_global_in::<SettingsStore>(window, |workspace, window, cx| {
-            ensure_agent_panel(workspace, window, cx).detach_and_log_err(cx);
-        })
-        .detach();
-        workspace
-            .register_action(agent_ui::AgentPanel::toggle_focus)
-            .register_action(agent_ui::AgentPanel::focus)
-            .register_action(agent_ui::AgentPanel::toggle)
-            .register_action(agent_ui::InlineAssistant::inline_assist);
     })
     .detach();
-
-    // Quit action handler. Upstream `crates/zed/src/zed.rs` wires
-    // `zed_actions::Quit` to `cx.quit()` in several places, but none of
-    // those registration paths run in the Android entry — we don't pull
-    // in `crates/zed`'s init code. Without this handler the Zdroid
-    // menu's "Quit" item dispatches the action and nothing responds, so
-    // the user just sees no effect. `cx.quit()` triggers gpui's
-    // shutdown sequence which eventually reaches
-    // `AndroidPlatform::quit` and exits the process.
-    cx.on_action(|_: &zed_actions::Quit, cx: &mut App| {
-        cx.quit();
-    });
 
     // Check-for-Updates handler is registered per-workspace above so
     // it has Window access for prompts. The upstream
@@ -1769,16 +1545,76 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // construct the Project, build Workspace + MultiWorkspace, and run
     // their own `init` callback. We don't need to do any of that
     // manually; `observe_new` above attaches the project panel.
+    cx.observe_global::<SettingsStore>({
+        let http = app_state.client.http_client();
+        let client = app_state.client.clone();
+        move |cx| {
+            for &mut window in cx.windows().iter_mut() {
+                let background_appearance = cx.theme().window_background_appearance();
+                window
+                    .update(cx, |_, window, _| {
+                        window.set_background_appearance(background_appearance)
+                    })
+                    .ok();
+            }
+
+            cx.set_text_rendering_mode(
+                match WorkspaceSettings::get_global(cx).text_rendering_mode {
+                    settings::TextRenderingMode::PlatformDefault => {
+                        gpui::TextRenderingMode::PlatformDefault
+                    }
+                    settings::TextRenderingMode::Subpixel => gpui::TextRenderingMode::Subpixel,
+                    settings::TextRenderingMode::Grayscale => gpui::TextRenderingMode::Grayscale,
+                },
+            );
+
+            let new_host = &client::ClientSettings::get_global(cx).server_url;
+            if &http.base_url() != new_host {
+                http.set_base_url(new_host);
+                if client.status().borrow().is_connected() {
+                    client.reconnect(&cx.to_async());
+                }
+            }
+        }
+    })
+    .detach();
+
+    load_user_themes_in_background(fs.clone(), cx);
+    watch_themes(fs.clone(), cx);
+
+    let (current_session_id, last_session_id) = {
+        let session = app_state.session.read(cx);
+        (
+            session.id().to_owned(),
+            session.last_session_id().map(|id| id.to_owned()),
+        )
+    };
+
     let kvp = KeyValueStore::global(cx);
-    if matches!(kvp.read_kvp(onboarding::FIRST_OPEN), Ok(None)) {
+    let restore_task = if matches!(kvp.read_kvp(onboarding::FIRST_OPEN), Ok(None)) {
         info!("zed_android: first launch → show_onboarding_view");
-        onboarding::show_onboarding_view(app_state.clone(), cx)
-            .detach_and_log_err(cx);
+        let onboarding = onboarding::show_onboarding_view(app_state.clone(), cx);
+        cx.spawn(async move |_| onboarding.await.log_err())
     } else {
         info!("zed_android: returning launch → restore_or_create_workspace");
-        cx.spawn(async move |cx| restore_or_create_workspace(app_state, cx).await)
-            .detach_and_log_err(cx);
-    }
+        let app_state = app_state.clone();
+        cx.spawn(async move |cx| restore_or_create_workspace(app_state, cx).await.log_err())
+    };
+
+    cx.spawn({
+        let db = WorkspaceDb::global(cx);
+        let fs = app_state.fs.clone();
+        async move |_cx| {
+            restore_task.await;
+            db.garbage_collect_workspaces(
+                fs.as_ref(),
+                &current_session_id,
+                last_session_id.as_deref(),
+            )
+            .await
+        }
+    })
+    .detach_and_log_err(cx);
 
     Ok(())
 }

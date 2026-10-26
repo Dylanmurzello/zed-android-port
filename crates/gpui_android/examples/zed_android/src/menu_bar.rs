@@ -284,11 +284,8 @@ fn zed_menu_items() -> Vec<MenuEntry> {
 }
 
 /// Settings submenu nested under Zed — mirrors production
-/// `crates/zed/src/zed/app_menus.rs:69-87`. All ten entries the user
-/// listed: file/default-variant handlers landed in `editor` and
-/// `workspace` (see `editor::init_bundled_file_actions`,
-/// `workspace::init_settings_file_actions`,
-/// `editor::open_project_settings_file`).
+/// `crates/zed/src/zed/app_menus.rs:69-87`. `zed.rs` handles the file and
+/// default-file entries, as in Zed.
 fn zed_settings_submenu_items() -> Vec<MenuEntry> {
     vec![
         MenuEntry::Action("Open Settings", Box::new(zed_actions::OpenSettings)),
@@ -302,11 +299,11 @@ fn zed_settings_submenu_items() -> Vec<MenuEntry> {
         ),
         MenuEntry::Action(
             "Open Project Settings File",
-            Box::new(zed_actions::OpenProjectSettingsFile),
+            Box::new(crate::zed::OpenProjectSettingsFile),
         ),
         MenuEntry::Action(
             "Open Default Settings",
-            Box::new(zed_actions::OpenDefaultSettings),
+            Box::new(crate::zed::OpenDefaultSettings),
         ),
         MenuEntry::Separator,
         MenuEntry::Action("Open Keymap", Box::new(zed_actions::OpenKeymap)),
