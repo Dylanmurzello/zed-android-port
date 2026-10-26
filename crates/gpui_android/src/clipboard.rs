@@ -90,7 +90,7 @@ pub(crate) fn write(android_app: &AndroidApp, item: ClipboardItem) {
     // The JNI chain (attach_current_thread → getSystemService →
     // ClipData.newPlainText → setPrimaryClip) eats a few hundred KB of
     // Java stack, and the gpui render/dispatch thread that calls us
-    // already runs at ~70-90% of the 988KB android_main stack on Tab S9.
+    // already runs at ~70-90% of the 988KB android_main stack.
     // Calling JNI from here trips StackOverflowError on the JVM side
     // (mid-printStackTrace, no less — the linker can't even tell us
     // what failed). Same class of bug as the read-path 60fps cascade.

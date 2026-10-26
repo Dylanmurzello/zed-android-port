@@ -58,8 +58,8 @@ type SetFrameRateFn =
 /// app where smoother is always better.
 const FRAME_RATE_COMPATIBILITY_DEFAULT: i8 = 0;
 
-/// Target frame rate. Samsung Tab S9 Ultra / Pixel Tablet support
-/// 120Hz panels; mid-range devices typically expose 90Hz; older
+/// Target frame rate. High-end tablets and phones have 120Hz
+/// panels; mid-range devices typically expose 90Hz; older
 /// devices stay at 60Hz. When the panel can't deliver the requested
 /// rate the compositor downgrades transparently, so hardcoding the
 /// max we care about is safe across the device matrix. Floating-point
@@ -70,8 +70,8 @@ const TARGET_FRAME_RATE_HZ: f32 = 120.0;
 /// refresh rate. No-op on API 26-29 (returns `false`).
 ///
 /// CRITICAL: passing `0.0` Hz here means "I'm inactive / I have no
-/// preference" — Samsung's adaptive panel reads that as a hint to drop
-/// to its idle rate (30Hz on Tab S9 Ultra), producing visible 33ms
+/// preference" — an adaptive-refresh panel reads that as a hint to drop
+/// to its idle rate (as low as 30Hz), producing visible 33ms
 /// vsync intervals and the user-visible stutter that motivated this
 /// fix. Always pass a positive frame rate so the panel knows we're an
 /// active app that wants high refresh.
@@ -255,7 +255,7 @@ impl AndroidCommon {
         // anyway, but we previously avoided it because the cost was
         // unbounded). Now we opt back in to /system/fonts/ specifically
         // — that dir alone is well-bounded (~70 .ttf/.otf files, ~60ms
-        // first-load on Snapdragon 8 Gen 2) and surfaces NotoSansSymbols2,
+        // first-load on a high-end device) and surfaces NotoSansSymbols2,
         // NotoColorEmoji, DroidSansMono, plus the full Noto family for
         // CJK / Cyrillic / Arabic / etc. Without this fallback, prompts
         // and statuslines that use powerline glyphs (`❯` U+276F),
@@ -373,8 +373,8 @@ impl AndroidPlatform {
     }
 
     /// Read the device's display density and convert to a scale factor.
-    /// Android reports density in dpi where 160 dpi = 1.0x. Tab S9 Ultra
-    /// reports ~336 dpi (~2.1x). Falls back to 1.0 if the density isn't yet
+    /// Android reports density in dpi where 160 dpi = 1.0x, so 336 dpi
+    /// becomes ~2.1x. Falls back to 1.0 if the density isn't yet
     /// reported (e.g. very early in startup before the first config arrives).
     fn compute_scale_factor(&self) -> f32 {
         match self.android_app.config().density() {

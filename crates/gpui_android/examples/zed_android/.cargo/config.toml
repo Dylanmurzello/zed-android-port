@@ -1,7 +1,7 @@
-# Snapdragon 8 Gen 2 (Cortex-X3 + cores) supports Armv8.2 fullfp16, so enable
-# it explicitly. cargo-ndk picks API 24 by default, which predates fullfp16
-# being on by default, and `gemm-f16` (pulled in via candle → audio → call →
-# git_ui → project_panel) refuses to assemble its `fmla *.8h` SIMD path
+# Armv8.2 and later CPUs support half-precision arithmetic (fullfp16), so
+# enable it explicitly. cargo-ndk picks API 24 by default, which predates
+# fullfp16 being on by default, and `gemm-f16` (pulled in via candle → audio →
+# call → git_ui → project_panel) refuses to assemble its `fmla *.8h` SIMD path
 # without it.
 #
 # The rest shrinks the `.so`. Like Zed's `script/bundle-linux`, the linker

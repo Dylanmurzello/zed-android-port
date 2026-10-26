@@ -19,8 +19,8 @@
 //!    styles. (Currently handled implicitly: Android only delivers
 //!    `HOVER_*` from mouse/stylus sources, so we already bail out for
 //!    touch. This classifier is here for future explicit branches.)
-//! 3. **Pointer-capture decisions.** Samsung Book Cover trackpad in
-//!    tablet mode reports as `Source::Mouse` with relative motion;
+//! 3. **Pointer-capture decisions.** Samsung's keyboard-cover trackpad
+//!    in tablet mode reports as `Source::Mouse` with relative motion;
 //!    if we ever request `requestPointerCapture()`, we'll branch on
 //!    `Touchpad` to enable it without affecting actual hardware mice.
 
@@ -29,16 +29,16 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputSource {
-    /// Hardware mouse (USB / Bluetooth). Includes Samsung Book Cover
+    /// Hardware mouse (USB / Bluetooth). Includes Samsung's keyboard-cover
     /// trackpad in non-DeX mode (which Android surfaces as `Source::Mouse`
     /// with relative axes).
     Mouse,
-    /// Active stylus (S-Pen, Apple Pencil emulator via Bluetooth, etc.)
-    /// or eraser end of same. Treated identically to mouse for click
-    /// timing because both are precision-aimed.
+    /// Active stylus (built-in or Bluetooth) or eraser end of same.
+    /// Treated identically to mouse for click timing because both are
+    /// precision-aimed.
     Stylus,
-    /// Standalone trackpad (rare on Android; the DeX trackpad surfaces
-    /// as Mouse instead). Currently behaves like mouse; reserved as a
+    /// Standalone trackpad (rare on Android; Samsung's cover trackpad
+    /// surfaces as Mouse instead). Currently behaves like mouse; reserved as a
     /// distinct variant for the pointer-capture branch.
     Touchpad,
     /// Finger on touchscreen. Default when source/tool_type don't

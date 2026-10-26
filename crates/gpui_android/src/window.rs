@@ -227,8 +227,8 @@ impl AndroidWindowStatePtr {
             ),
             // Alpha-aware compositor mode (PreMultiplied with
             // Inherit fallback). The SurfaceView's pixel format is
-            // what actually decides the compositor's alpha-awareness
-            // on Adreno+Samsung: MainActivity (GameActivity) ends up
+            // what actually decides the compositor's alpha-awareness:
+            // MainActivity (GameActivity) ends up
             // OPAQUE and ExtraWindowActivity's holder is explicitly
             // OPAQUE too, so the wgpu surface's alpha_mode falls back
             // to Inherit and behaves opaque regardless of this flag.
@@ -244,12 +244,11 @@ impl AndroidWindowStatePtr {
             // time when a newer one is ready, which under irregular paint
             // cadence (scroll bursts, typing flurries) feels ~1 frame
             // tighter than FIFO. Falls back to Fifo inside the renderer
-            // if the surface doesn't expose Mailbox; Adreno 740 (Tab S9)
-            // does.
+            // if the surface doesn't expose Mailbox.
             //
             // Triple-buffer (`Some(3)`) was tried and reverted: at 120Hz
             // the cost is +8.33ms of in-flight latency which is invisible,
-            // but Samsung's smart-refresh aggressively drops the panel to
+            // but adaptive-refresh panels aggressively drop to
             // 60/30Hz when the app isn't actively rendering, and at those
             // rates the extra image adds 16-33ms of perceived input
             // latency that the user feels as overall sluggishness. Stay
@@ -309,8 +308,8 @@ impl AndroidWindowStatePtr {
         }
 
         // Ask the system for the panel's maximum refresh rate. On API 30+
-        // capable devices this opts us into 120Hz on Tab S9 Ultra / Pixel
-        // Tablet (otherwise the compositor leaves us at 60Hz for "compat"
+        // capable devices this opts us into the panel's top rate, such as
+        // 120Hz (otherwise the compositor leaves us at 60Hz for "compat"
         // apps regardless of panel capability). No-op on API 26-29 — the
         // symbol is resolved via `dlsym` rather than direct-linked so
         // missing-symbol on older devices is silent, not a load-time

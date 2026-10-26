@@ -14,10 +14,10 @@ use workspace::notifications::{NotificationId, simple_message_notification::Mess
 
 /// android-activity 0.6.1 logs "Spurious ALOOPER_POLL_CALLBACK from
 /// ALooper_pollOnce() (ignored)" as an error every time the looper
-/// dispatches our Choreographer callback: once per vsync, 120 lines a second
-/// on a Tab S9. Nothing else useful comes out of that module. Revisit if an
-/// android-activity upgrade starts reporting real input or lifecycle errors
-/// there.
+/// dispatches our Choreographer callback: once per vsync, up to 120 lines a
+/// second on a 120 Hz display. Nothing else useful comes out of that module.
+/// Revisit if an android-activity upgrade starts reporting real input or
+/// lifecycle errors there.
 const SPURIOUS_VSYNC_LOG_MODULE: &str = "android_activity::activity_impl";
 
 struct Logger {

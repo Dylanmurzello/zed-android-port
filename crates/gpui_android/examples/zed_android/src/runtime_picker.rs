@@ -137,7 +137,7 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
     // detail lines visible) come in around ~165px each in DP; three
     // stacked plus header, title bar, gap_3 spacing, and p_6 container
     // padding lands at ~700 DP minimum content. The 800 DP height gives
-    // headroom for theme variance and Samsung DeX's chrome insets.
+    // headroom for theme variance and a freeform window's chrome insets.
     // Width stays generous so the right-hand action button doesn't
     // wrap into the body text on the longest tagline.
     let window_size = Size {

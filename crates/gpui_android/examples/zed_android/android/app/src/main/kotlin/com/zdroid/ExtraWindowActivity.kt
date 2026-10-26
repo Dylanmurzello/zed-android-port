@@ -18,8 +18,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 /// Host for a single secondary gpui window. Spawned by Rust via JNI
 /// `startActivity(Intent(...))` from `multi_window::launch_extra_activity`,
 /// with the gpui `WindowId` passed as the `com.zdroid.window_id`
-/// long extra. On freeform-windowing devices (DeX, Pixel desktop windowing,
-/// Android 16 Desktop Mode, ChromeOS) the OS provides native chrome —
+/// long extra. On freeform-windowing devices (Android 16 Desktop Mode, vendor
+/// desktop modes, ChromeOS) the OS provides native chrome —
 /// close X, drag bar, resize handles. On phones each Activity lives in its
 /// own Recents task instead.
 ///

@@ -129,7 +129,7 @@ internal class CursorSurfaceControl(
     /// space (physical pixels). The hot-spot for the active style is
     /// subtracted so the sprite's tip points AT (x, y), not its
     /// top-left corner. Hot path: called per captured-pointer motion
-    /// event (~200 Hz on Samsung trackpad).
+    /// event (~200 Hz from a trackpad).
     fun move(x: Float, y: Float) {
         if (released) return
         val sc = surfaceControl ?: return
