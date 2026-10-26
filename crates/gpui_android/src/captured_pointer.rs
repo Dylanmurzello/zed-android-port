@@ -102,7 +102,7 @@ const ANDROID_BUTTON_FORWARD: i32 = 1 << 4;
 /// `InputDevice.SOURCE_TOUCHPAD` = SOURCE_CLASS_POSITION (0x8) plus
 /// the touchpad bit (0x100000). Used to source-filter BUTTON_PRESS /
 /// BUTTON_RELEASE: verified empirically (logs show source=0x100008)
-/// that the Book Cover trackpad firmware fires these on every finger
+/// that Samsung's keyboard-cover trackpad fires these on every finger
 /// contact, not just real clicks. For a real mouse plugged into the
 /// tablet (SOURCE_MOUSE = 0x2002), BUTTON_PRESS is a genuine click
 /// and must still be honored.
@@ -562,7 +562,7 @@ pub(crate) fn translate(
                         state.button_held,
                     );
                     state.right_click_armed = true;
-                    // Verified empirically: the Book Cover trackpad's
+                    // Verified empirically: the cover trackpad's
                     // ACTION_BUTTON_PRESS fires shortly after finger 1
                     // DOWN regardless of user intent. If it already
                     // emitted a MouseDown, the editor sees scroll-
@@ -829,7 +829,7 @@ pub(crate) fn translate(
             }
             JAVA_ACTION_POINTER_UP => {
                 // A non-primary finger lifted. CRITICAL: do not tear
-                // down hold-and-drag here. The Book Cover trackpad's
+                // down hold-and-drag here. The cover trackpad's
                 // finger-2 contact wavers during sustained gestures
                 // (verified empirically: same-anchor hold_drag ENGAGED
                 // fires repeatedly through POINTER_UP/POINTER_DOWN
@@ -871,7 +871,7 @@ pub(crate) fn translate(
             }
             JAVA_ACTION_BUTTON_PRESS => {
                 // SOURCE_TOUCHPAD BUTTON_PRESS is firmware noise on
-                // the Book Cover trackpad (logs verify it fires on
+                // the cover trackpad (logs verify it fires on
                 // every finger contact, regardless of click intent).
                 // Honoring it as a click breaks the gesture state
                 // machine: it sets button_held mid-gesture, blocks

@@ -2,7 +2,7 @@
 //!
 //! Android pre-resolves trackpad / mouse multi-finger gestures and
 //! physical buttons into `MotionEvent.button_state`. A two-finger tap on
-//! the Galaxy Book Cover trackpad arrives here as a single pointer with
+//! Samsung's keyboard-cover trackpad arrives here as a single pointer with
 //! `BUTTON_SECONDARY` set; physical right-click on a USB mouse arrives the
 //! same way. We honor `button_state` directly so the user doesn't have
 //! to do anything special with a trackpad.
@@ -118,7 +118,7 @@ pub(crate) fn wheel_scroll(
 
 /// Pixel-precision scroll synthesized from multi-touch centroid delta.
 /// Trackpad two-finger swipes that arrive as multi-pointer ACTION_MOVE
-/// (Samsung Book Cover style) feed into this. Caller does the scale-
+/// (as from Samsung's cover trackpad) feed into this. Caller does the scale-
 /// factor divide and supplies logical-pixel deltas.
 pub(crate) fn pixel_scroll(
     delta: Point<Pixels>,

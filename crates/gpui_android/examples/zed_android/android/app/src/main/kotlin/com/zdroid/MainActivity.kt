@@ -544,8 +544,8 @@ class MainActivity : GameActivity(), ImeHost {
         // Pointer-capture probe. When the decor view gains focus we ask
         // Android for raw pointer events. The captured listener
         // stringifies every event and forwards it to Rust for logging
-        // only; no synthesis yet. This is here to verify whether Samsung
-        // Book Cover Keyboard's trackpad gesture overlay (which
+        // only; no synthesis yet. This is here to verify whether Samsung's
+        // keyboard-cover trackpad gesture overlay (which
         // collapses two-finger scroll into single-pointer relative
         // motion in non-DeX tablet mode, never firing ACTION_SCROLL)
         // sits above or below the AOSP gesture-recognizer layer that
@@ -935,8 +935,9 @@ class MainActivity : GameActivity(), ImeHost {
     /**
      * GameActivity forwards input to gpui from the Activity-level
      * onTouchEvent / onGenericMotionEvent, in window coordinates, while gpui
-     * expects them relative to the SurfaceView. The two differ in DeX
-     * freeform windows, which shifted every click and hover by the
+     * expects them relative to the SurfaceView. The two differ when the
+     * surface doesn't start at the window's top-left corner, as in DeX
+     * freeform windows, where every click and hover landed off by the
      * surface's offset. Applied only there, after the view tree has
      * dispatched the event, so sibling views like the extras row still
      * hit-test with their own coordinates.

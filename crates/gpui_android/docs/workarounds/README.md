@@ -10,6 +10,15 @@ here so future sessions don't re-derive it from scratch. When a workaround
 is replaced by something cleaner, mark it Reverted and link to the
 replacement.
 
+## Reference hardware
+
+Zdroid is developed and tested on a Samsung Galaxy Tab S9 Ultra, the tablet
+Dylan used too (see "Tested on" in the top-level README). Unless a writeup
+says otherwise, the observations and measurements here and in code comments
+come from it: Snapdragon 8 Gen 2, Adreno 740 GPU, 120 Hz adaptive-refresh
+panel, ~336 dpi, Android 16 with One UI 8, and the Book Cover Keyboard's
+trackpad, in both tablet mode and DeX.
+
 ## How to read this
 
 | Status | Meaning |
