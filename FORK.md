@@ -149,3 +149,48 @@ To verify a downloaded APK:
 ```sh
 gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port
 ```
+
+## Debugging on the tablet
+
+Release APKs aren't debuggable, so Android marks Zdroid's process non-dumpable and hides it in `/proc` from every other process, including Zdroid's own terminal: `top`, `ps` and `pidof` there don't list it. Inspect the running app with `adb` from a computer instead. `adb shell` can read every process's `/proc` entries and run `dumpsys`. It can't read the app's private files, since `run-as` needs a debuggable build, so read `Zed.log` with `zed: open log` in the app.
+
+### Connecting over wireless debugging
+
+The computer and the tablet must be on the same network.
+
+1. On the tablet, turn on **Settings → Developer options → Wireless debugging**.
+2. Pair once per computer. Tap **Pair device with pairing code**, then on the computer run `adb pair <tablet-ip>:<pairing-port>` and type the 6-digit code. The code only works while that dialog is open. If pairing fails with `protocol fault (couldn't read status message)`, run it again while the dialog is still open.
+3. Connect. The port changes whenever wireless debugging restarts, so look it up each time: `adb mdns services` lists the tablet as `_adb-tls-connect._tcp <tablet-ip>:<port>`, and the Wireless debugging screen shows it under **IP address & Port**. Then run `adb connect <tablet-ip>:<port>`.
+4. `adb devices -l` should list `model:SM_X910`. It may list the tablet twice, by address and by mDNS name, so pass `-s <tablet-ip>:<port>` to every command.
+
+To revoke access, forget the computer under **Wireless debugging → Paired devices**, or turn wireless debugging off.
+
+### Useful commands
+
+The examples set `device=<tablet-ip>:<port>` first.
+
+- **Logs:** `adb -s "$device" logcat | grep -E 'zed_android|zdroid|ZedDocsProvider'`. Rust logs use the `zed_android` tag at info level and above; the Kotlin side uses `zed_android_*` and `zdroid_*` tags. Crashes, including native ones such as `SIGILL`, are in `adb -s "$device" logcat -b crash -d`.
+- **Install a pull request's APK:** `adb -s "$device" install -r Zdroid-X.Y.Z-<commit>.apk`. The `versionCode` rule under [Testing a pull request](#testing-a-pull-request) still applies.
+- **Screenshot:** `adb -s "$device" exec-out screencap -p > screen.png`. It captures whatever is on the tablet's screen, so ask its owner first.
+- **Wake-ups and CPU per thread:** run this with Zdroid open and the tablet untouched. The editor's main loop is the `android_main` thread.
+
+  ```sh
+  seconds=30
+  pid=$(adb -s "$device" shell pidof com.zdroid | tr -d '\r')
+  snapshot() {
+    adb -s "$device" shell "cd /proc/$pid/task && for t in *; do printf '%s\t%s\t%s\t%s\n' \$t \"\$(cat \$t/comm)\" \"\$(grep ^voluntary_ctxt_switches \$t/status | tr -dc 0-9)\" \"\$(sed 's/.*) //' \$t/stat | awk '{print \$12+\$13}')\"; done 2>/dev/null" | tr -d '\r'
+  }
+  snapshot > /tmp/zdroid-before; sleep "$seconds"; snapshot > /tmp/zdroid-after
+  awk -F'\t' -v s="$seconds" 'NR == FNR {w[$1] = $3; c[$1] = $4; next} ($1 in w) {printf "%7.1f wakeups/s %6.2f%% CPU  %s\n", ($3 - w[$1]) / s, ($4 - c[$1]) / s, $2}' /tmp/zdroid-before /tmp/zdroid-after | sort -rn | head
+  ```
+
+- **Frames the window presented:** SurfaceFlinger keeps the last 128 present times of each layer, about a second of scrolling at 120 Hz, so run this right after the thing you're measuring. Zdroid's layer only exists while its window is on screen, and its number changes each time.
+
+  ```sh
+  layer=$(adb -s "$device" shell dumpsys SurfaceFlinger --list | tr -d '\r' | sed -n 's/^RequestedLayerState{\(.*SurfaceView\[com\.zdroid\/com\.zdroid\.MainActivity\]@0(BLAST)#[0-9]*\) .*/\1/p' | head -1)
+  adb -s "$device" shell "dumpsys SurfaceFlinger --latency '$layer'" | tr -d '\r' > /tmp/zdroid-latency
+  period=$(head -1 /tmp/zdroid-latency)
+  awk 'NR > 1 && $2 > 0 && $2 < 9e18 {print $2}' /tmp/zdroid-latency | sort -n | awk -v period="$period" '{t[NR] = $1} END {span = (t[NR] - t[1]) / 1e9; printf "%d frames over %.1f s: %.1f per second\n", NR, span, (NR - 1) / span; for (i = 2; i <= NR; i++) if (t[i] - t[i - 1] > 1.5 * period) late++; printf "%d of %d gaps were longer than one refresh (%.1f ms)\n", late, NR - 1, period / 1e6}'
+  ```
+
+  The `--list` format above is Android 16's. The first line of `--latency` output is the panel's refresh period in nanoseconds, and the second column of each following line is when a frame was presented.
