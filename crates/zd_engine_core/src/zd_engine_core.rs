@@ -8,6 +8,12 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod bindings;
+pub mod bpf;
+pub mod path;
+pub mod sysno;
+pub mod translate;
+
 /// File name the loader ships under in the APK's native library dir.
 /// It has to look like a shared library for the installer to extract it.
 pub const LOADER_FILE_NAME: &str = "libzdload.so";
