@@ -55,18 +55,12 @@ Some functions were MOVED out of `crates/zed` so the Android entry point can rea
 
 When you resolve a conflict in one of these, ALSO check if a workaround doc under `crates/gpui_android/docs/workarounds/` covers the affected file: the doc explains why the patch is there, which makes the resolution obvious.
 
-## Merge driver setup (one-time, per clone)
+## Merge driver
 
-`.gitattributes` declares `merge=ours` for owned files. Git needs the `ours` driver registered in your local config:
-
-```sh
-git config merge.ours.driver true
-```
-
-Without that, `merge=ours` is silently ignored and conflicts on identity files re-appear. Verify with:
+`.gitattributes` declares `merge=ours` for owned files. Enable the `ours` driver only for the upstream merge command itself, never in your git config: with it on, rebases, cherry-picks and other merges silently keep one side of those files (see "The `ours` merge driver" in FORK.md):
 
 ```sh
-git config --get merge.ours.driver  # should print: true
+git -c merge.ours.driver=true merge vX.Y.Z
 ```
 
 ## Performing an upstream merge
@@ -78,10 +72,11 @@ git merge upstream/main
 # expected:
 #   - automatic merges on most files
 #   - automatic ours-merge on identity files (no prompt)
-#   - modify/delete conflicts on upstream CI/legal/nix we deleted: `git rm` them in bulk.
-#     ALSO sweep for files upstream ADDED under .github/workflows, .cloudflare/, nix/,
-#     legal/ since the merge-base — they merge cleanly as additions and must be removed
-#     by hand (merge=ours can't help; git never invokes merge drivers for adds/deletes).
+#   - modify/delete conflicts on upstream GitHub workflows we deleted: `git rm` them in bulk.
+#     ALSO sweep for files upstream ADDED under .github/ (workflows, actions, renovate.json)
+#     since the merge-base — they merge cleanly as additions and must be removed by hand
+#     (merge=ours can't help; git never invokes merge drivers for adds/deletes). The fork
+#     keeps every other upstream file, even ones the Android build doesn't use.
 #   - 3-way conflicts on the modified upstream files, resolve manually
 
 cargo check --workspace          # gate 1: desktop
