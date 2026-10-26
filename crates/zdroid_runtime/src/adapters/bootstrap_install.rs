@@ -340,6 +340,10 @@ fn swap_staging_into_prefix(staging: &Path, prefix: &Path) -> Result<()> {
     fs::rename(staging, prefix).with_context(|| {
         format!("rename {} -> {}", staging.display(), prefix.display())
     })?;
+    // TMPDIR for this runtime: SSH's askpass socket and other temp files go
+    // there, and the app only creates it at startup.
+    let temp_dir = prefix.join("tmp");
+    fs::create_dir_all(&temp_dir).with_context(|| format!("create {}", temp_dir.display()))?;
     Ok(())
 }
 

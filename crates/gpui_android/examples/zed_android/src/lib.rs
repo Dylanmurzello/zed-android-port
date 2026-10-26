@@ -603,8 +603,8 @@ fn android_main(app: AndroidApp) {
         );
     });
 
-    // The runtime's TMPDIR may not exist yet (a chroot data dir before its
-    // first use), and tempfiles such as SSH's askpass socket go there.
+    // The runtime's TMPDIR may not exist yet, and temp files such as SSH's
+    // askpass socket go there.
     let temp_dir = std::env::temp_dir();
     if let Err(error) = std::fs::create_dir_all(&temp_dir) {
         log::warn!("zed_android: can't create {}: {error}", temp_dir.display());

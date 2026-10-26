@@ -34,7 +34,7 @@ git for-each-ref --format='%(refname:short) %(objectname)' 'refs/tags/v0.*' | so
 
 ## The `ours` merge driver
 
-`.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`, and UPSTREAM_MERGE.md tells you to enable the driver once per clone. Don't: with the driver on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
+`.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`. Don't enable the driver in your git config: with it on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
 
 ```sh
 git -c merge.ours.driver=true merge v1.26.2-pre
