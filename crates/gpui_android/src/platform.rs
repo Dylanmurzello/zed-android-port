@@ -308,6 +308,8 @@ pub(crate) struct AndroidCommon {
     pub(crate) deferred_primary_focus: Option<bool>,
     pub(crate) deferred_lifecycle: Vec<AppLifecyclePhase>,
     pub(crate) deferred_memory_warning: bool,
+    /// Whether the main Activity keeps the screen on; see `prevent_idle_sleep`.
+    pub(crate) keep_screen_on: bool,
     pub(crate) running: bool,
     /// Set by `quit()` so `run()` exits the process once the event loop ends.
     pub(crate) exit_requested: bool,
@@ -356,6 +358,7 @@ impl AndroidCommon {
             deferred_primary_focus: None,
             deferred_lifecycle: Vec::new(),
             deferred_memory_warning: false,
+            keep_screen_on: false,
             running: true,
             exit_requested: false,
         }
@@ -1316,9 +1319,13 @@ impl AndroidPlatform {
     fn handle_main_event_while_opening_window(&self, event: android_activity::MainEvent<'_>) {
         use android_activity::MainEvent;
         match event {
-            MainEvent::InitWindow { .. }
-            | MainEvent::TerminateWindow { .. }
-            | MainEvent::Destroy => self.handle_main_event(event),
+            MainEvent::InitWindow { .. } | MainEvent::TerminateWindow { .. } => {
+                self.handle_main_event(event)
+            }
+            MainEvent::Destroy => {
+                self.defer_app_lifecycle(AppLifecyclePhase::Disconnected);
+                self.common.borrow_mut().running = false;
+            }
             MainEvent::WindowResized { .. }
             | MainEvent::ConfigChanged { .. }
             | MainEvent::RedrawNeeded { .. } => {
@@ -1339,6 +1346,20 @@ impl AndroidPlatform {
 
     fn defer_app_lifecycle(&self, phase: AppLifecyclePhase) {
         self.common.borrow_mut().deferred_lifecycle.push(phase);
+    }
+
+    /// Applies the `prevent_idle_sleep` guards. Here rather than in the guards
+    /// themselves, which can be created or dropped on any thread, including
+    /// inside android-activity's event callbacks.
+    fn apply_keep_screen_on(&self) {
+        let wanted = IDLE_SLEEP_GUARDS.load(Ordering::Acquire) > 0;
+        if self.common.borrow().keep_screen_on == wanted {
+            return;
+        }
+        self.common.borrow_mut().keep_screen_on = wanted;
+        if let Err(error) = call_activity_set_keep_screen_on(&self.android_app, wanted) {
+            log::warn!("set_keep_screen_on({wanted}): {error:#}");
+        }
     }
 
     fn sync_window_visibility(&self) {
@@ -1471,14 +1492,15 @@ impl Platform for AndroidPlatform {
             self.tick_extras_row_enabled();
             self.tick_soft_keyboard_setting();
 
+            self.sync_window_visibility();
+            self.apply_keep_screen_on();
+
             // Refresh on vsync (FRAME_PENDING set by Choreographer
             // callback) or after main-thread events that may have
             // changed state. gpui's window.refresh() short-circuits
             // when nothing is dirty, so calling on every iteration is
             // cheap; gating on FRAME_PENDING saves the dirty-bit check
             // when we know nothing's happened.
-            self.sync_window_visibility();
-
             if FRAME_PENDING.swap(false, Ordering::AcqRel) {
                 let (primary, extras) = {
                     let common = self.common.borrow();
@@ -1529,6 +1551,8 @@ impl Platform for AndroidPlatform {
         }
 
         log::info!("AndroidPlatform::run: exiting event loop");
+        // A Destroy that arrived while a window was opening.
+        self.apply_deferred_main_events();
         let quit = self.common.borrow_mut().callbacks.quit.take();
         if let Some(mut fun) = quit {
             if !fun() {
@@ -1609,7 +1633,7 @@ impl Platform for AndroidPlatform {
                 |event| {
                     if let android_activity::PollEvent::Main(main_event) = event {
                         log::trace!("MainEvent during open_window block: {main_event:?}");
-                        self.handle_main_event(main_event);
+                        self.handle_main_event_while_opening_window(main_event);
                     }
                 },
             );
@@ -1726,22 +1750,14 @@ impl Platform for AndroidPlatform {
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
     /// Keeps the screen on while the app is in front, Android's equivalent:
     /// Zed asks for this while an agent works. Counted, so overlapping
-    /// requests don't release it early.
+    /// requests don't release it early; the run loop applies the result.
     fn prevent_idle_sleep(&self, reason: &str) -> Task<Result<ActivityGuard>> {
-        use android_activity::WindowManagerFlags;
         log::debug!("keeping the screen on: {reason}");
-        let android_app = self.android_app.clone();
-        if IDLE_SLEEP_GUARDS.fetch_add(1, Ordering::AcqRel) == 0 {
-            android_app
-                .set_window_flags(WindowManagerFlags::KEEP_SCREEN_ON, WindowManagerFlags::empty());
-        }
-        Task::ready(Ok(ActivityGuard::new(move || {
-            if IDLE_SLEEP_GUARDS.fetch_sub(1, Ordering::AcqRel) == 1 {
-                android_app.set_window_flags(
-                    WindowManagerFlags::empty(),
-                    WindowManagerFlags::KEEP_SCREEN_ON,
-                );
-            }
+        IDLE_SLEEP_GUARDS.fetch_add(1, Ordering::AcqRel);
+        wake_run_loop();
+        Task::ready(Ok(ActivityGuard::new(|| {
+            IDLE_SLEEP_GUARDS.fetch_sub(1, Ordering::AcqRel);
+            wake_run_loop();
         })))
     }
 
@@ -1853,6 +1869,27 @@ fn call_activity_set_extras_row(
             .context("call MainActivity.setProgrammingExtrasRowEnabled")?;
         }
     }
+    Ok(())
+}
+
+/// Invoke `MainActivity.setKeepScreenOn(on)`.
+fn call_activity_set_keep_screen_on(android_app: &AndroidApp, on: bool) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use jni::{JavaVM, objects::JObject};
+
+    let vm_ptr = android_app.vm_as_ptr();
+    let activity_ptr = android_app.activity_as_ptr();
+    if vm_ptr.is_null() || activity_ptr.is_null() {
+        anyhow::bail!("AndroidApp vm/activity pointer is null");
+    }
+    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
+    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let activity = unsafe { JObject::from_raw(activity_ptr as _) };
+    let result = env.call_method(&activity, "setKeepScreenOn", "(Z)V", &[on.into()]);
+    if result.is_err() {
+        env.exception_clear().ok();
+    }
+    result.context("call MainActivity.setKeepScreenOn")?;
     Ok(())
 }
 

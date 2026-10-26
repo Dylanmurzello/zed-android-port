@@ -23,6 +23,7 @@ import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -186,6 +187,19 @@ class MainActivity : GameActivity(), ImeHost {
             extraKeysView?.visibility = View.VISIBLE
         } else {
             extraKeysView?.visibility = View.GONE
+        }
+    }
+
+    /// Zed's "prevent idle sleep", requested while an agent works. Called
+    /// from `gpui_android::platform` via JNI.
+    @Suppress("unused")
+    fun setKeepScreenOn(on: Boolean) {
+        runOnUiThread {
+            if (on) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
         }
     }
 
