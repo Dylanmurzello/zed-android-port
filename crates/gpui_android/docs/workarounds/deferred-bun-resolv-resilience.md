@@ -1,6 +1,6 @@
 # Resilience for Bun-binary `/etc/resolv.conf` hex-patch
 
-**Status:** Deferred. Active hex-patch in [`hex-patch-resolv-conf.md`](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md) works today; this doc captures the failure modes when it eventually breaks and the options for replacing it.
+**Status:** Superseded by the rootfs engine (`rootfs-engine-integration.md`, landing with the engine). The hex-patch this protected was removed with the bootstrap adapter; guest binaries read a real `/etc/resolv.conf`. Kept for history.
 
 ## Why this is fragile
 

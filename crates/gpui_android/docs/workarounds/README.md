@@ -17,6 +17,7 @@ replacement.
 | **Active** | Currently shipping in the APK |
 | **Deferred** | Designed, scheduled, not yet built |
 | **Reverted** | Was active, replaced by something cleaner |
+| **Superseded** | Replaced by the rootfs engine; kept for history |
 
 ## Storage / filesystem
 
@@ -33,22 +34,24 @@ replacement.
 | [Tier 2 root storage (bind-mount /mnt/pass_through)](deferred-tier2-root-storage.md) | Deferred | Wait for in-app settings UI |
 | [`CARGO_TARGET_DIR` stopgap](reverted-cargo-target-dir.md) | Reverted | Per-tool env redirect didn't generalize |
 
-## Bootstrap / Termux userland
+## Runtime engine
 
-The bootstrap-flavored workarounds (dpkg path-rewrite, apt Post-Invoke hooks,
-apt dpkg pin, musl loader bundle, node `NODE_PLATFORM` patch, npm intercept
-stack, resolv.conf hex-patch in the musl loader, patchelf + bun-binary
-classification, bootstrap-rebuild pipeline, Termux env propagation into bash)
-moved to **[`Dylanmurzello/zdroid-bootstrap/docs/`](https://github.com/Dylanmurzello/zdroid-bootstrap/tree/main/docs)**
-as part of the Termux-divestment Phase 8b refactor. They describe patches
-baked into the bootstrap zip, not editor code, so the writeups live with the
-patches.
+The bootstrap-era workarounds (dpkg path-rewrite, apt hooks, musl loader
+bundle, node `NODE_PLATFORM` patch, npm intercept stack, resolv.conf
+hex-patch, patchelf + bun-binary classification) went away with the
+bootstrap adapter; their writeups stay in
+**[`Dylanmurzello/zdroid-bootstrap/docs/`](https://github.com/Dylanmurzello/zdroid-bootstrap/tree/main/docs)**
+for history. Every spawn now routes through the rootfs engine (a static
+loader plus a seccomp trap path translator); its writeups land here as it
+is built.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Storage permission JNI shim](storage-permission-jni.md) | Active | `READ/WRITE_EXTERNAL_STORAGE` are runtime-prompted at targetSdk≤28 |
-| [JNI DNS bridge → `/sdcard/.zed/r`](jni-dns-bridge.md) | Active | Populates the file the bootstrap's hex-patched musl loader opens, sourced from Android's actual ConnectivityManager DNS |
-| [`/sdcard/.zed/` namespace](sdcard-dot-zed-namespace.md) | Active | Why `/sdcard` (byte-width constraint) and why `.zed/` (hidden, namespaced) for the patched paths |
+| [JNI DNS bridge](jni-dns-bridge.md) | Active | Android has no `/etc/resolv.conf`; ConnectivityManager's servers seed the guest rootfs resolv.conf |
+| [`/sdcard/.zed/` namespace](sdcard-dot-zed-namespace.md) | Reverted | Only existed for the hex-patched musl loader's 14-byte path slot; nothing is hex-patched anymore |
+| [Bun resolv.conf hex-patch resilience](deferred-bun-resolv-resilience.md) | Superseded | Hex-patching binaries is gone; guest binaries read a real `/etc/resolv.conf` |
+| [LD_PRELOAD strip for musl-static children](deferred-musl-subprocess-ld-preload.md) | Superseded | No LD_PRELOAD shim anymore; the engine handles shebangs at exec |
 | [LD_PRELOAD `libzed-compat.so` path-redirect shim](deferred-ld-preload-shim.md) | Dropped | Doesn't apply to static-musl (no PLT/GOT); replaced by hex-patch in the bootstrap musl loader |
 
 ## Runtime env
@@ -130,7 +133,7 @@ patches.
 ```markdown
 # <Title>
 
-**Status:** Active | Deferred | Reverted
+**Status:** Active | Deferred | Reverted | Superseded
 **Phase / Commit:** <which session this came from>
 **Files:** <paths>
 

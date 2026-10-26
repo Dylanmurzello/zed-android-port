@@ -1,8 +1,8 @@
 # `/sdcard/.zed/` namespace for hex-patched paths
 
-**Status:** Active design choice
+**Status:** Reverted. The `/sdcard/.zed/r` writer was removed with the bootstrap adapter; nothing is hex-patched anymore. Kept for history.
 **Phase / Commit:** L4g session, decision made before commit
-**Files:** referenced in `dns_bridge.rs::RESOLV_CONF_PATH`, generator's
+**Files:** (removed) `dns_bridge.rs::RESOLV_CONF_PATH`, bootstrap generator's
 `patch_resolv_conf` perl block
 
 ## Problem

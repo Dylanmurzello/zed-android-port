@@ -201,13 +201,6 @@ fn android_main(app: AndroidApp) {
     // grants once, RealFs reads of /storage/emulated/0/... start working.
     gpui_android::storage::request_once(&app);
 
-    // Materialize Android's active DNS servers into /sdcard/.zed/r so
-    // hex-patched Bun-compiled CLIs (claude, codex, future) can resolve
-    // hostnames without proot. Patched binaries open `/sdcard/.zed/r`
-    // instead of the original `/etc/resolv.conf`. Falls back to public
-    // DNS if ConnectivityManager gives nothing (no active network yet).
-    gpui_android::dns_bridge::populate_resolv_conf(&app);
-
     // Install zd-exec into <data>/files/bin/ from the APK-bundled
     // asset. Idempotent (skipped when on-disk byte length matches the
     // asset's), so it runs every boot but is essentially free past
