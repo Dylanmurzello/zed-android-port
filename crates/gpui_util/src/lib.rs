@@ -107,11 +107,16 @@ pub fn env_root_program_path(program: &OsStr) -> Option<std::path::PathBuf> {
     }
     // `starts_with` matches on full path components, so a literal
     // prefix like `<root>foo` won't false-match against `<root>/foo`.
-    if path.starts_with(root) {
-        Some(path.to_path_buf())
-    } else {
-        None
+    if !path.starts_with(root) {
+        return None;
     }
+    // The farm and `bin/` hold the bridge itself. Routing a farm entry
+    // through `zd-exec` would make the loader open its own symlink as
+    // the guest program; the kernel execs these directly.
+    if path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin")) {
+        return None;
+    }
+    Some(path.to_path_buf())
 }
 
 /// Android-only shebang rewrite helper.

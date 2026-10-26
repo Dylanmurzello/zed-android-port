@@ -56,6 +56,14 @@ pub struct SpawnRequest {
     pub stdio: [RawFd; 3],
 }
 
+/// What the integrated terminal execs: a program plus the arguments
+/// that turn it into the user's shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalShell {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
 /// A running child process spawned through an adapter. Exact mechanism
 /// is adapter-specific (subprocess pid, daemon-tracked job, intent
 /// callback handle), but the surface is uniform.
@@ -201,14 +209,22 @@ pub trait RuntimeProvider: Send + Sync {
         Vec::new()
     }
 
-    /// Absolute path of the program the integrated terminal should
-    /// exec when the user opens a new terminal. Chroot returns the
-    /// `zd-exec` wrapper (which dispatches into the rootfs).
+    /// What the integrated terminal should exec when the user opens a
+    /// new terminal. Chroot returns the `zd-exec` wrapper (which
+    /// dispatches into the rootfs); the rootfs adapter returns the
+    /// engine loader with the flags that make it a login shell.
     ///
     /// Returns `None` for non-Android adapters to keep the upstream
     /// terminal code path untouched.
-    fn terminal_shell(&self, _data_path: &Path) -> Option<PathBuf> {
+    fn terminal_shell(&self, _data_path: &Path) -> Option<TerminalShell> {
         None
+    }
+
+    /// Link target, relative to `<data>/zd-runtime/`, for every entry of
+    /// the symlink farm: the binary that turns a PATH-resolved name into
+    /// a spawn inside this adapter's userland.
+    fn farm_link_target(&self) -> PathBuf {
+        PathBuf::from("../bin/zd-exec")
     }
 
     /// Where the user's projects and Zdroid-managed cache live.

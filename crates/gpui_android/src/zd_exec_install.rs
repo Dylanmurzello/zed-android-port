@@ -149,7 +149,7 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<()
 /// Sweeps the pre-Phase-4 `<data_path>/usr/zd-runtime/` orphan dir
 /// before populating the new location so existing installs upgrading
 /// through this change shed the old symlink farm in one go.
-pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String]) -> Result<()> {
+pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String], target: &Path) -> Result<()> {
     let stale_dir = data_path.join("usr/zd-runtime");
     if stale_dir.exists() {
         match fs::remove_dir_all(&stale_dir) {
@@ -167,7 +167,15 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String]) -> Result<
     let runtime_dir = data_path.join("zd-runtime");
     fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("create_dir_all {}", runtime_dir.display()))?;
-    let target = Path::new("../bin/zd-exec");
+    // Entries written by any adapter point at one of the bridge binaries
+    // under `../bin/`; those are ours to sweep or re-point, nothing else.
+    let ours = |link_target: &Path| -> bool {
+        link_target.parent() == Some(Path::new("../bin"))
+            && link_target
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "zd-exec" || name == zd_engine_core::LOADER_LINK_NAME)
+    };
 
     // Always include `zd-exec` itself in the symlink set so kernel PATH
     // lookup of the bare name `zd-exec` resolves to this dir first.
@@ -206,7 +214,7 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String]) -> Result<
             // Only remove if it's a symlink pointing where we'd point.
             // Anything else (real file, foreign symlink) is left alone.
             if let Ok(link_target) = fs::read_link(&path)
-                && link_target == target
+                && ours(&link_target)
             {
                 if let Err(e) = fs::remove_file(&path) {
                     log::warn!(

@@ -1970,7 +1970,8 @@ fn build_command_posix(
                 | "SSL_CERT_FILE"
                 | "CURL_CA_BUNDLE"
         ) || k.starts_with("TERMUX__")
-            || k.starts_with("TERMUX_APP__");
+            || k.starts_with("TERMUX_APP__")
+            || k.starts_with("ZD_");
         if drop {
             continue;
         }

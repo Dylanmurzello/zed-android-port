@@ -621,6 +621,9 @@ impl ManagedNodeRuntime {
         let os = match consts::OS {
             "macos" => "darwin",
             "linux" => "linux",
+            // The official linux-arm64 (glibc) build runs through the
+            // rootfs engine's loader on the Android port.
+            "android" => "linux",
             "windows" => "win",
             other => bail!("Running on unsupported os: {other}"),
         };

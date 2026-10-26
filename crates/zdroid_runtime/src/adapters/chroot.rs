@@ -12,7 +12,7 @@
 
 use crate::config::{ChrootConfig, RuntimeId};
 use crate::health::{HealthStatus, ProgressSink};
-use crate::port::{RuntimeProvider, SpawnHandle, SpawnRequest};
+use crate::port::{RuntimeProvider, SpawnHandle, SpawnRequest, TerminalShell};
 
 /// GitHub releases page for the `zdroid-spawnd` Magisk module — the
 /// thing the chroot adapter needs running to function. Surfaced in
@@ -598,8 +598,11 @@ impl RuntimeProvider for ChrootAdapter {
         Vec::new()
     }
 
-    fn terminal_shell(&self, data_path: &std::path::Path) -> Option<std::path::PathBuf> {
-        Some(data_path.join("bin/zd-exec"))
+    fn terminal_shell(&self, data_path: &std::path::Path) -> Option<TerminalShell> {
+        Some(TerminalShell {
+            program: data_path.join("bin/zd-exec"),
+            args: Vec::new(),
+        })
     }
 
     fn workspace_root(&self, data_path: &std::path::Path) -> Option<std::path::PathBuf> {

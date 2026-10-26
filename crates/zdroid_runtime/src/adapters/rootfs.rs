@@ -20,7 +20,7 @@ use zd_engine_core::{DEFAULT_GUEST_PATH, LIST_SEPARATOR, LOADER_LINK_NAME, env a
 
 use crate::config::{self, RootfsConfig, RuntimeId};
 use crate::health::{HealthStatus, ProgressSink};
-use crate::port::{RuntimeProvider, SpawnHandle, SpawnRequest};
+use crate::port::{RuntimeProvider, SpawnHandle, SpawnRequest, TerminalShell};
 
 /// Name of the per-install sentinel the installer writes last.
 pub const VERSION_FILE: &str = ".rootfs-version";
@@ -90,6 +90,9 @@ impl RootfsAdapter {
             "SHELL=/bin/bash",
             &format!("PATH={DEFAULT_GUEST_PATH}"),
             "LANG=C.UTF-8",
+            // The host's `<data>/tmp` is the guest's `/tmp` (bound), so the
+            // guest spelling keeps temp paths short and native-looking.
+            "TMPDIR=/tmp",
         ]
         .join(&LIST_SEPARATOR.to_string())
     }
@@ -301,12 +304,70 @@ impl RuntimeProvider for RootfsAdapter {
         Ok(Box::new(ChildHandle { child }))
     }
 
+    fn needs_command_bridge(&self) -> bool {
+        // Absolute paths under `<data>` (managed Node, downloaded language
+        // servers) are glibc binaries the kernel cannot exec; the bridge
+        // routes them through `zd-exec`, a farm entry that is the loader.
+        true
+    }
+
     fn environment_root(&self) -> PathBuf {
         self.data_path.clone()
     }
 
+    fn list_binaries(&self) -> Vec<String> {
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for sub in [
+            "usr/bin",
+            "usr/local/bin",
+            "usr/sbin",
+            "bin",
+            "sbin",
+            "root/.cargo/bin",
+            "root/.local/bin",
+        ] {
+            let dir = self.config.rootfs_dir.join(sub);
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str()
+                    && !name.starts_with('.')
+                {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        names.into_iter().collect()
+    }
+
     fn env_for_zed_process(&self, data_path: &Path) -> Vec<(String, util::env::EnvOp)> {
-        crate::env::baseline_env(data_path)
+        // Zed's own process keeps the host shape (HOME, PATH with the farm
+        // first); the engine block rides along so every child spawned
+        // from it, through the farm or the bridge, reaches the loader
+        // configured without per-call-site work.
+        let mut ops = crate::env::baseline_env(data_path);
+        for (key, value) in self.engine_env() {
+            ops.push((key, util::env::EnvOp::Set(value)));
+        }
+        ops.push((
+            "SHELL".into(),
+            util::env::EnvOp::Set(self.loader_path().into_os_string()),
+        ));
+        ops
+    }
+
+    fn terminal_shell(&self, _data_path: &Path) -> Option<TerminalShell> {
+        // The loader under its own name with a leading flag runs the
+        // default shell with that flag: `/bin/bash -l`.
+        Some(TerminalShell {
+            program: self.loader_path(),
+            args: vec!["-l".to_string()],
+        })
+    }
+
+    fn farm_link_target(&self) -> PathBuf {
+        PathBuf::from("../bin").join(LOADER_LINK_NAME)
     }
 
     fn workspace_root(&self, data_path: &Path) -> Option<PathBuf> {

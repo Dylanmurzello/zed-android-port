@@ -42,10 +42,10 @@ fn android_safe_cwd(dir: &Path) -> PathBuf {
     ];
     let path_str = dir.to_string_lossy();
     if EXTERNAL_PREFIXES.iter().any(|p| path_str.starts_with(p)) {
-        if let Some(home) = std::env::var_os("TERMUX__HOME")
-            .or_else(|| std::env::var_os("HOME"))
+        if let Some(home_path) = crate::env::workspace_root()
+            .cloned()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         {
-            let home_path = PathBuf::from(home);
             if home_path.is_dir() {
                 log::debug!(
                     "util::command: rewriting external-storage CWD {:?} -> {:?}",

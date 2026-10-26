@@ -362,7 +362,10 @@ impl RuntimePicker {
                     finished = true;
                     self.install_cancel = None;
                     self.install = match result {
-                        Ok(()) => InstallState::Idle,
+                        Ok(()) => {
+                            refresh_rootfs_farm();
+                            InstallState::Idle
+                        }
                         Err(InstallFailure::Cancelled) => InstallState::Idle,
                         Err(InstallFailure::Error(message)) => {
                             log::error!("zdroid_runtime_picker: install failed: {message}");
@@ -673,6 +676,27 @@ fn render_action(
                     .into_any_element()
             }
         }
+    }
+}
+
+/// After an install, the farm must list the new rootfs binaries right
+/// away when the rootfs runtime is the active one; boot does this on
+/// every other launch.
+fn refresh_rootfs_farm() {
+    if detect_current() != Some(RuntimeId::Rootfs) {
+        return;
+    }
+    let data_path = config::data_path();
+    let adapter = RootfsAdapter::new(RootfsConfig::defaults(&data_path), &data_path);
+    let binaries = adapter.list_binaries();
+    if let Err(error) = gpui_android::zd_exec_install::ensure_runtime_symlinks(
+        &data_path,
+        &binaries,
+        &adapter.farm_link_target(),
+    ) {
+        log::warn!("zdroid_runtime_picker: farm refresh failed: {error:#}");
+    } else {
+        log::info!("zdroid_runtime_picker: farm refreshed with {} binaries", binaries.len());
     }
 }
 

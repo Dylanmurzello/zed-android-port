@@ -306,9 +306,11 @@ fn android_main(app: AndroidApp) {
             binaries.len(),
             provider.id(),
         );
-        if let Err(err) =
-            gpui_android::zd_exec_install::ensure_runtime_symlinks(&data_path, &binaries)
-        {
+        if let Err(err) = gpui_android::zd_exec_install::ensure_runtime_symlinks(
+            &data_path,
+            &binaries,
+            &provider.farm_link_target(),
+        ) {
             log::warn!(
                 "zed_android: zd-runtime symlinks failed: {err:#}; \
                  LSPs that resolve binaries via PATH will fail to spawn"
@@ -627,12 +629,20 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // so toggles look like no-ops.
     let termux_home = data_path.join("home");
     let projects_dir = termux_home.join("projects");
+    // The guest's `/dev/shm` and `/tmp` are bound to these; `etc` holds
+    // the runtime config and `bin` the loader link.
+    let shm_dir = data_path.join("tmp/shm");
+    let etc_dir = data_path.join("etc");
+    let bin_dir = data_path.join("bin");
     for path in [
         paths::config_dir(),
         paths::database_dir(),
         paths::logs_dir(),
         paths::temp_dir(),
         paths::languages_dir(),
+        &shm_dir,
+        &etc_dir,
+        &bin_dir,
         &termux_home,
         // Default landing dir for the project picker. Lives on app-private
         // storage where execve and dlopen work natively, so cargo / go /
@@ -990,11 +1000,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // (the parody) so this explicit Shell::Program is what makes any
     // useful terminal work at all.
     let runtime = active_runtime(data_path);
-    let shell_path = runtime
+    let shell = runtime
         .provider()
         .and_then(|provider| provider.terminal_shell(data_path));
-    if let Some(shell_path) = shell_path.filter(|path| path.is_file()) {
-        let shell_str = shell_path.to_string_lossy().to_string();
+    if let Some(shell) = shell.filter(|shell| shell.program.is_file()) {
+        let program = shell.program.to_string_lossy().to_string();
+        let args = shell.args.clone();
         let fs_for_settings = app_state.fs.clone();
         cx.global::<settings::SettingsStore>().update_settings_file(
             fs_for_settings,
@@ -1002,12 +1013,21 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                 let terminal = content
                     .terminal
                     .get_or_insert_with(settings::TerminalSettingsContent::default);
-                let new_shell = settings::Shell::Program(shell_str.clone());
+                let new_shell = if args.is_empty() {
+                    settings::Shell::Program(program.clone())
+                } else {
+                    settings::Shell::WithArguments {
+                        program: program.clone(),
+                        args: args.clone(),
+                        title_override: None,
+                    }
+                };
                 let prev = terminal.project.shell.clone();
                 terminal.project.shell = Some(new_shell);
                 log::info!(
-                    "zed_android: terminal.shell -> {} (was {:?}, adapter-derived)",
-                    shell_str,
+                    "zed_android: terminal.shell -> {} {:?} (was {:?}, adapter-derived)",
+                    program,
+                    args,
                     prev,
                 );
             },
@@ -1028,7 +1048,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     Some(settings::Shell::WithArguments { program, .. }) => program.clone(),
                     _ => return,
                 };
-                if program.ends_with("/zd-exec") || program.ends_with("/usr/bin/bash") {
+                if program.ends_with("/zd-exec")
+                    || program.ends_with("/usr/bin/bash")
+                    || program.ends_with(&format!("/{}", zd_engine_core::LOADER_LINK_NAME))
+                {
                     log::info!("zed_android: clearing stale terminal.shell {program}");
                     terminal.project.shell = None;
                 }
