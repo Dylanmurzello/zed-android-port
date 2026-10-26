@@ -193,7 +193,7 @@ fn android_main(app: AndroidApp) {
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
     // every subsequent execve into $PREFIX/bin/* will EACCES.
-    gpui_android::termux_bootstrap::check_selinux_context();
+    gpui_android::selinux_canary::check_selinux_context();
 
     // Best-effort runtime READ/WRITE_EXTERNAL_STORAGE prompt. Replaces the
     // MANAGE_EXTERNAL_STORAGE → Settings deep-link flow we used at

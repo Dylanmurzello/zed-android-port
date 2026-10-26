@@ -18,7 +18,7 @@ mod multi_window;
 mod platform;
 mod saf;
 pub mod storage;
-pub mod termux_bootstrap;
+pub mod selinux_canary;
 mod touch;
 mod window;
 pub mod zd_exec_install;
