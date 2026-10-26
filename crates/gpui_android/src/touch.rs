@@ -15,11 +15,11 @@
 //!
 //! Gesture vocabulary (Phase 1; longpress-selection lands in Phase 4):
 //! - 1-finger tap → `MouseDown(Left)` + `MouseUp(Left, count=1+)`
-//! - 1-finger drag → cancel pending Left + `ScrollWheel(...)` per frame
+//! - 1-finger drag → cancel pending Left + `Scroll(...)` per frame
 //! - 1-finger longpress → keeps `Left` held (no synthetic right-click;
 //!   collides with text selection)
 //! - 2-finger tap → cancel pending Left + synthesize Right click sequence
-//! - 2-finger drag → `ScrollWheel` from centroid relative-delta
+//! - 2-finger drag → `Scroll` from centroid relative-delta
 //!
 //! State ownership: `TouchState` is a field on `AndroidWindowState`.
 //! Both primary and extra-window surfaces own their own `TouchState`,
@@ -41,7 +41,7 @@ use android_activity::AndroidApp;
 use android_activity::input::{MetaState, MotionAction, MotionEvent};
 use gpui::{
     MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, Pixels, Point, ScrollDelta,
-    ScrollWheelEvent, TouchPhase, point, px,
+    ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
 
 use crate::events::MotionInputs;
@@ -271,7 +271,7 @@ enum GesturePhase {
     /// consume; no scroll synthesis, no long-press transition. Cleared
     /// on lift / cancel.
     DragPassthrough,
-    /// One finger; motion past `DRAG_THRESHOLD_PX`, emitting `ScrollWheel`.
+    /// One finger; motion past `DRAG_THRESHOLD_PX`, emitting `Scroll`.
     SingleFingerScroll,
     /// One finger held past `LONG_PRESS_THRESHOLD` with motion still
     /// below `DRAG_THRESHOLD_PX`. `MouseDown(Left, count=2)` already
@@ -284,7 +284,7 @@ enum GesturePhase {
     /// 2+ fingers down within the 2-finger-tap window. Not yet decided
     /// 2-finger-tap (→ right click) vs 2-finger-scroll (→ scroll).
     MultiFingerDown,
-    /// 2+ fingers; motion past `DRAG_THRESHOLD_PX`, emitting `ScrollWheel`.
+    /// 2+ fingers; motion past `DRAG_THRESHOLD_PX`, emitting `Scroll`.
     MultiFingerScroll,
     /// 2-finger tap already resolved as Right click. Waiting for all
     /// fingers to lift before returning to `Idle`.
@@ -528,7 +528,7 @@ impl TouchState {
                     // anchor is the primary's DOWN position (first
                     // finger's original landing). Same sticky rationale
                     // as single-finger scroll: GPUI hit-tests on
-                    // `position`, and we want every ScrollWheel routed
+                    // `position`, and we want every Scroll event routed
                     // to whichever pane the user originally grabbed
                     // with finger 1, not whichever pane the centroid
                     // happens to drift over.
@@ -561,11 +561,12 @@ impl TouchState {
                             if let Some(prev) = self.scroll_centroid {
                                 let delta = cur - prev;
                                 if delta.magnitude() > 0.0 {
-                                    out.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+                                    out.push(PlatformInput::Scroll(ScrollEvent {
                                         position: primary_anchor,
                                         delta: ScrollDelta::Pixels(delta),
                                         modifiers,
                                         touch_phase: TouchPhase::Moved,
+                                        source: ScrollSource::Touch,
                                     }));
                                 }
                             }
@@ -617,13 +618,13 @@ impl TouchState {
                         if pstate.accumulated_motion >= DRAG_THRESHOLD_PX =>
                     {
                         // Commit to scroll. Cancel the pending Left, then
-                        // emit the first ScrollWheel frame from the
+                        // emit the first Scroll frame from the
                         // motion that pushed us over threshold.
                         //
                         // `position` stays anchored at the original DOWN
                         // location for the whole scroll gesture (NOT the
                         // current finger position) so GPUI's hit-test
-                        // routes every ScrollWheel to whichever pane the
+                        // routes every Scroll event to whichever pane the
                         // user originally grabbed. Otherwise the scroll
                         // target switches mid-drag when the finger crosses
                         // a pane boundary (editor↔terminal split, etc.).
@@ -636,11 +637,12 @@ impl TouchState {
                             click_count: 0,
                         }));
                         if delta.magnitude() > 0.0 {
-                            out.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+                            out.push(PlatformInput::Scroll(ScrollEvent {
                                 position: anchor,
                                 delta: ScrollDelta::Pixels(delta),
                                 modifiers,
                                 touch_phase: TouchPhase::Moved,
+                                source: ScrollSource::Touch,
                             }));
                         }
                     }
@@ -677,11 +679,12 @@ impl TouchState {
                         // Sticky anchor: see commit-to-scroll arm above.
                         let anchor = pstate.down_pos;
                         if delta.magnitude() > 0.0 {
-                            out.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+                            out.push(PlatformInput::Scroll(ScrollEvent {
                                 position: anchor,
                                 delta: ScrollDelta::Pixels(delta),
                                 modifiers,
                                 touch_phase: TouchPhase::Moved,
+                                source: ScrollSource::Touch,
                             }));
                         }
                     }
@@ -792,7 +795,7 @@ impl TouchState {
 //   - 1-finger drag → advance the virtual cursor by the touch delta
 //     and re-position the cursor sprite. No mouse button held.
 //   - 2-finger tap → right-click at the cursor.
-//   - 2-finger drag → `ScrollWheel` based on centroid Y-delta.
+//   - 2-finger drag → `Scroll` based on centroid Y-delta.
 //
 // The virtual cursor lives on Kotlin's side (`MainActivity.cursorX/Y`,
 // same SurfaceControl overlay the hardware trackpad uses) and we keep
@@ -861,7 +864,7 @@ enum TrackpadGesturePhase {
     /// 2+ fingers down within the 2-finger-tap window. Not yet
     /// decided 2-finger-tap (right click) vs 2-finger-scroll.
     MultiFingerDown,
-    /// 2+ fingers past scroll threshold; emits `ScrollWheel`.
+    /// 2+ fingers past scroll threshold; emits `Scroll`.
     MultiFingerScroll,
     /// 2-finger tap resolved as right-click. Waiting for all
     /// fingers to lift before returning to Idle.
@@ -1095,11 +1098,12 @@ impl TrackpadTouchState {
                     }
 
                     if self.phase == TrackpadGesturePhase::MultiFingerScroll {
-                        out.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        out.push(PlatformInput::Scroll(ScrollEvent {
                             position: self.cursor,
                             delta: crate::ime::invert_scroll_delta(ScrollDelta::Pixels(delta)),
                             modifiers,
                             touch_phase: TouchPhase::Moved,
+                            source: ScrollSource::Pointer,
                         }));
                     }
                 }

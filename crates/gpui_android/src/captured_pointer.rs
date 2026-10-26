@@ -10,7 +10,7 @@
 //!
 //! This module turns that raw stream into the gpui `PlatformInput`
 //! vocabulary so the editor sees normal `MouseMove` / `MouseDown` /
-//! `MouseUp` / `ScrollWheel` events. We keep our own cursor position
+//! `MouseUp` / `Scroll` events. We keep our own cursor position
 //! (the system cursor is hidden while capture is active) and update it
 //! by accumulating per-event relative deltas. Single-finger motion
 //! moves the cursor; two-finger motion synthesizes a scroll from the
@@ -69,7 +69,7 @@ use std::time::{Duration, Instant};
 use futures::channel::mpsc;
 use gpui::{
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px,
+    Pixels, PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
 use jni::objects::{JFloatArray, JObject, JString};
 
@@ -635,13 +635,14 @@ pub(crate) fn translate(
                         }
                         if dx != 0.0 || dy != 0.0 {
                             state.last_motion_at = Some(Instant::now());
-                            out.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+                            out.push(PlatformInput::Scroll(ScrollEvent {
                                 position: cursor,
                                 delta: crate::ime::invert_scroll_delta(ScrollDelta::Pixels(
                                     point(px(dx), px(dy)),
                                 )),
                                 modifiers,
                                 touch_phase: TouchPhase::Moved,
+                                source: ScrollSource::Pointer,
                             }));
                         }
                     }
@@ -912,18 +913,19 @@ pub(crate) fn translate(
                 // Mouse wheel. Android carries detents in AXIS_VSCROLL /
                 // AXIS_HSCROLL; Kotlin forwards them as `vscroll` /
                 // `hscroll`, but no arm consumed them before, so the wheel
-                // did nothing. Emit a Lines-based ScrollWheel so the editor
+                // did nothing. Emit a Lines-based Scroll event so the editor
                 // scales by line height like the desktop discrete-wheel
                 // path. Sign passes through as the framework reports it
                 // (positive vscroll = wheel away from user).
                 let dx = event.hscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
                 let dy = event.vscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
                 if dx != 0.0 || dy != 0.0 {
-                    out.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+                    out.push(PlatformInput::Scroll(ScrollEvent {
                         position: cursor,
                         delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(dx, dy))),
                         modifiers,
                         touch_phase: TouchPhase::Moved,
+                        source: ScrollSource::Pointer,
                     }));
                 }
             }
