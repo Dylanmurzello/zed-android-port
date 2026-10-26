@@ -23436,7 +23436,6 @@ dependencies = [
  "toml 0.8.23",
  "ureq",
  "util",
- "zip 2.4.2",
 ]
 
 [[package]]

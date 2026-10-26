@@ -3,7 +3,7 @@
 //! On disk the file looks like:
 //!
 //! ```toml
-//! # Active adapter. One of: "chroot", "bootstrap"
+//! # Active adapter. One of: "chroot"
 //! [runtime]
 //! type = "chroot"
 //!
@@ -11,13 +11,8 @@
 //! [chroot]
 //! root = "/data/local/nhsystem/kali-arm64"
 //! home_bind = "/zed"
-//! spawnd_socket = "/dev/socket/zd-spawn"
+//! spawnd_socket = "/data/data/com.zdroid/files/run/zd-spawn"
 //! su_path = "/product/bin/su"
-//!
-//! [bootstrap]
-//! prefix = "/data/data/com.zdroid/files/usr"
-//! proot_rootfs = ""  # empty = bare mode
-//! release_repo = "Dylanmurzello/zdroid-bootstrap"
 //! ```
 //!
 //! Loading flow:
@@ -40,7 +35,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeId {
     Chroot,
-    Bootstrap,
 }
 
 impl RuntimeId {
@@ -50,7 +44,6 @@ impl RuntimeId {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Chroot => "Chroot rootfs",
-            Self::Bootstrap => "Zdroid Bootstrap",
         }
     }
 }
@@ -62,8 +55,6 @@ pub struct RuntimeFile {
 
     #[serde(default)]
     pub chroot: Option<ChrootConfig>,
-    #[serde(default)]
-    pub bootstrap: Option<BootstrapConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,29 +82,11 @@ pub struct ChrootConfig {
     pub su_path: PathBuf,
 }
 
-/// Bootstrap-adapter config. Deserialized from `[bootstrap]`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootstrapConfig {
-    /// Where the bootstrap is installed. Matches the historical
-    /// Termux-flavored `$PREFIX`.
-    pub prefix: PathBuf,
-    /// Optional proot rootfs path. Empty / unset = bare termux mode
-    /// (direct exec via `$PREFIX/bin/<name>`). Set = wrap each spawn in
-    /// `proot -r <rootfs> -- <target>`.
-    #[serde(default)]
-    pub proot_rootfs: Option<PathBuf>,
-    /// `owner/repo` slug of the GitHub repo that publishes
-    /// `bootstrap-aarch64-VERSION.tar.zst` releases. The adapter pulls
-    /// from `releases/latest` for upgrade detection.
-    pub release_repo: String,
-}
-
 /// Resolved config — the active adapter section flattened so downstream
 /// code never has to ask "which kind is this".
 #[derive(Debug, Clone)]
 pub enum ResolvedConfig {
     Chroot(ChrootConfig),
-    Bootstrap(BootstrapConfig),
 }
 
 impl ResolvedConfig {
@@ -121,17 +94,8 @@ impl ResolvedConfig {
     pub fn id(&self) -> RuntimeId {
         match self {
             Self::Chroot(_) => RuntimeId::Chroot,
-            Self::Bootstrap(_) => RuntimeId::Bootstrap,
         }
     }
-}
-
-/// Per-adapter config struct. Useful for settings UI to enumerate /
-/// edit individual fields without caring which is active.
-#[derive(Debug, Clone)]
-pub enum AdapterConfig {
-    Chroot(ChrootConfig),
-    Bootstrap(BootstrapConfig),
 }
 
 impl RuntimeFile {
@@ -150,16 +114,6 @@ impl RuntimeFile {
                     home_bind: PathBuf::from("/zed"),
                     spawnd_socket: PathBuf::from("/data/data/com.zdroid/files/run/zd-spawn"),
                     su_path: PathBuf::from("/product/bin/su"),
-                }),
-                bootstrap: None,
-            },
-            RuntimeId::Bootstrap => Self {
-                runtime,
-                chroot: None,
-                bootstrap: Some(BootstrapConfig {
-                    prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
-                    proot_rootfs: None,
-                    release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
                 }),
             },
         }
@@ -201,9 +155,6 @@ impl RuntimeFile {
                 .chroot
                 .map(ResolvedConfig::Chroot)
                 .ok_or_else(|| anyhow::anyhow!("runtime.type = chroot but no [chroot] section")),
-            RuntimeId::Bootstrap => self.bootstrap.map(ResolvedConfig::Bootstrap).ok_or_else(
-                || anyhow::anyhow!("runtime.type = bootstrap but no [bootstrap] section"),
-            ),
         }
     }
 }

@@ -58,20 +58,20 @@ fn build_active_provider(
 
 /// Same as `build_active_provider` but never returns `None`. When no
 /// runtime.toml exists yet (first launch before the picker is opened)
-/// we fall back to a default Bootstrap adapter so the env-init path
-/// always has someone to ask. The user's eventual picker selection
-/// rewrites runtime.toml and the next launch picks up the chosen
-/// adapter via `build_active_provider`.
+/// we fall back to the default adapter so the env-init path always
+/// has someone to ask. The user's eventual picker selection rewrites
+/// runtime.toml and the next launch picks up the chosen adapter via
+/// `build_active_provider`. Interim: replaced by an explicit
+/// not-configured state in the config move that follows.
 fn active_provider(data_path: &std::path::Path) -> Box<dyn RuntimeProvider> {
     if let Some(provider) = build_active_provider(data_path) {
         return provider;
     }
-    let file = RuntimeFile::with_defaults(RuntimeId::Bootstrap);
+    let file = RuntimeFile::with_defaults(RuntimeId::Chroot);
     let resolved = file
         .resolve()
-        .expect("default Bootstrap RuntimeFile must resolve");
-    adapters::for_config(&resolved)
-        .expect("default Bootstrap adapter must construct")
+        .expect("default RuntimeFile must resolve");
+    adapters::for_config(&resolved).expect("default adapter must construct")
 }
 
 
@@ -88,7 +88,7 @@ fn active_provider(data_path: &std::path::Path) -> Box<dyn RuntimeProvider> {
 // without going through AAssetManager — they're literally in the .so's
 // rodata, so first read is mmap-direct with no extract / decompress
 // step. Total budget across the 8 weights is ~3 MB, irrelevant against
-// the bundled bootstrap zip.
+// the rest of the APK.
 const BUNDLED_FONTS: &[&[u8]] = &[
     include_bytes!("../../../../../assets/fonts/lilex/Lilex-Regular.ttf"),
     include_bytes!("../../../../../assets/fonts/lilex/Lilex-Bold.ttf"),
@@ -134,16 +134,9 @@ fn android_main(app: AndroidApp) {
     // active runtime adapter's `env_for_zed_process`:
     //
     //   - Chroot adapter ships a bionic-clean env (no PREFIX, no
-    //     TERMUX__*, no libtermux-exec preload). PATH front-loaded with
-    //     the zd-runtime symlink farm so `Command::new("java")` finds
+    //     TERMUX__*, no LD_PRELOAD). PATH front-loaded with the
+    //     zd-runtime symlink farm so `Command::new("java")` finds
     //     zd-exec → zd-spawnd → chroot dispatch.
-    //
-    //   - Bootstrap adapter keeps the historical Termux-flavored env
-    //     so dpkg patches, apt Post-Invoke hooks, and bootstrap-side
-    //     tooling keep working unchanged.
-    //
-    //   - External Termux returns a minimal bionic env; spawns route
-    //     via Intent (Phase 7) so nothing here leaks across.
     //
     // The active provider also publishes a terminal env overlay that
     // `crates/terminal/src/terminal.rs` applies when the PTY spawns,
@@ -192,17 +185,10 @@ fn android_main(app: AndroidApp) {
     // guarded inside util::env.
     util::env::register_terminal_env_overlay(provider.env_for_terminal(&data_path));
 
-    // Publish adapter-specific filesystem hints for editor code that
-    // historically read TERMUX__HOME / TERMUX__PREFIX env vars
-    // directly. Now those readers (workspace::welcome,
-    // node_runtime::node_runtime, gpui_android::storage) ask the
-    // active adapter via these registry slots — Bootstrap publishes
-    // its Termux-flavored paths, chroot publishes the bionic-clean
-    // equivalents, external Termux publishes None.
+    // Publish the adapter's workspace root for editor code that needs
+    // it (workspace::welcome, gpui_android::storage) via the
+    // `util::env` registry slot.
     util::env::register_workspace_root(provider.workspace_root(&data_path));
-    util::env::register_npm_libtermux_exec_path(
-        provider.npm_libtermux_exec_path(&data_path),
-    );
 
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
@@ -243,8 +229,8 @@ fn android_main(app: AndroidApp) {
     // zd-exec; kernel PATH lookup intercepts Zed's
     // `Command::new("java")` and routes through the bridge to wherever
     // the binary actually lives. The adapter inspects its OWN
-    // filesystem (chroot walks the rootfs's /usr/bin etc.; bootstrap
-    // walks $PREFIX/bin) — no hardcoded list anywhere. apt-installing
+    // filesystem (chroot walks the rootfs's /usr/bin etc.), no
+    // hardcoded list anywhere. apt-installing
     // a new tool inside the chroot makes it show up after the next
     // launch; switching adapters rewrites the set to match the new
     // env (stale entries get swept). Pre-Phase-4 this lived at
@@ -499,8 +485,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // config_dir was initialized". Guard with a static flag.
     static PATHS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let _ = PATHS_INITIALIZED.get_or_init(|| {
-        // Each runtime adapter (chroot / bootstrap / external Termux)
-        // gets a FULLY ISOLATED Zed install: its own config, keymap,
+        // Each runtime adapter gets a FULLY ISOLATED Zed install: its own config, keymap,
         // themes, sqlite db, language servers, extensions, history,
         // logs — everything. Switching adapters via the runtime picker
         // is a workspace switch the way booting from a different SSD
@@ -546,14 +531,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             // Register the env_root with util::command so absolute-path
             // spawns under it get rewritten to route through `zd-exec`.
             // Gated on `needs_command_bridge()` so adapters whose
-            // binaries run natively on the host (bootstrap's bionic-
-            // flavored Termux prefix, external Termux's Intent
-            // dispatch) skip the rewrite. Without that gate, every
-            // absolute-path spawn from a bootstrap user (PATH-resolved
-            // rust-analyzer at $PREFIX/bin/rust-analyzer, downloaded
-            // LSPs under <data>/languages/, etc.) would rewrite to
-            // `zd-exec <abs>` and fail with ENOENT — bootstrap mode
-            // doesn't put zd-exec on PATH.
+            // binaries run natively on the host skip the rewrite;
+            // without the gate every absolute-path spawn would rewrite
+            // to `zd-exec <abs>` and fail with ENOENT whenever zd-exec
+            // is not on PATH.
             if provider.needs_command_bridge() {
                 util::command::register_environment_root(env_root.clone());
             }
@@ -654,11 +635,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     // Seed the `onboarding::runtime_global::ActiveRuntime` global with
     // the user's runtime.toml selection — NOT `active_provider`'s
-    // result. `active_provider` falls back to a default Bootstrap
-    // adapter when no toml exists so env init has something to ask;
-    // that fallback is NOT a user selection and the onboarding label
-    // must not claim "Current: Bootstrap" for a user who never picked
-    // anything. Read the toml directly: `None` flows to the label as
+    // result. `active_provider` falls back to a default adapter when
+    // no toml exists so env init has something to ask; that fallback
+    // is NOT a user selection and the onboarding label must not claim
+    // a current adapter for a user who never picked anything. Read
+    // the toml directly: `None` flows to the label as
     // "Not configured yet" and disappears the instant the picker
     // writes a selection via `cx.set_global` (see runtime_picker.rs).
     let current_from_toml = RuntimeFile::load(
@@ -744,18 +725,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     let fs: Arc<dyn Fs> = Arc::new(RealFs::new(None, cx.background_executor().clone()));
     <dyn Fs>::set_global(fs.clone(), cx);
-    // Real NodeRuntime, mirroring crates/zed/src/main.rs:496-518. The
-    // earlier port stage stubbed this out as `NodeRuntime::unavailable()`
-    // back when Termux's Node didn't run on bionic — pre L3 npm intercept
-    // architecture (project_l3_npm_intercept memory). The intercept layer
-    // (patched node platform string, npm wrapper, launcher-gen RUNPATH
-    // fixup, libtermux-exec LD_PRELOAD) plus the bundled musl loader make
-    // a Termux-installed Node usable. Wire NodeRuntime against settings
-    // so PATH-resolved Node (`pkg install nodejs` → $PREFIX/bin/node)
-    // works, and Zed's managed-node fallback download path is available
-    // for users without termux Node. Without this, npm-based LSPs
-    // (TypeScript / JavaScript / Pyright / etc.) fail at the install step
-    // with `'node' settings do not allow any way to use Node.js`.
+    // Real NodeRuntime, mirroring crates/zed/src/main.rs:496-518. Wired
+    // against settings so a PATH-resolved Node (from the active runtime
+    // adapter) works, and Zed's managed-node download path stays
+    // available. Without this, npm-based LSPs (TypeScript / JavaScript /
+    // Pyright / etc.) fail at the install step with `'node' settings do
+    // not allow any way to use Node.js`.
     let (mut node_options_tx, node_options_rx) =
         watch::channel::<Option<node_runtime::NodeBinaryOptions>>(None);
     cx.observe_global::<SettingsStore>(move |cx| {
@@ -961,10 +936,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // (the parody) so this explicit Shell::Program is what makes any
     // useful terminal work at all.
     let provider = active_provider(data_path);
-    let shell_path = provider
-        .terminal_shell(data_path)
-        .unwrap_or_else(|| data_path.join("usr/bin/bash"));
-    if shell_path.is_file() {
+    let shell_path = provider.terminal_shell(data_path);
+    if let Some(shell_path) = shell_path.filter(|path| path.is_file()) {
         let shell_str = shell_path.to_string_lossy().to_string();
         let fs_for_settings = app_state.fs.clone();
         cx.global::<settings::SettingsStore>().update_settings_file(
@@ -985,9 +958,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         );
     } else {
         log::warn!(
-            "zed_android: adapter-derived shell {} missing on disk; \
-             leaving terminal.shell as-is",
-            shell_path.display()
+            "zed_android: adapter-derived shell missing on disk; \
+             leaving terminal.shell as-is"
         );
     }
 

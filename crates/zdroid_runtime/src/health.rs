@@ -23,8 +23,8 @@ pub enum HealthStatus {
 
     /// Adapter is installed but broken — config disagrees with disk
     /// state (e.g. chroot rootfs is at the configured path but
-    /// `zd-spawnd` socket isn't responding; bootstrap is at the
-    /// configured `$PREFIX` but version stamp is older than required).
+    /// `zd-spawnd` socket isn't responding; the rootfs is at the
+    /// configured path but its version stamp is older than required).
     Misconfigured {
         /// One-line description of what's wrong, plus a hint how to
         /// fix it ("Magisk module not running — try Reboot, or
@@ -54,12 +54,11 @@ impl HealthStatus {
 /// command-line / smoke-test paths can pass a no-op or a stdout-printer.
 ///
 /// Calls are advisory — adapters that genuinely have nothing to report
-/// (e.g. external Termux's install, which is a one-shot intent ping)
-/// just don't call this at all. Long ops (bootstrap download, rootfs
+/// just don't call this at all. Long ops (rootfs download and
 /// extraction) MUST call regularly so the user doesn't think the app
 /// has hung.
 pub trait ProgressSink: Send {
-    /// Set the high-level step the user sees ("Downloading bootstrap…",
+    /// Set the high-level step the user sees ("Downloading rootfs…",
     /// "Extracting…", "Verifying checksum…").
     fn step(&mut self, label: &str);
 
@@ -82,4 +81,23 @@ impl ProgressSink for NoopProgressSink {
     fn step(&mut self, _: &str) {}
     fn progress(&mut self, _: u64, _: u64) {}
     fn warn(&mut self, _: &str) {}
+}
+
+/// `ProgressSink` that forwards everything to the `log` crate. For
+/// headless install paths (zd-exec, smoke tests) where no UI is
+/// listening.
+pub struct LogProgressSink;
+
+impl ProgressSink for LogProgressSink {
+    fn step(&mut self, label: &str) {
+        log::info!("zdroid_runtime: install: {label}");
+    }
+    fn progress(&mut self, done: u64, total: u64) {
+        if total > 0 {
+            log::debug!("zdroid_runtime: install: {done}/{total}");
+        }
+    }
+    fn warn(&mut self, message: &str) {
+        log::warn!("zdroid_runtime: install: {message}");
+    }
 }

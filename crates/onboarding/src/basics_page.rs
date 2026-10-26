@@ -906,9 +906,8 @@ pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -
 
 /// Hand off the Android runtime setup to the rich picker window
 /// instead of trying to render install / progress UX inline in the
-/// onboarding form. The picker window has health badges, an Install
-/// button for Bootstrap that downloads the 240 MB userland from
-/// GitHub, and a live ProgressSink-driven status label (Phase 6c).
+/// onboarding form. The picker window has health badges and the
+/// install flow for the runtime.
 ///
 /// The "Current: <adapter>" label is reactive — it reads the
 /// `runtime_global::ActiveRuntime` global. The `Onboarding` entity
@@ -925,7 +924,6 @@ fn render_android_runtime_section(tab_index: &mut isize, cx: &mut App) -> impl I
         .and_then(|state| state.current);
     let current_label: SharedString = match current {
         Some(RuntimeId::Chroot) => "Current: Kali chroot".into(),
-        Some(RuntimeId::Bootstrap) => "Current: Bootstrap".into(),
         None => "Not configured yet".into(),
     };
 

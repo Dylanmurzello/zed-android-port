@@ -18,22 +18,6 @@ val signingProps = Properties().apply {
 }
 val hasReleaseSigning = signingPropsFile.exists()
 
-// Bootstrap-zip distribution.
-//
-// Pre-Phase-6: the APK bundled bootstrap-aarch64.zip (~239 MB) as an
-// asset, downloaded by a `downloadBootstrap` Gradle task from a
-// GitHub release at build time, then extracted at first launch.
-//
-// Phase 6 moved the download to runtime, owned by
-// `BootstrapAdapter::install` (see `crates/zdroid_runtime/src/
-// adapters/bootstrap_install.rs`). The APK no longer bundles the
-// zip; the Bootstrap adapter pulls it directly from
-// `https://github.com/<release_repo>/releases/latest` when the user
-// selects Bootstrap and the on-disk version sentinel doesn't match.
-//
-// Chroot users (Magisk + zd-spawnd module) never trigger the
-// bootstrap install. Saves ~239 MB of fat for the majority case.
-
 // zd-exec bundling.
 //
 // `zd-exec` is the Rust spawn wrapper (in crates/zdroid_runtime/src/
@@ -215,14 +199,6 @@ android {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
         }
-    }
-
-    // Don't deflate bootstrap-aarch64.zip during APK packaging — it's
-    // already a deflated zip, and re-deflating it (a) wastes APK size
-    // (b) forces AAssetManager to decompress at runtime, which prevents
-    // the bootstrap extractor from using the mmap-able buffer path.
-    androidResources {
-        noCompress += listOf("zip")
     }
 
     compileOptions {

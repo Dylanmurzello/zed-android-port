@@ -74,25 +74,3 @@ pub fn register_workspace_root(path: Option<PathBuf>) {
 pub fn workspace_root() -> Option<&'static PathBuf> {
     WORKSPACE_ROOT.get().and_then(Option::as_ref)
 }
-
-/// Active adapter's `libtermux-exec.so` path, for editor code that
-/// LD_PRELOADs it when spawning bionic CLIs that have hardcoded
-/// `/data/data/com.termux/` paths baked in (Bun-compiled Termux npm
-/// packages: claude, codex). Bootstrap is the only adapter that
-/// returns Some; chroot / external-Termux return None.
-///
-/// Registered once at android_main from
-/// `RuntimeProvider::npm_libtermux_exec_path`.
-static NPM_LIBTERMUX_EXEC_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
-
-pub fn register_npm_libtermux_exec_path(path: Option<PathBuf>) {
-    if NPM_LIBTERMUX_EXEC_PATH.set(path).is_err() {
-        log::warn!(
-            "util::env: npm_libtermux_exec_path already registered; ignoring re-register"
-        );
-    }
-}
-
-pub fn npm_libtermux_exec_path() -> Option<&'static PathBuf> {
-    NPM_LIBTERMUX_EXEC_PATH.get().and_then(Option::as_ref)
-}

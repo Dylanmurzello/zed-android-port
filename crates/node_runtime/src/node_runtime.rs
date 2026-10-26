@@ -1168,55 +1168,6 @@ pub fn npm_command_env(node_binary: &Path) -> HashMap<String, String> {
         }
     }
 
-    // On Android, two npm-side adjustments scoped to the subprocess:
-    //
-    // 1. LD_PRELOAD=$PREFIX/lib/libtermux-exec.so. The gpui app removes
-    //    LD_PRELOAD at boot to keep ssh subprocesses clean of
-    //    `cannot be preloaded` spam on remote shells (per the L10
-    //    workaround). Without it, npm-installed CLI scripts whose
-    //    shebang is `#!/usr/bin/env node` fail to exec — Android has
-    //    no `/usr/bin/env`, kernel binfmt_script reports the SHEBANG
-    //    file as not-found, and `npm run-script compile` dies with
-    //    `sh: 1: tsc: not found`. libtermux-exec rewrites those Linux
-    //    shebangs to the $PREFIX/bin/ equivalents at execve. Scoping
-    //    here keeps ssh clean.
-    //
-    // 2. npm_config_libc=musl. Termux's bionic isn't musl OR glibc, so
-    //    npm's detect-libc returns null. Packages with platform-
-    //    specific optionalDependencies (like @anthropic-ai/claude-code,
-    //    most native-binary npm CLIs) require libc=musl OR libc=glibc
-    //    in their `engines` block, and `null` matches neither — npm
-    //    silently skips ALL optional variants and the install lands
-    //    only the wrapper package without the native binary.
-    //    `--libc=musl` (forwarded via npm_config_libc env, equivalent
-    //    to the CLI flag) tells npm to pick the musl variant. Our
-    //    musl loader at $PREFIX/lib/ld-musl-aarch64.so.1 plus the
-    //    launcher-gen patchelf step makes those binaries actually run.
-    //    Choosing musl over glibc because the Termux glibc-runner
-    //    package (`grun`) is a heavier dependency we don't want to
-    //    require for every npm-installed CLI; musl-static binaries
-    //    work directly via our bundled musl loader.
-    #[cfg(target_os = "android")]
-    {
-        // The active Zdroid runtime adapter publishes the
-        // libtermux-exec.so path via `util::env`. Bootstrap mode
-        // returns Some(<prefix>/lib/libtermux-exec.so); chroot and
-        // external Termux return None. Pre-Phase-5 this read
-        // `env::var("TERMUX__PREFIX")` directly, which worked for
-        // Bootstrap but yielded the wrong answer for chroot (the
-        // chroot's npm tools run inside the glibc rootfs and don't
-        // want a bionic-linked preload).
-        if let Some(termux_exec) = util::env::npm_libtermux_exec_path()
-            && termux_exec.is_file()
-        {
-            command_env.insert(
-                "LD_PRELOAD".into(),
-                termux_exec.to_string_lossy().into_owned(),
-            );
-        }
-        command_env.insert("npm_config_libc".into(), "musl".into());
-    }
-
     #[cfg(windows)]
     {
         if let Some(val) = env::var("SYSTEMROOT")

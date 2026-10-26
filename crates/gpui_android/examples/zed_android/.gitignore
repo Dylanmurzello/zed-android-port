@@ -9,13 +9,6 @@ android/local.properties
 # Release signing — never commit. Back up off-machine.
 android/app/release.keystore
 android/app/signing.properties
-# ~239 MB bootstrap. Too big for git (GitHub hard cap = 100 MB/file).
-# Hosted as a GitHub Release asset; the `downloadBootstrap` Gradle task
-# in `android/app/build.gradle.kts` fetches it automatically at build
-# time. The exact version is pinned by `bootstrapVersion` in that
-# build script and must match `BOOTSTRAP_VERSION` in
-# `crates/gpui_android/src/termux_bootstrap.rs`.
-android/app/src/main/assets/bootstrap-aarch64.zip
 # zd-exec is built by the `buildZdExec` Gradle task on each APK build
 # (cargo-ndk → target/aarch64-linux-android/release/zd-exec → here).
 # Binary build artifact; not committed.

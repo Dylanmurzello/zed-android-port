@@ -15,7 +15,7 @@ use crate::health::{HealthStatus, ProgressSink};
 
 /// A spawn request handed to the active provider. Mirrors the data a
 /// `Command::new` carries plus the inheritable fds (passed via
-/// `SCM_RIGHTS` in chroot mode, via temp files in external-Termux mode).
+/// `SCM_RIGHTS` in chroot mode).
 ///
 /// Adapters take this and return a [`SpawnHandle`] representing the
 /// running process. The caller waits / signals via the handle.
@@ -23,8 +23,7 @@ use crate::health::{HealthStatus, ProgressSink};
 pub struct SpawnRequest {
     /// Target binary name as the user / Zed wants it (e.g. `git`,
     /// `rust-analyzer`). The adapter resolves this against its userland
-    /// (e.g. `/usr/bin/git` inside a chroot, `$PREFIX/bin/git` in
-    /// bootstrap mode, `bash -c git ...` via Termux RUN_COMMAND).
+    /// (e.g. `/usr/bin/git` inside the guest rootfs).
     pub program: String,
 
     /// argv[1..] for the child. argv[0] is set by the adapter to match
@@ -50,10 +49,10 @@ pub struct SpawnRequest {
 
     /// Stdio fds to pass to the child. Indexed 0=stdin, 1=stdout,
     /// 2=stderr. Typically `[0, 1, 2]` for "inherit the caller's
-    /// stdio". Adapters that bridge across processes (chroot via
-    /// daemon, external Termux via intent) duplicate these fds across
-    /// the boundary using `SCM_RIGHTS` or equivalent. The fds remain
-    /// valid for the caller; ownership is not transferred.
+    /// stdio". Adapters that bridge across processes (chroot via its
+    /// daemon) duplicate these fds across the boundary using
+    /// `SCM_RIGHTS`. The fds remain valid for the caller; ownership is
+    /// not transferred.
     pub stdio: [RawFd; 3],
 }
 
@@ -83,36 +82,26 @@ pub trait RuntimeProvider: Send + Sync {
 
     /// One-shot install / setup. Idempotent: calling on an
     /// already-installed adapter is a no-op + Ok. Long operations
-    /// (downloading a bootstrap tarball, walking a rootfs) report
+    /// (downloading a rootfs tarball, extracting it) report
     /// progress through the sink.
     fn install(&self, progress: &mut dyn ProgressSink) -> anyhow::Result<()>;
 
-    /// Remove anything this adapter installed. Adapter-specific:
-    /// bootstrap removes its `$PREFIX/{bin,lib,etc}`; chroot is no-op
-    /// (the rootfs is the user's, not ours); external Termux is no-op.
-    /// Project files / settings / config are never touched.
+    /// Remove anything this adapter installed. Chroot is a no-op (the
+    /// rootfs is the user's, not ours); the rootfs adapter removes what
+    /// it downloaded. Project files / settings / config are never
+    /// touched.
     fn uninstall(&self) -> anyhow::Result<()>;
 
     /// Spawn the child process described by `req`. See [`SpawnHandle`]
     /// for the returned handle's contract.
     fn spawn(&self, req: SpawnRequest) -> anyhow::Result<Box<dyn SpawnHandle>>;
 
-    /// True if switching TO this adapter from another requires the app
-    /// to restart. Most adapters return true because env init (PATH,
-    /// HOME, etc.) runs once at boot and won't pick up the new shape
-    /// otherwise. Settings UI uses this to gate the "Restart Zdroid?"
-    /// prompt during a switch.
-    fn requires_restart_on_switch(&self) -> bool {
-        true
-    }
-
     /// Whether `util::command::new_command` should rewrite absolute-path
     /// spawns under [`Self::environment_root`] to route through
     /// `zd-exec`. Adapters that cross a namespace boundary (e.g. chroot)
     /// return true so the spawn lands inside the right userland;
-    /// adapters whose binaries run natively on the host (bootstrap's
-    /// bionic-flavored Termux prefix, external Termux's Intent
-    /// dispatch) return false so `execve` runs the binary directly.
+    /// adapters whose binaries run natively on the host return false so
+    /// `execve` runs the binary directly.
     ///
     /// Default false — opt in. A misregistered true value in an
     /// adapter without `zd-exec` on PATH fails every absolute-path
@@ -151,8 +140,7 @@ pub trait RuntimeProvider: Send + Sync {
     ///      bytes are visible at a (different) absolute path inside
     ///      the chroot; the adapter's argv translation rewrites host
     ///      paths to chroot-target paths before forwarding to the
-    ///      daemon. For bootstrap there's no namespace crossing so
-    ///      any path under `$PREFIX` works.
+    ///      daemon.
     ///
     /// Adapter switching is a workspace switch: each adapter's
     /// `environment_root` is a separate physical location, populated
@@ -170,15 +158,14 @@ pub trait RuntimeProvider: Send + Sync {
     /// the user's PATH and lives on the same filesystem as the
     /// editor. On Android, the editor sits in a separate sandbox
     /// from the toolchain's filesystem namespace, so PATH lookup
-    /// from the app process can't see the chroot's or bootstrap's
-    /// `bin/` directly. The symlink farm at `zd-runtime/` is the
+    /// from the app process can't see the guest's `bin/` directly.
+    /// The symlink farm at `zd-runtime/` is the
     /// virtual `/usr/bin` Zed gets to see; this method tells boot
     /// what to put in it.
     ///
-    /// Default impl returns empty — adapters that don't have a
-    /// readable bin layout (e.g. external Termux until the JNI
-    /// bridge lands) opt out cleanly; PATH-based lookup just won't
-    /// find anything, which is the correct fail-closed behavior.
+    /// Default impl returns empty — adapters without a readable bin
+    /// layout opt out cleanly; PATH-based lookup just won't find
+    /// anything, which is the correct fail-closed behavior.
     fn list_binaries(&self) -> Vec<String> {
         Vec::new()
     }
@@ -216,10 +203,7 @@ pub trait RuntimeProvider: Send + Sync {
 
     /// Absolute path of the program the integrated terminal should
     /// exec when the user opens a new terminal. Chroot returns the
-    /// `zd-exec` wrapper (which dispatches into the rootfs); bootstrap
-    /// returns `$PREFIX/bin/bash`; external Termux returns whatever
-    /// stub shell is reachable from bionic until the JNI Intent
-    /// bridge lands.
+    /// `zd-exec` wrapper (which dispatches into the rootfs).
     ///
     /// Returns `None` for non-Android adapters to keep the upstream
     /// terminal code path untouched.
@@ -231,19 +215,8 @@ pub trait RuntimeProvider: Send + Sync {
     /// Recent-project UI groups paths under this dir as "Workspace"
     /// (vs. SAF-picked "External"); `gpui_android::storage` derives
     /// the `~/projects` mkdir target and the noexec-suppression cache
-    /// from this. Returns `None` when the adapter has no opinion
-    /// (external Termux, until the JNI bridge lands).
+    /// from this. Returns `None` when the adapter has no opinion.
     fn workspace_root(&self, _data_path: &Path) -> Option<PathBuf> {
-        None
-    }
-
-    /// Path to a `libtermux-exec.so` that npm-spawned bionic CLIs
-    /// should LD_PRELOAD so their hardcoded `/data/data/com.termux/`
-    /// shebangs and dlopen calls get translated. Only the Bootstrap
-    /// adapter has this; chroot-spawned npm tools live inside the
-    /// rootfs and use glibc directly, external-Termux dispatches via
-    /// Intent and doesn't propagate LD_PRELOAD.
-    fn npm_libtermux_exec_path(&self, _data_path: &Path) -> Option<PathBuf> {
         None
     }
 }

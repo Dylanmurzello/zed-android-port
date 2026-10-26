@@ -1,20 +1,10 @@
 //! Runtime adapter picker — lets the user pick which userland Zdroid
-//! routes its spawns through (chroot, bootstrap, external Termux).
+//! routes its spawns through.
 //!
-//! Surfaces as a centered modal triggered by the `zdroid: pick runtime`
-//! action. Mirrors Zed's welcome-page card aesthetic.
-//!
-//! v1 scope (this commit):
-//!   - Render three cards with name, tagline, live health snapshot.
-//!   - Select button per card. Click logs the choice + dismisses.
-//!     Persistence to `runtime.toml` lands once we've nailed down
-//!     where Zdroid stores adapter config (likely `$PREFIX/etc/zd-runtime.toml`)
-//!     and added the file-write helper.
-//!
-//! Future scope (queued in tasks #33/#34):
-//!   - Install / Uninstall buttons backed by adapter `install()` paths.
-//!   - "Restart Zdroid" prompt after a switch.
-//!   - First-launch auto-open when no `runtime.toml` exists yet.
+//! Opens as a standalone window from the `zdroid: pick runtime` action
+//! (command palette, Settings → Android Runtime, onboarding). Renders
+//! one card per adapter with name, tagline and a live health snapshot;
+//! `Select` writes `zd-runtime.toml` and shows a restart banner.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,34 +26,10 @@ use zdroid_runtime::{
     HealthStatus, RuntimeId, RuntimeProvider,
     adapters,
     adapters::chroot::SPAWND_RELEASE_URL,
-    config::{BootstrapConfig, ChrootConfig, RuntimeFile},
-    health::ProgressSink,
+    config::{ChrootConfig, RuntimeFile},
 };
 
-/// Bridges the sync `ProgressSink` trait (called from the background
-/// install thread) into an async channel the foreground UI poller
-/// reads. `step` and `warn` are forwarded as status strings;
-/// `progress` is dropped because the install path's milestones are
-/// already coarse enough to render as labels.
-struct ChannelProgressSink {
-    tx: futures::channel::mpsc::UnboundedSender<String>,
-}
-
-impl ProgressSink for ChannelProgressSink {
-    fn step(&mut self, label: &str) {
-        log::info!("zdroid_runtime_picker: step: {}", label);
-        let _ = self.tx.unbounded_send(label.to_string());
-    }
-    fn progress(&mut self, _done: u64, _total: u64) {}
-    fn warn(&mut self, message: &str) {
-        log::warn!("zdroid_runtime_picker: warn: {}", message);
-        let _ = self.tx.unbounded_send(format!("warning: {message}"));
-    }
-}
-
-/// Where Zdroid stores the active-adapter selection. Lives inside
-/// `$PREFIX/etc/` so the bootstrap-extraction step doesn't clobber it
-/// (extraction doesn't touch `etc/`), and so it persists across
+/// Where Zdroid stores the active-adapter selection. Persists across
 /// editor APK updates the same way other user state does.
 const RUNTIME_TOML_PATH: &str = "/data/data/com.zdroid/files/usr/etc/zd-runtime.toml";
 
@@ -186,12 +152,6 @@ pub struct RuntimePicker {
     /// "Current" badge in the UI; `Select` is a no-op if the user
     /// picks the same one.
     current: Option<RuntimeId>,
-    /// Live status string while a bootstrap install is running.
-    /// `None` when no install is in flight. The background task
-    /// pushes updates via a channel; the foreground poller writes
-    /// them here + calls `cx.notify()` so the install button's
-    /// label re-renders without the user having to interact.
-    install_status: Option<String>,
     /// True once an adapter selection has been saved to
     /// `runtime.toml` and the user needs to fully close and reopen
     /// the app for the change to take effect. Drives the inline
@@ -215,71 +175,8 @@ impl RuntimePicker {
             focus_handle: cx.focus_handle(),
             entries: build_entries(),
             current: detect_current(),
-            install_status: None,
             restart_required: false,
         }
-    }
-
-    /// Trigger an async bootstrap install. Drops the user into a
-    /// "downloading + extracting" state on the Bootstrap card while
-    /// the background task pulls the latest release zip from GitHub
-    /// and extracts to `$PREFIX`. Refreshes adapter health on
-    /// completion so the card flips from NotInstalled → Healthy
-    /// without the user having to re-open the picker.
-    fn install_bootstrap(&mut self, cx: &mut Context<Self>) {
-        if self.install_status.is_some() {
-            return; // already in progress
-        }
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
-        self.install_status = Some("Starting install".into());
-        cx.notify();
-
-        // Background: run the actual install. Blocks on ureq +
-        // zip extract. ProgressSink pushes status strings into the
-        // channel; the foreground poller below picks them up.
-        cx.background_executor()
-            .spawn(async move {
-                let config = default_bootstrap_config();
-                let adapter = match adapters::bootstrap::BootstrapAdapter::new(config) {
-                    Ok(a) => a,
-                    Err(err) => {
-                        log::error!(
-                            "zdroid_runtime_picker: BootstrapAdapter::new failed: {err:#}"
-                        );
-                        let _ = tx.unbounded_send(format!("Failed: {err:#}"));
-                        return;
-                    }
-                };
-                let mut sink = ChannelProgressSink { tx: tx.clone() };
-                if let Err(err) = adapter.install(&mut sink) {
-                    log::error!(
-                        "zdroid_runtime_picker: BootstrapAdapter::install failed: {err:#}"
-                    );
-                    let _ = tx.unbounded_send(format!("Install failed: {err:#}"));
-                }
-                // tx + sink drop here → channel closes → foreground exits.
-            })
-            .detach();
-
-        // Foreground poll: drain the channel, write each message into
-        // self.install_status + cx.notify so the card label updates.
-        // When the channel closes (background task done), refresh the
-        // adapter entries and clear the in-progress state.
-        cx.spawn(async move |this, cx| {
-            use futures::StreamExt as _;
-            while let Some(msg) = rx.next().await {
-                let _ = this.update(cx, |this, cx| {
-                    this.install_status = Some(msg);
-                    cx.notify();
-                });
-            }
-            let _ = this.update(cx, |this, cx| {
-                this.install_status = None;
-                this.entries = build_entries();
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     fn select(&mut self, id: RuntimeId, _window: &mut Window, cx: &mut Context<Self>) {
@@ -355,7 +252,7 @@ impl Render for RuntimePicker {
             .iter()
             .enumerate()
             .map(|(idx, entry)| {
-                render_card(idx, entry, self.current, self.install_status.as_deref(), cx)
+                render_card(idx, entry, self.current, cx)
             })
             .collect();
 
@@ -434,7 +331,6 @@ fn render_card(
     idx: usize,
     entry: &AdapterEntry,
     current: Option<RuntimeId>,
-    install_status: Option<&str>,
     cx: &mut Context<RuntimePicker>,
 ) -> AnyElement {
     let theme_colors = cx.theme().colors();
@@ -527,11 +423,9 @@ fn render_card(
         )
         // Cascade priority: install actions WIN over the "Selected"
         // decorative chip, even when the unhealthy adapter is the
-        // user's current runtime.toml selection. If Bootstrap is
-        // selected but its $PREFIX is empty (Phase 6 fresh-install
-        // state), the user needs the Install button — showing a
-        // "Selected" chip there would leave them stuck without a way
-        // to trigger the download.
+        // user's current runtime.toml selection; a "Selected" chip on
+        // a broken adapter would leave the user stuck without a way to
+        // fix it.
         .child(if id == RuntimeId::Chroot
             && !matches!(entry.health, HealthStatus::Healthy)
         {
@@ -549,28 +443,6 @@ fn render_card(
                     cx.open_url(SPAWND_RELEASE_URL);
                 }))
                 .into_any_element()
-        } else if id == RuntimeId::Bootstrap
-            && matches!(entry.health, HealthStatus::NotInstalled { .. })
-        {
-            // Bootstrap adapter has its 240 MB userland in a separate
-            // GitHub repo (`<release_repo>`); Phase 6 of the Termux-
-            // divestment refactor stopped bundling it in the APK and
-            // moved download to `BootstrapAdapter::install`. Tap
-            // "Install" to kick off the async download + extract; the
-            // button label switches to the live `install_status` for
-            // the duration. After completion the card flips to
-            // Healthy → normal Select.
-            if let Some(status) = install_status {
-                Button::new(("installing", idx), status.to_string())
-                    .disabled(true)
-                    .into_any_element()
-            } else {
-                Button::new(("install", idx), "Install")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.install_bootstrap(cx);
-                    }))
-                    .into_any_element()
-            }
         } else if is_current {
             // Healthy AND the active selection — decorative confirm.
             // The header already shows an "Active" Chip; this right-
@@ -599,26 +471,13 @@ fn build_entries() -> Vec<AdapterEntry> {
         .unwrap_or_else(|err| HealthStatus::Failed {
             error: err.to_string(),
         });
-    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(default_bootstrap_config())
-        .map(|a| a.health_check())
-        .unwrap_or_else(|err| HealthStatus::Failed {
-            error: err.to_string(),
-        });
 
-    vec![
-        AdapterEntry {
-            id: RuntimeId::Chroot,
-            tagline:
-                "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
-            health: chroot_health,
-        },
-        AdapterEntry {
-            id: RuntimeId::Bootstrap,
-            tagline:
-                "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
-            health: bootstrap_health,
-        },
-    ]
+    vec![AdapterEntry {
+        id: RuntimeId::Chroot,
+        tagline:
+            "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
+        health: chroot_health,
+    }]
 }
 
 fn default_chroot_config() -> ChrootConfig {
@@ -627,14 +486,6 @@ fn default_chroot_config() -> ChrootConfig {
         home_bind: PathBuf::from("/zed"),
         spawnd_socket: PathBuf::from("/data/data/com.zdroid/files/run/zd-spawn"),
         su_path: PathBuf::from("/product/bin/su"),
-    }
-}
-
-fn default_bootstrap_config() -> BootstrapConfig {
-    BootstrapConfig {
-        prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
-        proot_rootfs: None,
-        release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
     }
 }
 
