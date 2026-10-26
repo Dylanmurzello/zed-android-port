@@ -1422,7 +1422,6 @@ impl Fs for RealFs {
             .cloned()
             .ok_or(TrashRestoreError::AlreadyRestored)?;
 
-
         let restored_item_path = trashed_entry.original_parent.join(&trashed_entry.name);
 
         let (tx, rx) = futures::channel::oneshot::channel();

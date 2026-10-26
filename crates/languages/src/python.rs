@@ -327,7 +327,8 @@ impl TyLspAdapter {
     const ARCH_SERVER_NAME: &str = "apple-darwin";
 }
 
-#[cfg(target_os = "linux")]
+// Android uses the Linux assets.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TyLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
     const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
@@ -343,13 +344,6 @@ impl TyLspAdapter {
 impl TyLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::Zip;
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
-}
-
-// See note on RustLspAdapter — Android stub for compile-time only.
-#[cfg(target_os = "android")]
-impl TyLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
-    const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
 }
 
 impl TyLspAdapter {
@@ -2456,7 +2450,8 @@ impl RuffLspAdapter {
     const ARCH_SERVER_NAME: &str = "apple-darwin";
 }
 
-#[cfg(target_os = "linux")]
+// Android uses the Linux assets.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl RuffLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
     const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
@@ -2472,13 +2467,6 @@ impl RuffLspAdapter {
 impl RuffLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::Zip;
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
-}
-
-// See note on RustLspAdapter — Android stub for compile-time only.
-#[cfg(target_os = "android")]
-impl RuffLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
-    const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
 }
 
 impl RuffLspAdapter {
