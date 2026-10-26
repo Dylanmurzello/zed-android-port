@@ -552,6 +552,29 @@ mod tests {
     }
 
     #[test]
+    fn swapping_in_a_new_prefix_keeps_the_runtime_choice() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let prefix = root.path().join("usr");
+        let staging = root.path().join("staging");
+        fs::create_dir_all(prefix.join("etc"))?;
+        fs::write(prefix.join("etc/zd-runtime.toml"), "[runtime]\nkind = \"chroot\"\n")?;
+        fs::write(prefix.join("old-file"), "old")?;
+        fs::create_dir_all(staging.join("bin"))?;
+        fs::write(staging.join("bin/sh"), "new")?;
+
+        swap_staging_into_prefix(&staging, &prefix)?;
+
+        assert_eq!(
+            fs::read_to_string(prefix.join("etc/zd-runtime.toml"))?,
+            "[runtime]\nkind = \"chroot\"\n"
+        );
+        assert_eq!(fs::read_to_string(prefix.join("bin/sh"))?, "new");
+        assert!(!prefix.join("old-file").exists());
+        assert!(!staging.exists());
+        Ok(())
+    }
+
+    #[test]
     fn bootstrap_asset_must_match_size_and_digest() {
         let asset = |size, digest: &str| GitHubAsset {
             name: RELEASE_ASSET_NAME.to_owned(),

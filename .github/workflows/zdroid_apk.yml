@@ -48,6 +48,45 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  test:
+    name: Test fork crates
+    # Host tests for the fork's own crates that build outside Android.
+    # gpui_android only builds for Android, so its tests aren't run here.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # checkout
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - name: Cache Cargo registry
+        if: github.ref_type != 'tag'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # zizmor: ignore[cache-poisoning] v2.9.3
+        with:
+          cache-targets: false
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Set up sccache
+        if: github.ref_type != 'tag'
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # zizmor: ignore[cache-poisoning] v0.0.11
+        with:
+          version: ${{ env.SCCACHE_VERSION }}
+
+      - name: Enable sccache
+        if: github.ref_type != 'tag'
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Test zdroid_runtime
+        run: cargo test -p zdroid_runtime --locked
+
   build:
     name: Build APK
     runs-on: ubuntu-24.04
@@ -318,7 +357,7 @@ jobs:
 
   release:
     name: Publish pre-release
-    needs: [build, sign]
+    needs: [test, build, sign]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
