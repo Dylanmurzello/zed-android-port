@@ -545,6 +545,65 @@ fn reload_zdroid_keymaps(cx: &mut App) {
     }
 }
 
+/// Rebuild the symlink farm whenever a rootfs bin dir changes, so a tool
+/// installed from the terminal (apt, cargo install, pip, npm) is on Zed's
+/// PATH a couple of seconds later instead of at the next launch. `bin`
+/// and `lib` are symlinks into `usr/`, so watching the `usr/` dirs
+/// covers them.
+fn watch_rootfs_binaries(fs: Arc<dyn Fs>, data_path: PathBuf, cx: &mut App) {
+    let Some(provider) = build_active_provider(&data_path) else {
+        return;
+    };
+    if provider.id() != zdroid_runtime::RuntimeId::Rootfs {
+        return;
+    }
+    let rootfs_dir = match RuntimeState::load(&data_path) {
+        RuntimeState::Configured(ResolvedConfig::Rootfs(config)) => config.rootfs_dir,
+        _ => return,
+    };
+    let provider: Arc<dyn RuntimeProvider> = Arc::from(provider);
+    let watched: Vec<PathBuf> = [
+        "usr/bin",
+        "usr/local/bin",
+        "usr/sbin",
+        "root/.cargo/bin",
+        "root/.local/bin",
+    ]
+    .iter()
+    .map(|sub| rootfs_dir.join(sub))
+    .filter(|dir| dir.is_dir())
+    .collect();
+    for dir in watched {
+        let fs = fs.clone();
+        let provider = provider.clone();
+        let data_path = data_path.clone();
+        cx.spawn(async move |cx| {
+            let (mut events, _watcher) = fs.watch(&dir, std::time::Duration::from_secs(2)).await;
+            while futures::StreamExt::next(&mut events).await.is_some() {
+                let provider = provider.clone();
+                let data_path = data_path.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let binaries = provider.list_binaries();
+                        match gpui_android::zd_exec_install::ensure_runtime_symlinks(
+                            &data_path,
+                            &binaries,
+                            &provider.farm_link_target(),
+                        ) {
+                            Ok(()) => log::info!(
+                                "zed_android: farm refreshed after a rootfs change ({} binaries)",
+                                binaries.len()
+                            ),
+                            Err(err) => log::warn!("zed_android: farm refresh failed: {err:#}"),
+                        }
+                    })
+                    .await;
+            }
+        })
+        .detach();
+    }
+}
+
 fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // android_main can run multiple times for one process when the activity
     // is recreated; paths' OnceLocks survive across invocations. The second
@@ -969,6 +1028,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     AppState::set_global(app_state.clone(), cx);
     info!("zed_android: AppState assembled + set as global");
+    watch_rootfs_binaries(fs.clone(), data_path.to_path_buf(), cx);
 
     // Mirror production zed/src/main.rs:785 — without this every language's
     // tree-sitter captures parse but render with no syntax styling. Re-apply
