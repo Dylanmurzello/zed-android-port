@@ -926,7 +926,6 @@ fn render_android_runtime_section(tab_index: &mut isize, cx: &mut App) -> impl I
     let current_label: SharedString = match current {
         Some(RuntimeId::Chroot) => "Current: Kali chroot".into(),
         Some(RuntimeId::Bootstrap) => "Current: Bootstrap".into(),
-        Some(RuntimeId::ExternalTermux) => "Current: External Termux".into(),
         None => "Not configured yet".into(),
     };
 

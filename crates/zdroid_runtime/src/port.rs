@@ -70,8 +70,7 @@ pub trait SpawnHandle: Send {
     fn kill(&mut self) -> anyhow::Result<()>;
 }
 
-/// The port. Implementations are in `adapters::{chroot, bootstrap,
-/// external_termux}`.
+/// The port. Implementations live in `adapters`.
 pub trait RuntimeProvider: Send + Sync {
     /// Stable identifier for this provider — picked into `runtime.toml`
     /// and shown in the settings UI.

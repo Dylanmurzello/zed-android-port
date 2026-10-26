@@ -36,7 +36,7 @@ use zdroid_runtime::{
     HealthStatus, RuntimeId, RuntimeProvider,
     adapters,
     adapters::chroot::SPAWND_RELEASE_URL,
-    config::{BootstrapConfig, ChrootConfig, ExternalTermuxConfig, RuntimeFile},
+    config::{BootstrapConfig, ChrootConfig, RuntimeFile},
     health::ProgressSink,
 };
 
@@ -604,12 +604,6 @@ fn build_entries() -> Vec<AdapterEntry> {
         .unwrap_or_else(|err| HealthStatus::Failed {
             error: err.to_string(),
         });
-    let termux_health =
-        adapters::external_termux::ExternalTermuxAdapter::new(default_termux_config())
-            .map(|a| a.health_check())
-            .unwrap_or_else(|err| HealthStatus::Failed {
-                error: err.to_string(),
-            });
 
     vec![
         AdapterEntry {
@@ -623,12 +617,6 @@ fn build_entries() -> Vec<AdapterEntry> {
             tagline:
                 "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
             health: bootstrap_health,
-        },
-        AdapterEntry {
-            id: RuntimeId::ExternalTermux,
-            tagline:
-                "Bridges to the user's installed Termux app via Intent IPC. Slowest path; uses the user's existing setup.",
-            health: termux_health,
         },
     ]
 }
@@ -647,13 +635,6 @@ fn default_bootstrap_config() -> BootstrapConfig {
         prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
         proot_rootfs: None,
         release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
-    }
-}
-
-fn default_termux_config() -> ExternalTermuxConfig {
-    ExternalTermuxConfig {
-        package: "com.termux".into(),
-        prefix: PathBuf::from("/data/data/com.termux/files/usr"),
     }
 }
 

@@ -3,7 +3,7 @@
 //! On disk the file looks like:
 //!
 //! ```toml
-//! # Active adapter. One of: "chroot", "bootstrap", "external_termux"
+//! # Active adapter. One of: "chroot", "bootstrap"
 //! [runtime]
 //! type = "chroot"
 //!
@@ -18,10 +18,6 @@
 //! prefix = "/data/data/com.zdroid/files/usr"
 //! proot_rootfs = ""  # empty = bare mode
 //! release_repo = "Dylanmurzello/zdroid-bootstrap"
-//!
-//! [external_termux]
-//! package = "com.termux"
-//! prefix = "/data/data/com.termux/files/usr"
 //! ```
 //!
 //! Loading flow:
@@ -45,7 +41,6 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeId {
     Chroot,
     Bootstrap,
-    ExternalTermux,
 }
 
 impl RuntimeId {
@@ -56,7 +51,6 @@ impl RuntimeId {
         match self {
             Self::Chroot => "Chroot rootfs",
             Self::Bootstrap => "Zdroid Bootstrap",
-            Self::ExternalTermux => "Existing Termux app",
         }
     }
 }
@@ -70,8 +64,6 @@ pub struct RuntimeFile {
     pub chroot: Option<ChrootConfig>,
     #[serde(default)]
     pub bootstrap: Option<BootstrapConfig>,
-    #[serde(default)]
-    pub external_termux: Option<ExternalTermuxConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,25 +108,12 @@ pub struct BootstrapConfig {
     pub release_repo: String,
 }
 
-/// External-Termux-adapter config. Deserialized from `[external_termux]`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExternalTermuxConfig {
-    /// Termux's Android package id. Usually `com.termux`; some forks
-    /// use `com.termux.x11` etc.
-    pub package: String,
-    /// Termux's `$PREFIX` (host-readable from Zdroid's app context only
-    /// if `sharedUserId` is set up; otherwise this is informational and
-    /// commands are executed via `RunCommandService` intent).
-    pub prefix: PathBuf,
-}
-
 /// Resolved config — the active adapter section flattened so downstream
 /// code never has to ask "which kind is this".
 #[derive(Debug, Clone)]
 pub enum ResolvedConfig {
     Chroot(ChrootConfig),
     Bootstrap(BootstrapConfig),
-    ExternalTermux(ExternalTermuxConfig),
 }
 
 impl ResolvedConfig {
@@ -143,7 +122,6 @@ impl ResolvedConfig {
         match self {
             Self::Chroot(_) => RuntimeId::Chroot,
             Self::Bootstrap(_) => RuntimeId::Bootstrap,
-            Self::ExternalTermux(_) => RuntimeId::ExternalTermux,
         }
     }
 }
@@ -154,7 +132,6 @@ impl ResolvedConfig {
 pub enum AdapterConfig {
     Chroot(ChrootConfig),
     Bootstrap(BootstrapConfig),
-    ExternalTermux(ExternalTermuxConfig),
 }
 
 impl RuntimeFile {
@@ -175,7 +152,6 @@ impl RuntimeFile {
                     su_path: PathBuf::from("/product/bin/su"),
                 }),
                 bootstrap: None,
-                external_termux: None,
             },
             RuntimeId::Bootstrap => Self {
                 runtime,
@@ -184,16 +160,6 @@ impl RuntimeFile {
                     prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
                     proot_rootfs: None,
                     release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
-                }),
-                external_termux: None,
-            },
-            RuntimeId::ExternalTermux => Self {
-                runtime,
-                chroot: None,
-                bootstrap: None,
-                external_termux: Some(ExternalTermuxConfig {
-                    package: "com.termux".into(),
-                    prefix: PathBuf::from("/data/data/com.termux/files/usr"),
                 }),
             },
         }
@@ -238,15 +204,6 @@ impl RuntimeFile {
             RuntimeId::Bootstrap => self.bootstrap.map(ResolvedConfig::Bootstrap).ok_or_else(
                 || anyhow::anyhow!("runtime.type = bootstrap but no [bootstrap] section"),
             ),
-            RuntimeId::ExternalTermux => {
-                self.external_termux
-                    .map(ResolvedConfig::ExternalTermux)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "runtime.type = external_termux but no [external_termux] section"
-                        )
-                    })
-            }
         }
     }
 }
