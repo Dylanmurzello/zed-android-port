@@ -126,6 +126,7 @@ patches.
 | [audio + livekit + call cfg-gates](android-cfg-gates.md) | Active | These crates don't compile against bionic; mock fallbacks already exist |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
+| [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off |
 
 ## Adding a new workaround
 
