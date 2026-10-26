@@ -39,10 +39,9 @@ without CPU compositing.
   `crates/gpui_android/src/frame_timing.rs` records per-frame
   `vsync_interval` / `vsync_to_paint` / `paint_duration`, logs
   P50/P95/P99/max every 240 frames (~2-4 seconds) at debug level;
-  turn it on with `"log": {"gpui_android::frame_timing": "debug"}`
-  in settings. Cheaper than the
-  Java `Window.addOnFrameMetricsAvailableListener` JNI bridge that
-  this doc originally sketched, because our renderer bypasses the
+  turn it on with `"log": {"gpui_android": "debug"}` in settings.
+  Cheaper than the Java `Window.addOnFrameMetricsAvailableListener` JNI
+  bridge that this doc originally sketched, because our renderer bypasses the
   View tree anyway so Java FrameMetrics wouldn't capture our actual
   draw — Choreographer-callback-relative timing measures what we
   actually want. Sample baseline on Tab S9 at 120Hz active state:

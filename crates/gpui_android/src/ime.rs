@@ -277,6 +277,7 @@ fn dispatch_event(window_id: u64, event: ImeEvent) {
     if let Err(err) = tx.unbounded_send((window_id, event)) {
         log::warn!("ime: dispatch_event failed: {err:#}");
     }
+    crate::platform::wake_run_loop();
 }
 
 fn debug_event(event: &ImeEvent) -> String {
@@ -878,4 +879,5 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetSoftKeyboardVisible
     visible: jni::sys::jboolean,
 ) {
     SOFT_KEYBOARD_VISIBLE.store(visible != 0, Ordering::Release);
+    crate::platform::wake_run_loop();
 }

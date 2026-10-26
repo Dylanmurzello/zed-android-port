@@ -1,14 +1,15 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::VecDeque,
     ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
-use android_activity::AndroidApp;
+use android_activity::{AndroidApp, AndroidAppWaker};
 use ndk::configuration::UiModeNight;
 use anyhow::Result;
 use futures::channel::oneshot;
@@ -26,10 +27,12 @@ use crate::display::AndroidDisplay;
 use crate::keyboard::AndroidKeyboardLayout;
 use crate::window::{AndroidWindow, AndroidWindowStatePtr};
 
-/// AChoreographer FFI — NDK API 24+. We avoid going through Java's
-/// android.view.Choreographer because we'd need a JNI hop on every
-/// vsync; the NDK exposes the same scheduler natively. Linked from
-/// libandroid.so which Android already keeps mapped.
+// AChoreographer FFI. We avoid going through Java's
+// android.view.Choreographer because we'd need a JNI hop on every
+// vsync; the NDK exposes the same scheduler natively. Linked from
+// libandroid.so which Android already keeps mapped.
+// `AChoreographer_postFrameCallback64` is API 29, above minSdk 26, but
+// release builds need Armv9 cores, which shipped with Android 12.
 #[link(name = "android")]
 unsafe extern "C" {
     fn AChoreographer_getInstance() -> *mut c_void;
@@ -120,23 +123,75 @@ pub(crate) fn set_native_window_frame_rate(window: *mut c_void) -> bool {
     }
 }
 
-/// Set by the Choreographer callback (called once per vsync on the
-/// main thread's looper, so no synchronization beyond the atomic).
-/// Drained at the top of each event-loop tick to decide whether to
-/// call window.refresh().
+/// Set by the Choreographer callback (called on the main thread's looper
+/// at the vsync after a frame was requested, so no synchronization beyond
+/// the atomic). Checked at the end of each event-loop tick to decide
+/// whether to call window.refresh().
 static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Whether a Choreographer callback is posted and hasn't fired yet.
 static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
 
-/// gpui keeps presenting for a second after fast input, such as scrolling
-/// or trackpad motion, so the panel doesn't drop out of its high refresh
-/// rate, but it only asks for frames while a window is dirty. Keep the
-/// vsync loop running this long after any input so those presents happen.
-const FRAMES_AFTER_INPUT: Duration = Duration::from_secs(1);
+/// Wakes the run loop from Java threads. JNI callbacks queue input and
+/// window events, or set flags, that the loop only reads on its next tick,
+/// and an idle loop otherwise sleeps until its 100ms poll timeout.
+static RUN_LOOP_WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
 
 thread_local! {
-    static LAST_INPUT_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+    static INPUT_RATE: RefCell<InputRate> = RefCell::default();
+    /// Set while the run loop refreshes the windows for a vsync.
+    static IN_FRAME: Cell<bool> = const { Cell::new(false) };
+    /// Whether gpui asked for another frame while the last one ran.
+    static RUN_CONTINUES: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn wake_run_loop() {
+    if let Some(waker) = RUN_LOOP_WAKER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        waker.wake();
+    }
+}
+
+/// gpui keeps presenting for a second after input arrives at 60 events a
+/// second or more, such as scrolling or dragging, so the panel doesn't drop
+/// out of its high refresh rate. It only asks for frames while a window is
+/// dirty, though, so the run loop keeps requesting them for that second.
+/// Same thresholds as gpui's `InputRateTracker`, which only counts input
+/// that changed something; this counts every event gpui receives.
+#[derive(Default)]
+struct InputRate {
+    recent: VecDeque<Instant>,
+    sustain_until: Option<Instant>,
+}
+
+impl InputRate {
+    const WINDOW: Duration = Duration::from_millis(100);
+    const EVENTS_PER_WINDOW: usize = 6;
+    const SUSTAIN: Duration = Duration::from_secs(1);
+
+    fn record(&mut self) {
+        let now = Instant::now();
+        self.recent.push_back(now);
+        while self.recent.len() > Self::EVENTS_PER_WINDOW
+            || self
+                .recent
+                .front()
+                .is_some_and(|&at| now.duration_since(at) > Self::WINDOW)
+        {
+            self.recent.pop_front();
+        }
+        if self.recent.len() == Self::EVENTS_PER_WINDOW {
+            self.sustain_until = Some(now + Self::SUSTAIN);
+        }
+    }
+
+    fn is_high_rate(&self) -> bool {
+        self.sustain_until
+            .is_some_and(|until| Instant::now() < until)
+    }
 }
 
 unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) {
@@ -150,10 +205,23 @@ unsafe extern "C" fn frame_callback(_frame_time_nanos: i64, _data: *mut c_void) 
 /// an idle editor stops waking at the panel's refresh rate. gpui's web and
 /// Wayland backends drive their frame loops the same way.
 pub(crate) fn request_frame_callback() {
+    let in_frame = IN_FRAME.get();
+    if in_frame {
+        RUN_CONTINUES.set(true);
+    }
+    post_frame_callback(in_frame);
+}
+
+fn post_frame_callback(continues_run: bool) {
+    // A vsync already arrived and the run loop refreshes before it polls
+    // again; gpui asks for another frame afterwards if it still has work.
+    if FRAME_PENDING.load(Ordering::Acquire) {
+        return;
+    }
     if FRAME_CALLBACK_POSTED.swap(true, Ordering::AcqRel) {
         return;
     }
-    crate::frame_timing::frame_requested();
+    crate::frame_timing::frame_requested(continues_run);
     unsafe {
         let c = AChoreographer_getInstance();
         if c.is_null() {
@@ -168,16 +236,17 @@ pub(crate) fn request_frame_callback() {
 
 /// Called for each input event a window hands to gpui.
 pub(crate) fn input_arrived() {
-    LAST_INPUT_AT.set(Some(Instant::now()));
-    request_frame_callback();
+    if INPUT_RATE.with_borrow_mut(|rate| {
+        rate.record();
+        rate.is_high_rate()
+    }) {
+        request_frame_callback();
+    }
 }
 
 /// Requests the first frame on the calling thread, which must have a Looper
 /// attached (android-activity's main thread does).
 fn install_choreographer_callback() {
-    // `android_main` runs again when the Activity is recreated, and a
-    // callback posted on the previous run's Looper will never fire.
-    FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
     if unsafe { AChoreographer_getInstance() }.is_null() {
         log::warn!(
             "AChoreographer_getInstance returned null; vsync sync \
@@ -358,6 +427,10 @@ pub struct AndroidPlatform {
 
 impl AndroidPlatform {
     pub fn new(android_app: AndroidApp, _headless: bool) -> Self {
+        // Replaced when the Activity is recreated, with the new AndroidApp.
+        *RUN_LOOP_WAKER
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(android_app.create_waker());
         let common = AndroidCommon::new(&android_app);
         Self {
             common: RefCell::new(common),
@@ -1142,6 +1215,11 @@ impl Platform for AndroidPlatform {
     }
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>) {
+        // `android_main` runs again on a new thread when the Activity is
+        // recreated, and a callback posted on the previous run's Looper
+        // never fires. Clear it before `on_finish_launching` opens the
+        // window, which requests the first frame.
+        FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
         log::info!("AndroidPlatform::run: invoking on_finish_launching");
         on_finish_launching();
         log::info!("AndroidPlatform::run: entering event loop");
@@ -1206,12 +1284,6 @@ impl Platform for AndroidPlatform {
             // `PlatformInputHandler` / `handle_input`.
             self.drain_ime_events();
 
-            // Reconcile IME visibility against the primary window's
-            // `input_handler` presence. Edge-triggered at frame
-            // boundaries — gpui's take/set oscillation within each
-            // paint can't leak through because we're sampling between
-            // ticks, not inside set/take callbacks.
-            self.reconcile_ime_visibility();
             self.tick_soft_keyboard_visibility();
             self.tick_trackpad_mode_active();
             self.tick_extras_row_enabled();
@@ -1231,6 +1303,16 @@ impl Platform for AndroidPlatform {
                         common.extra_windows.values().cloned().collect::<Vec<_>>(),
                     )
                 };
+                // While frames run back to back (scrolling, animations),
+                // ask for the next vsync before painting, as Android's own
+                // animations do: a paint that overruns the frame budget
+                // then starts the next frame right away instead of
+                // waiting for a further vsync. A run ends with one frame
+                // that has nothing to draw.
+                if RUN_CONTINUES.take() || INPUT_RATE.with_borrow(InputRate::is_high_rate) {
+                    post_frame_callback(true);
+                }
+                IN_FRAME.set(true);
                 crate::frame_timing::paint_started();
                 if let Some(window_ptr) = primary {
                     window_ptr.refresh();
@@ -1239,17 +1321,21 @@ impl Platform for AndroidPlatform {
                     window_ptr.refresh();
                 }
                 crate::frame_timing::paint_finished();
-                if LAST_INPUT_AT
-                    .get()
-                    .is_some_and(|at| at.elapsed() < FRAMES_AFTER_INPUT)
-                {
-                    request_frame_callback();
-                }
+                IN_FRAME.set(false);
                 // First successful paint cycle => let the SplashScreen
                 // poller dismiss its window. Idempotent atomic swap on
                 // the inside; safe to call every frame.
                 crate::splash::mark_zed_ready();
             }
+
+            // Reconcile IME visibility against each window's
+            // `input_handler` presence. Edge-triggered at frame
+            // boundaries — gpui's take/set oscillation within each
+            // paint can't leak through because we're sampling between
+            // ticks, not inside set/take callbacks. After the frame, so
+            // an input handler gpui set while painting is seen without
+            // waiting for the next tick.
+            self.reconcile_ime_visibility();
         }
 
         log::info!("AndroidPlatform::run: exiting event loop");

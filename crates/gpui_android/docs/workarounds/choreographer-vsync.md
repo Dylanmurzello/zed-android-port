@@ -33,36 +33,56 @@ them to call `requestAnimationFrame` only on demand, and the Wayland
 backend parks its frame loop the same way.
 
 `AndroidWindow` implements both with `request_frame_callback`, which posts
-one Choreographer callback unless one is already pending. `frame_callback`
-no longer re-posts itself; it sets `FRAME_PENDING` for the run loop, which
+one Choreographer callback unless one is already pending, or a vsync has
+arrived and the run loop is about to refresh anyway. `frame_callback` no
+longer re-posts itself; it sets `FRAME_PENDING` for the run loop, which
 refreshes every window. One callback serves the primary and extra windows.
 
-gpui also keeps presenting for a second after fast input, so the panel
-stays at its high refresh rate, but it only asks for frames while a window
-is dirty. So the run loop keeps requesting frames for one second after
-each input event (`FRAMES_AFTER_INPUT`), as the old continuous callback
-did, and parks after that. This matters with Samsung's adaptive refresh,
+While frames run back to back, because gpui asked for another frame during
+the last one or input is arriving fast, the run loop posts the next
+callback before it paints, as Android's own animations do. A paint that
+overruns the 8.3ms budget then starts the next frame right away; asking
+only after the paint would wait for a further vsync and halve the frame
+rate. A run ends with one frame that has nothing to draw.
+
+gpui also keeps presenting for a second after input arrives at 60 events a
+second or more, such as scrolling or dragging, so the panel stays at its
+high refresh rate. It only asks for frames while a window is dirty,
+though, so `InputRate` applies the thresholds of gpui's `InputRateTracker`
+and the run loop keeps requesting frames for that second, as the old
+continuous callback did. This matters with Samsung's adaptive refresh,
 which drops the panel to 60 or 30 Hz soon after an app stops rendering.
+Slower input, such as typing, gets frames only while it changes something.
+
+Java threads queue work for the run loop: IME events, extra-window events
+and captured-trackpad events, plus the soft keyboard's visibility. They
+wake the loop with `wake_run_loop` after queueing. The old callback picked
+them up within a vsync; without the wake, an idle loop would only see them
+at its 100ms poll timeout.
 
 Repaints that gpui doesn't know about request a frame themselves: surface
-attach after returning from the background, and GPU device-lost recovery.
+attach after returning from the background, GPU device-lost recovery, and
+a present that failed or an atlas the renderer cleared, which are retried
+once as gpui's Wayland backend does.
 The soft-keyboard tick sets `FRAME_PENDING` directly, as before.
 
 ## Why this works
 
 An idle editor now wakes only for the run loop's 100ms poll timeout and real
-events, instead of at the panel's refresh rate. While you type or scroll,
-and for a second after, frames run on every vsync as before. Animations
-still paint on the next vsync, because they dirty the window or schedule
-a next-frame callback, which wakes the frame loop.
+events, instead of at the panel's refresh rate. While you scroll or drag,
+and for a second after, frames run on every vsync as before. Typing and
+animations still paint on the next vsync, because they dirty the window or
+schedule a next-frame callback, which wakes the frame loop.
 
 ## Failure mode if regressed
 
 - A change that alters what's on screen without notifying gpui leaves the
   window stale until the next input event. Request a frame from that code,
   as `attach_surface` does.
-- `install_choreographer_callback` clears the pending flag on every
-  `android_main` run. Without that, a callback posted on a recreated
+- A new JNI callback that queues work for the run loop has to call
+  `wake_run_loop`, or an idle editor handles it up to 100ms late.
+- `AndroidPlatform::run` clears the pending flag before it opens the window
+  on every `android_main` run. Without that, a callback posted on a recreated
   Activity's old looper would never fire, and frames would stop.
 - If the callback re-posts itself again, idle wake-ups return to 120 a
   second. Zdroid's CPU use while idle shows it: `top` in Zdroid's own

@@ -371,6 +371,7 @@ fn dispatch(event: CapturedEvent) {
     if let Err(err) = tx.unbounded_send(event) {
         log::warn!("captured_pointer: dispatch failed: {err:#}");
     }
+    crate::platform::wake_run_loop();
 }
 
 /// Translate one captured event into zero or more `PlatformInput`s,

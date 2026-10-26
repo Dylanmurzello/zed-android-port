@@ -3,9 +3,10 @@
 //! - **vsync_interval**: time between successive Choreographer callbacks
 //!   while frames run back to back. At 120Hz the target is 8.33ms.
 //!   Variance is jitter from the looper (spurious wakes, scheduler
-//!   preemption, thermal throttling). Frames are only requested while
-//!   something changes, so a frame requested more than [`IDLE_GAP`] after
-//!   the previous vsync starts a new run instead of counting as slow.
+//!   preemption, thermal throttling) and paints that overrun the budget.
+//!   Frames are only requested while something changes, so only a frame
+//!   requested while the previous one ran counts; others end an idle
+//!   pause.
 //! - **vsync_to_paint**: latency from the Choreographer callback firing
 //!   to the main loop reaching `window.refresh()`. This is the cost of
 //!   the poll-events + input-drain pipeline between waking up on vsync
@@ -13,9 +14,11 @@
 //! - **paint_duration**: time spent inside `window.refresh()` (all
 //!   visible windows). The work itself.
 //!
-//! Every 240 frames (~2s at 120Hz) we sort the samples and log P50/P95/P99
-//! + max at debug level, so they stay out of `Zed.log` unless asked for:
-//! `"log": {"gpui_android::frame_timing": "debug"}` in settings. Sort is
+//! Every 240 painted frames (~2s of continuous rendering at 120Hz) we sort
+//! the samples and log P50/P95/P99 + max at debug level, so they stay out of
+//! `Zed.log` unless asked for: `"log": {"gpui_android": "debug"}` in
+//! settings. zlog only raises its level cap for keys like that one, so a
+//! `gpui_android::frame_timing` key alone doesn't enable them. Sort is
 //! in-place on a `Vec` with reserved capacity so steady-state allocation is
 //! zero.
 //!
@@ -24,17 +27,13 @@
 //! `thread_local!` storage is sufficient.
 
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Sample window before flushing percentile stats. 240 ≈ 2 seconds at
 /// 120Hz, ≈ 4 seconds at 60Hz. Chosen to give a stable percentile
 /// estimate without dragging the trailing edge of stats too far behind
 /// what the user just saw.
 const SAMPLE_WINDOW: usize = 240;
-
-/// A frame requested this long after the previous vsync follows an idle
-/// pause. Slow frames still show up in `paint_duration`.
-const IDLE_GAP: Duration = Duration::from_millis(50);
 
 thread_local! {
     static STATE: RefCell<FrameTimingState> = RefCell::new(FrameTimingState::new());
@@ -63,17 +62,14 @@ impl FrameTimingState {
         }
     }
 
-    fn record_frame_request(&mut self) {
-        self.next_vsync_continues_run = self
-            .last_vsync
-            .is_some_and(|prev| prev.elapsed() < IDLE_GAP);
+    fn record_frame_request(&mut self, continues_run: bool) {
+        self.next_vsync_continues_run = continues_run;
     }
 
     fn record_vsync(&mut self) {
         let now = Instant::now();
-        if let Some(prev) = self.last_vsync
-            && std::mem::take(&mut self.next_vsync_continues_run)
-        {
+        let continues_run = std::mem::take(&mut self.next_vsync_continues_run);
+        if continues_run && let Some(prev) = self.last_vsync {
             self.vsync_intervals_ns
                 .push(now.duration_since(prev).as_nanos() as u64);
         }
@@ -129,10 +125,10 @@ fn log_percentiles(name: &str, samples: &mut Vec<u64>) {
     );
 }
 
-/// Call when a Choreographer callback is posted, to tell a frame that
-/// continues a run of frames from one that ends an idle pause.
-pub(crate) fn frame_requested() {
-    STATE.with(|s| s.borrow_mut().record_frame_request());
+/// Call when a Choreographer callback is posted, with whether it was
+/// requested while a frame ran, as opposed to after an idle pause.
+pub(crate) fn frame_requested(continues_run: bool) {
+    STATE.with(|s| s.borrow_mut().record_frame_request(continues_run));
 }
 
 /// Call from the Choreographer frame callback. Records the vsync

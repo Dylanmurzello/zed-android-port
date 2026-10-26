@@ -90,6 +90,9 @@ pub(crate) struct AndroidWindowState {
     /// but gpui's invalidator doesn't know that. The next paint must be
     /// forced; consumed by `refresh()` via `std::mem::take`.
     pub(crate) force_render_after_recovery: bool,
+    /// Whether the last `draw` failed to present, so a second failure in a
+    /// row isn't retried.
+    pub(crate) last_present_failed: bool,
     /// Set true by the platform's `OsClosed` drain handler when the
     /// underlying `ExtraWindowActivity` has already destroyed (user clicked
     /// the OS chrome X). `AndroidWindow::Drop` reads this to skip its
@@ -509,6 +512,7 @@ impl AndroidWindow {
             gpu_context,
             native_window: None,
             force_render_after_recovery: false,
+            last_present_failed: false,
             os_closed: AtomicBool::new(false),
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
@@ -809,7 +813,18 @@ impl PlatformWindow for AndroidWindow {
             return;
         }
 
-        renderer.draw(scene);
+        let presented = renderer.draw(scene);
+        // Draw again when the renderer cleared its atlas, which cached views
+        // still point into, or when presenting failed, for example on an
+        // out-of-date swapchain. gpui doesn't know about either, and its
+        // Wayland backend retries the same way. A failure that repeats, as
+        // while the surface is unconfigured, waits for the next change.
+        let retry = renderer.needs_redraw() || (!presented && !state.last_present_failed);
+        state.last_present_failed = !presented;
+        if retry {
+            state.force_render_after_recovery = true;
+            request_frame_callback();
+        }
     }
 
     fn schedule_frame(&self) {
