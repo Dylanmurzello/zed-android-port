@@ -280,7 +280,8 @@ android {
 }
 
 dependencies {
-    implementation("androidx.games:games-activity:3.0.5")
+    // The version android-activity's native GameActivity code is built from.
+    implementation("androidx.games:games-activity:4.4.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
     // ActivityResultLauncher / ActivityResultContracts for SAF picker.
