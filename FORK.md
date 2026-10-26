@@ -120,7 +120,13 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 ### Each release
 
 1. Bump `versionCode` (+1) and `versionName` in `build.gradle.kts`, following the versioning rules in [RELEASING.md](RELEASING.md). Commit and push to `zdroid`.
-2. Write the release notes as an annotated tag. The first line is the subject (`Zdroid X.Y.Z`); the rest becomes the release body. Use the `Install`, `Highlights` (or `Fixes`), and `Caveats` sections from RELEASING.md. The workflow appends `Verification` (APK and certificate SHA-256, commit, provenance) itself.
+2. Write the hand-written part of the release notes as an annotated tag. The first line is the subject (`Zdroid X.Y.Z`); the rest becomes the release body: the `Install` and `Caveats` sections from RELEASING.md, plus an optional `Highlights` paragraph. Don't list the changes. The workflow builds a `Changes` section from the `Release Notes:` bullets of the pull requests merged since the previous release, each linked to its pull request, the way Zed does. It goes where the message has a `<!-- changes -->` line, or after the hand-written sections. The workflow also appends `Verification` (APK and certificate SHA-256, commit, provenance).
+
+   To preview the `Changes` list before tagging:
+
+   ```sh
+   GITHUB_REPOSITORY=ilkersigirci/zed-android-port node .github/scripts/zdroid-release-notes.js zdroid vX.Y.Z  # vX.Y.Z: the previous release
+   ```
 
    ```sh
    # --cleanup=whitespace keeps the `### ...` headings; the default strips `#` lines.
