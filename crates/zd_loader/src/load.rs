@@ -126,7 +126,9 @@ pub fn open_guest(
             host[..guest.len()].copy_from_slice(guest);
             host[guest.len()] = 0;
         }
-        Ok(Translated::ProcExe(_)) | Err(_) => return Err(LoadError::Translate),
+        Ok(Translated::ProcExe(_)) | Ok(Translated::ProcAuxv(_)) | Err(_) => {
+            return Err(LoadError::Translate);
+        }
     }
     sys::openat(
         sys::AT_FDCWD,

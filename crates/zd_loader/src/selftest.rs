@@ -23,6 +23,9 @@ use crate::{InitialStack, config, sys, zd_raw_svc};
 
 type Stub = unsafe extern "C" fn(usize, usize, usize, usize, usize, usize, usize) -> isize;
 
+/// Stub kept for the post-load checks; written once in `preamble`.
+static STUB: config::Global<Option<Stub>> = config::Global::new(None);
+
 const SAMPLES: usize = 2048;
 const OPS_PER_SAMPLE: u64 = 8;
 
@@ -199,6 +202,8 @@ pub fn preamble(stack: &InitialStack, filter: &FilterState, program: &[u8]) {
     }
     match outside_window_stub(stack) {
         Ok(stub) => {
+            // SAFETY: single-threaded startup; read back by `report_load`.
+            unsafe { *STUB.get() = Some(stub) };
             report(
                 "openat_trap",
                 bench(&mut samples, || {
@@ -248,6 +253,24 @@ pub fn preamble(stack: &InitialStack, filter: &FilterState, program: &[u8]) {
 }
 
 pub fn report_load(program: &[u8], loaded: &Loaded, started_ns: u64) {
+    // SAFETY: written once in `preamble`, before any thread exists.
+    if let Some(stub) = unsafe { *STUB.get() } {
+        let mut buffer = [0u8; 256];
+        // SAFETY: a trapped readlinkat issued the way guest code would.
+        let ret = unsafe {
+            stub(
+                sys::AT_FDCWD as usize,
+                c"/proc/self/exe".as_ptr() as usize,
+                buffer.as_mut_ptr() as usize,
+                buffer.len(),
+                0,
+                0,
+                nr::READLINKAT as usize,
+            )
+        };
+        let shown = if ret > 0 { &buffer[..(ret as usize).min(buffer.len())] } else { &buffer[..0] };
+        emit_line!("zd-selftest: proc_exe ret={ret} value={}", Bytes(shown));
+    }
     emit_line!(
         "zd-selftest: load exe={} base={:#x} entry={:#x} phdr={:#x} interp={} interp_base={:#x} us={}",
         Bytes(program),

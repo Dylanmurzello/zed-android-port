@@ -58,6 +58,15 @@ pub mod env {
     pub const LOG: &str = "ZD_LOG";
     /// Guest-only environment overrides as `KEY=VALUE;KEY=VALUE`.
     pub const GUEST_ENV: &str = "ZD_GUEST_ENV";
+    /// Guest path of the program to run when the loader is exec'd with
+    /// the guest's own argv (so the kernel's argument area, and with it
+    /// `/proc/<pid>/cmdline`, is exactly the guest's). Per exec: the
+    /// loader removes it from the guest's environment.
+    pub const PROGRAM: &str = "ZD_PROGRAM";
+    /// `1` runs the self-test before loading the program. Per exec.
+    pub const SELFTEST: &str = "ZD_SELFTEST";
+    /// Variables that describe one exec and must not reach the guest.
+    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST];
 }
 
 /// Separator between entries in [`env::BINDS`] and [`env::GUEST_ENV`].

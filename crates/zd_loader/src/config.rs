@@ -110,10 +110,25 @@ impl GuestEnv {
     }
 }
 
+/// Whether an inherited entry stays out of the guest's environment:
+/// overridden by the guest env, or describing this exec only.
+pub fn hidden_from_guest(entry: &[u8]) -> bool {
+    let key = env_key(entry);
+    env::PER_EXEC.iter().any(|name| name.as_bytes() == key) || get().guest_env.overrides(entry)
+}
+
 pub struct Config {
     pub rootfs: Buf,
     pub binds: Buf,
     pub log: Buf,
+    /// Guest program named by `ZD_PROGRAM`, when exec'd with the guest's
+    /// own argv.
+    pub program: Buf,
+    pub selftest: bool,
+    /// The guest's auxiliary vector as built for it, served as
+    /// `/proc/self/auxv`.
+    pub auxv_ptr: usize,
+    pub auxv_len: usize,
     /// Guest-visible path of the executable actually loaded, for
     /// `/proc/self/exe`.
     pub guest_exe: Buf,
@@ -132,11 +147,15 @@ impl Config {
             rootfs: Buf::new(),
             binds: Buf::new(),
             log: Buf::new(),
+            program: Buf::new(),
+            selftest: false,
+            auxv_ptr: 0,
+            auxv_len: 0,
             guest_exe: Buf::new(),
             loader_path: Buf::new(),
             guest_env: GuestEnv::new(),
             fake_root: false,
-            page_size: 4096,
+            page_size: 0,
             translator: None,
         }
     }
@@ -192,6 +211,10 @@ pub fn init(
             config.log.set(value)?;
         } else if let Some(value) = env_value(entry, env::FAKE_ROOT.as_bytes()) {
             config.fake_root = value == b"1";
+        } else if let Some(value) = env_value(entry, env::PROGRAM.as_bytes()) {
+            config.program.set(value)?;
+        } else if let Some(value) = env_value(entry, env::SELFTEST.as_bytes()) {
+            config.selftest = value == b"1";
         } else if let Some(value) = env_value(entry, env::GUEST_ENV.as_bytes()) {
             for item in value.split(|&byte| byte == LIST_SEPARATOR as u8) {
                 if !item.is_empty() {
@@ -222,6 +245,16 @@ pub fn init(
     bindings.parse_spec(binds).map_err(InitError::Bindings)?;
     config.translator = Some(Translator::new(rootfs, bindings));
     Ok(())
+}
+
+/// Record where the guest's auxiliary vector lives (inside the vector
+/// built below the kernel's, which stays mapped for the process life).
+pub fn set_auxv(ptr: usize, len: usize) {
+    let config = CONFIG.get();
+    // SAFETY: still single-threaded; the guest has not started.
+    let config = unsafe { &mut *config };
+    config.auxv_ptr = ptr;
+    config.auxv_len = len;
 }
 
 /// Record the guest-visible path of the executable the loader mapped.

@@ -124,16 +124,33 @@ pub unsafe fn cstr<'a>(pointer: *const u8) -> &'a [u8] {
 }
 
 struct Invocation {
-    /// `argv` index of the guest program path.
-    program: usize,
+    /// Guest program path.
+    program: &'static [u8],
     /// String the guest sees as its `argv[0]`.
     argv0: *const u8,
     /// `argv` index where the guest's own arguments start.
     first_arg: usize,
+    /// Explicit form: loader entries precede the guest's in argv, so the
+    /// kernel's argument area is compacted to hide them.
+    compact: bool,
     selftest: bool,
 }
 
+/// Two ways in: `ZD_PROGRAM` set means the kernel exec'd the loader with
+/// the guest's own argv (the supervisor's form, exact `cmdline`); else
+/// the loader's basename must be one of its own names and the program
+/// follows its flags (`zdload [--selftest] [-0 argv0] <program> ...`).
 fn parse_invocation(stack: &InitialStack) -> Invocation {
+    let config = config::get();
+    if !config.program.is_empty() {
+        return Invocation {
+            program: config.program.as_bytes(),
+            argv0: stack.argv.first().copied().unwrap_or(config.program.as_ptr()),
+            first_arg: 1,
+            compact: false,
+            selftest: config.selftest,
+        };
+    }
     let argv0 = stack.arg(0).unwrap_or(b"");
     let name = path::basename(argv0);
     if !LOADER_SELF_NAMES.iter().any(|self_name| self_name.as_bytes() == name) {
@@ -143,7 +160,7 @@ fn parse_invocation(stack: &InitialStack) -> Invocation {
         );
     }
     let mut index = 1usize;
-    let mut selftest = false;
+    let mut selftest = config.selftest;
     let mut argv0_override: Option<*const u8> = None;
     loop {
         match stack.arg(index) {
@@ -158,13 +175,14 @@ fn parse_invocation(stack: &InitialStack) -> Invocation {
             _ => break,
         }
     }
-    let Some(&program) = stack.argv.get(index) else {
+    let (Some(program), Some(&program_pointer)) = (stack.arg(index), stack.argv.get(index)) else {
         abort!("usage: {} [--selftest] [-0 argv0] <guest program> [args...]", Bytes(name));
     };
     Invocation {
-        program: index,
-        argv0: argv0_override.unwrap_or(program),
+        program,
+        argv0: argv0_override.unwrap_or(program_pointer),
         first_arg: index + 1,
+        compact: true,
         selftest,
     }
 }
@@ -189,9 +207,7 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
         abort!("{error}");
     }
     let invocation = parse_invocation(&stack);
-    let Some(program) = stack.arg(invocation.program) else {
-        abort!("missing guest program");
-    };
+    let program = invocation.program;
 
     let filter = match handler::ensure_filter() {
         Ok(state) => state,
@@ -215,26 +231,35 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
         selftest::report_load(program, &loaded, started);
     }
 
-    let new_sp = build_guest_vector(&stack, &invocation, &loaded);
     set_process_name(program);
+    let new_sp = build_guest_vector(&stack, &invocation, &loaded);
     // SAFETY: the guest image and its stack are in place.
     unsafe { jump(loaded.start_address(), new_sp) }
 }
 
 /// Write the guest's `[argc][argv][0][envp][0][auxv]` into the gap below
-/// the kernel's vector and return the guest's initial stack pointer. The
-/// strings stay where the kernel put them; only pointers move.
+/// the kernel's vector and return the guest's initial stack pointer.
+///
+/// The argument strings are compacted in place as well: the kernel
+/// reports `[arg_start, arg_end)` as `/proc/<pid>/cmdline`, and that
+/// area still spells the loader's own argv. Moving the guest's strings
+/// to its front (every move goes to a lower address, in order, so no
+/// source is clobbered before it is copied) makes the process look like
+/// the guest to `ps` and to programs that re-read their command line;
+/// the unused tail is NUL-filled. Environment strings stay where they
+/// are.
 fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &load::Loaded) -> usize {
     let config = config::get();
     let argc = 1 + stack.argv.len().saturating_sub(invocation.first_arg);
     let mut envc = 0usize;
     for entry in stack.env_entries() {
-        if !config.guest_env.overrides(entry) {
+        if !config::hidden_from_guest(entry) {
             envc += 1;
         }
     }
     envc += config.guest_env.entries().count();
-    let words = VectorWriter::words_needed(argc, envc, stack.auxv.len());
+    let auxc = stack.auxv.len();
+    let words = VectorWriter::words_needed(argc, envc, auxc);
     let bytes = words * 8;
     if bytes + 64 > VECTOR_GAP {
         abort!("argument vector too large ({words} words)");
@@ -244,18 +269,48 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
     // kernel's vector; nothing else uses it.
     let out = unsafe { core::slice::from_raw_parts_mut(new_sp as *mut u64, words) };
 
-    let execfn = stack.argv[invocation.program] as u64;
+    let compact = invocation.compact && !stack.argv.is_empty() && {
+        let arg_start = stack.argv[0] as usize;
+        let arg_end = argument_area_end(stack);
+        // SAFETY: kernel-provided argument strings.
+        let guest_len: usize = unsafe {
+            cstr(invocation.argv0).len()
+                + 1
+                + stack
+                    .argv
+                    .iter()
+                    .skip(invocation.first_arg)
+                    .map(|&argument| cstr(argument).len() + 1)
+                    .sum::<usize>()
+        };
+        guest_len <= arg_end - arg_start
+    };
+
     let mut write = || -> Result<(), zd_engine_core::stack::StackError> {
+        let mut cursor = if compact { stack.argv[0] as usize } else { 0 };
+        let mut place = |pointer: *const u8| -> u64 {
+            if !compact {
+                return pointer as u64;
+            }
+            // SAFETY: `pointer` is one of the kernel's argument strings
+            // inside the area, and the destination never passes it.
+            let len = unsafe { cstr(pointer) }.len() + 1;
+            unsafe { core::ptr::copy(pointer, cursor as *mut u8, len) };
+            let placed = cursor;
+            cursor += len;
+            placed as u64
+        };
+
         let mut writer = VectorWriter::new(out, argc)?;
-        writer.push_arg(invocation.argv0 as u64)?;
+        writer.push_arg(place(invocation.argv0))?;
         for &argument in stack.argv.iter().skip(invocation.first_arg) {
-            writer.push_arg(argument as u64)?;
+            writer.push_arg(place(argument))?;
         }
         writer.end_args()?;
         for &pointer in stack.envp {
             // SAFETY: kernel-provided environment strings.
             let entry = unsafe { cstr(pointer) };
-            if !config.guest_env.overrides(entry) {
+            if !config::hidden_from_guest(entry) {
                 writer.push_env(pointer as u64)?;
             }
         }
@@ -263,6 +318,14 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
             writer.push_env(entry.as_ptr() as u64)?;
         }
         writer.end_env()?;
+        if compact {
+            let arg_end = argument_area_end(stack);
+            // SAFETY: the tail of the argument area.
+            unsafe { core::ptr::write_bytes(cursor as *mut u8, 0, arg_end - cursor) };
+        }
+        // The recorded guest path lives in loader `.bss`, which outlives
+        // the argument strings that compaction may have moved.
+        let execfn = config.guest_exe.as_ptr() as u64;
         for &[key, value] in stack.auxv {
             let value = match key {
                 AT_PHDR => loaded.phdr,
@@ -281,7 +344,22 @@ fn build_guest_vector(stack: &InitialStack, invocation: &Invocation, loaded: &lo
     if write().is_err() {
         abort!("argument vector does not fit its reservation");
     }
+    let auxv_offset = 8 * (1 + argc + 1 + envc + 1);
+    config::set_auxv(new_sp + auxv_offset, (auxc + 1) * 16);
     new_sp
+}
+
+/// End of the kernel's argument-string area: where the environment
+/// strings begin, or past the last argument when there are none.
+fn argument_area_end(stack: &InitialStack) -> usize {
+    match stack.envp.first() {
+        Some(&first_env) => first_env as usize,
+        None => {
+            let last = stack.argv[stack.argv.len() - 1];
+            // SAFETY: kernel-provided argument string.
+            last as usize + unsafe { cstr(last) }.len() + 1
+        }
+    }
 }
 
 fn set_process_name(program: &[u8]) {

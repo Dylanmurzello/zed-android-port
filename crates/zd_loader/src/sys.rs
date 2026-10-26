@@ -13,6 +13,11 @@ pub const O_WRONLY: usize = 1;
 pub const O_CREAT: usize = 0o100;
 pub const O_APPEND: usize = 0o2000;
 pub const O_CLOEXEC: usize = 0o2000000;
+pub const O_ACCMODE: usize = 0o3;
+
+pub const F_SETFD: usize = 2;
+pub const MFD_CLOEXEC: usize = 1;
+pub const SEEK_SET: usize = 0;
 
 pub const PROT_NONE: usize = 0;
 pub const PROT_READ: usize = 1;
@@ -37,6 +42,7 @@ pub const SECCOMP_MODE_FILTER: usize = 2;
 pub const SECCOMP_SET_MODE_FILTER: usize = 1;
 pub const SECCOMP_FILTER_FLAG_TSYNC: usize = 1;
 
+pub const EACCES: i32 = 13;
 pub const EFAULT: i32 = 14;
 pub const EINVAL: i32 = 22;
 pub const ENAMETOOLONG: i32 = 36;
@@ -172,6 +178,18 @@ pub fn prctl(option: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> Resul
 
 pub fn seccomp(operation: usize, flags: usize, args: usize) -> Result<usize, i32> {
     check(unsafe { syscall6(nr::SECCOMP, operation, flags, args, 0, 0, 0) })
+}
+
+pub fn memfd_create(name: *const u8, flags: usize) -> Result<i32, i32> {
+    check(unsafe { syscall6(nr::MEMFD_CREATE, name as usize, flags, 0, 0, 0, 0) }).map(|fd| fd as i32)
+}
+
+pub fn lseek(fd: i32, offset: usize, whence: usize) -> Result<usize, i32> {
+    check(unsafe { syscall6(nr::LSEEK, fd as usize, offset, whence, 0, 0, 0) })
+}
+
+pub fn fcntl(fd: i32, command: usize, argument: usize) -> Result<usize, i32> {
+    check(unsafe { syscall6(nr::FCNTL, fd as usize, command, argument, 0, 0, 0) })
 }
 
 pub fn getpid() -> u32 {

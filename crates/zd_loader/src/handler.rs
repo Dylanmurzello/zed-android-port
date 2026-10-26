@@ -298,12 +298,56 @@ fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 
             }
         }
         Ok(Translated::ProcExe(_)) => reissue(number, regs, regs[1]),
+        Ok(Translated::ProcAuxv(who)) if is_self(who) && number == nr::OPENAT => serve_auxv(regs),
+        Ok(Translated::ProcAuxv(_)) => reissue(number, regs, regs[1]),
         Err(_) => sys::neg_errno(sys::ENAMETOOLONG),
     };
     regs[0] = result;
     if number == nr::READLINKAT {
         detranslate_readlink(translator, regs, &mut host);
     }
+}
+
+/// `open("/proc/self/auxv")`: the kernel's copy describes the loader
+/// (its `AT_PHDR`, `AT_ENTRY`, `AT_EXECFN`), so hand out a memfd holding
+/// the vector the guest actually started with. rustix-based programs
+/// (uutils among them) read `AT_EXECFN` this way instead of `argv[0]`.
+fn serve_auxv(regs: &[u64; 31]) -> u64 {
+    let config = config::get();
+    if config.auxv_ptr == 0 {
+        return reissue(nr::OPENAT, regs, regs[1]);
+    }
+    let flags = regs[2] as usize;
+    if flags & sys::O_ACCMODE != sys::O_RDONLY {
+        return sys::neg_errno(sys::EACCES);
+    }
+    let fd = match sys::memfd_create(c"auxv".as_ptr().cast(), sys::MFD_CLOEXEC) {
+        Ok(fd) => fd,
+        Err(errno) => return sys::neg_errno(errno),
+    };
+    // SAFETY: recorded by `config::set_auxv` from the vector the loader
+    // built; it outlives the guest.
+    let bytes = unsafe { core::slice::from_raw_parts(config.auxv_ptr as *const u8, config.auxv_len) };
+    let mut written = 0usize;
+    while written < bytes.len() {
+        let count = sys::write(fd, &bytes[written..]);
+        if count <= 0 {
+            if let Err(_errno) = sys::close(fd) {}
+            return sys::neg_errno(sys::EFAULT);
+        }
+        written += count as usize;
+    }
+    if let Err(errno) = sys::lseek(fd, 0, sys::SEEK_SET) {
+        if let Err(_errno) = sys::close(fd) {}
+        return sys::neg_errno(errno);
+    }
+    if flags & sys::O_CLOEXEC == 0
+        && let Err(errno) = sys::fcntl(fd, sys::F_SETFD, 0)
+    {
+        if let Err(_errno) = sys::close(fd) {}
+        return sys::neg_errno(errno);
+    }
+    fd as u64
 }
 
 /// Write `bytes` into a guest buffer with `readlink` semantics: no NUL,

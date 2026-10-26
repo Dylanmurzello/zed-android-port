@@ -4,10 +4,12 @@
 /// Syscall numbers from the arm64 (asm-generic) table.
 pub mod nr {
     pub const GETCWD: u32 = 17;
+    pub const FCNTL: u32 = 25;
     pub const FACCESSAT: u32 = 48;
     pub const CHDIR: u32 = 49;
     pub const OPENAT: u32 = 56;
     pub const CLOSE: u32 = 57;
+    pub const LSEEK: u32 = 62;
     pub const READ: u32 = 63;
     pub const WRITE: u32 = 64;
     pub const PREAD64: u32 = 67;
@@ -28,6 +30,7 @@ pub mod nr {
     pub const MMAP: u32 = 222;
     pub const MPROTECT: u32 = 226;
     pub const SECCOMP: u32 = 277;
+    pub const MEMFD_CREATE: u32 = 279;
     pub const STATX: u32 = 291;
     pub const RSEQ: u32 = 293;
     pub const OPENAT2: u32 = 437;

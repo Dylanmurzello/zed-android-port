@@ -27,6 +27,9 @@ pub enum Translated {
     /// `/proc/<who>/exe`: the caller substitutes the recorded guest
     /// executable path instead of a file under the rootfs.
     ProcExe(ProcExe),
+    /// `/proc/<who>/auxv`: the kernel's copy describes the loader, so
+    /// the caller serves the patched vector instead.
+    ProcAuxv(ProcExe),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +65,10 @@ impl<'a> Translator<'a> {
         // faulting thread's stack and cannot afford a second PATH_MAX
         // scratch buffer.
         let len = clamp_to_root(guest, out)?;
-        if let Some(who) = proc_exe(&out[..len]) {
-            return Ok(Translated::ProcExe(who));
+        match proc_special(&out[..len]) {
+            Some((who, ProcFile::Exe)) => return Ok(Translated::ProcExe(who)),
+            Some((who, ProcFile::Auxv)) => return Ok(Translated::ProcAuxv(who)),
+            None => {}
         }
         let (prefix, rest_start): (&[u8], usize) = match self.bindings.match_guest(&out[..len]) {
             Some((binding, rest)) => (binding.host, len - rest.len()),
@@ -157,13 +162,31 @@ impl<'a> Translator<'a> {
     }
 }
 
-fn proc_exe(guest: &[u8]) -> Option<ProcExe> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcFile {
+    Exe,
+    Auxv,
+}
+
+/// `/proc/<who>/exe` and `/proc/<who>/auxv`, the two per-process files
+/// whose kernel view describes the loader rather than the guest.
+fn proc_special(guest: &[u8]) -> Option<(ProcExe, ProcFile)> {
     let rest = strip_prefix(b"/proc", guest)?;
     let mut parts = components(rest);
     let who = parts.next()?;
-    if parts.next()? != b"exe" || parts.next().is_some() {
+    let file = match parts.next()? {
+        b"exe" => ProcFile::Exe,
+        b"auxv" => ProcFile::Auxv,
+        _ => return None,
+    };
+    if parts.next().is_some() {
         return None;
     }
+    let who = proc_who(who)?;
+    Some((who, file))
+}
+
+fn proc_who(who: &[u8]) -> Option<ProcExe> {
     if who == b"self" {
         return Some(ProcExe::SelfProcess);
     }
@@ -255,6 +278,18 @@ mod tests {
         );
         assert!(matches!(
             translator.guest_to_host(b"/proc/self/exe/x", &mut out).unwrap(),
+            Translated::Host(_)
+        ));
+        assert_eq!(
+            translator.guest_to_host(b"/proc/self/auxv", &mut out).unwrap(),
+            Translated::ProcAuxv(ProcExe::SelfProcess)
+        );
+        assert_eq!(
+            translator.guest_to_host(b"/proc/77/auxv", &mut out).unwrap(),
+            Translated::ProcAuxv(ProcExe::Pid(77))
+        );
+        assert!(matches!(
+            translator.guest_to_host(b"/proc/self/maps", &mut out).unwrap(),
             Translated::Host(_)
         ));
     }
