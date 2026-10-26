@@ -46,7 +46,10 @@ stops being load-bearing for spawns once every spawn goes through it.
 
 `libzdload.so` missing from `nativeLibraryDir` (logged at boot as
 `engine loader ... exists=false`), or `verifyZdLoader` failing the build when a
-flag change produces a PIE or a different image base.
+flag change produces a PIE or a different image base. A `RUSTFLAGS` value
+inherited from the shell replaces the loader's config rustflags (cargo
+precedence) and the link dies on `duplicate symbol: _start`; the gradle
+task strips the variable for that reason.
 
 ## See also
 

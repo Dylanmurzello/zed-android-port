@@ -3,6 +3,11 @@
 # inside [LOADER_IMAGE_BASE, LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE), so
 # the base here must match zd_engine_core::LOADER_IMAGE_BASE.
 # cargo-ndk supplies the NDK clang as the linker.
+#
+# An environment RUSTFLAGS replaces these target rustflags entirely (cargo
+# precedence), so build this crate with RUSTFLAGS unset; the gradle task
+# strips it. With the app's +fp16 RUSTFLAGS leaking in, the link pulls
+# crt1.o and fails on a duplicate `_start`.
 [build]
 target = "aarch64-linux-android"
 

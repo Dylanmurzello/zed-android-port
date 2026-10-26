@@ -198,6 +198,14 @@ tasks.register<Exec>("buildZdLoader") {
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
         environment("ANDROID_NDK_HOME", ndk)
     }
+    // The app build exports RUSTFLAGS (+fp16 for gemm-f16). Cargo lets an
+    // environment RUSTFLAGS replace the target rustflags in a crate's
+    // .cargo/config.toml, which for the loader means losing the static,
+    // fixed-base, no-crt link: crt1.o then defines a second `_start` and
+    // lld fails with a duplicate symbol. Strip the inherited flags so the
+    // loader's own config governs.
+    environment.remove("RUSTFLAGS")
+    environment.remove("CARGO_ENCODED_RUSTFLAGS")
 
     inputs.files(fileTree("${zdLoaderDir}/src") { include("**/*.rs") })
     inputs.files(fileTree("${zdEngineCoreDir}/src") { include("**/*.rs") })
