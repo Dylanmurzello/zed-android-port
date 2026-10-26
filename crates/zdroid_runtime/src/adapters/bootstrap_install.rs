@@ -313,7 +313,26 @@ fn extract_into_staging(zip_bytes: &[u8], staging: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Files in the prefix that hold the user's settings rather than
+/// bootstrap content. The swap replaces the whole prefix, so they're
+/// copied into the staging tree first.
+const PRESERVED_PREFIX_FILES: &[&str] = &["etc/zd-runtime.toml"];
+
 fn swap_staging_into_prefix(staging: &Path, prefix: &Path) -> Result<()> {
+    for relative_path in PRESERVED_PREFIX_FILES {
+        let source = prefix.join(relative_path);
+        if !source.is_file() {
+            continue;
+        }
+        let destination = staging.join(relative_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        fs::copy(&source, &destination).with_context(|| {
+            format!("keep {} across the bootstrap install", source.display())
+        })?;
+    }
     if prefix.exists() {
         fs::remove_dir_all(prefix)
             .with_context(|| format!("wipe old prefix at {}", prefix.display()))?;
