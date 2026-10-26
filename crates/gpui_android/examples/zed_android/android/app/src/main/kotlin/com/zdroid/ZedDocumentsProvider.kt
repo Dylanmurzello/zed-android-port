@@ -12,7 +12,10 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.IOException
 import java.util.LinkedList
+import kotlin.io.path.ExperimentalPathApi
+import kotlin.io.path.deleteRecursively
 
 /// Exposes Zed's `~` (i.e. `/data/data/com.zdroid/files/home`) to
 /// other apps via Android's Storage Access Framework. After install Zed
@@ -28,8 +31,9 @@ import java.util.LinkedList
 /// `ZedApplication.onCreate` mkdir-ing `~` so the root is at least
 /// browsable; the provider also defends with an `isDirectory()` check.
 ///
-/// Document IDs are absolute filesystem paths (matches Termux). Symlink
-/// escape during search is blocked by canonical-path check.
+/// Document IDs are absolute filesystem paths (matches Termux). Other apps
+/// pass them back through URI grants, so every ID is checked to stay under
+/// `~`. Symlink escape during search is blocked by canonical-path check.
 class ZedDocumentsProvider : DocumentsProvider() {
     private lateinit var baseDir: File
 
@@ -154,7 +158,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
         displayName: String,
     ): String {
         val parent = getFileForDocId(parentDocumentId)
-        var target = File(parent, displayName)
+        var target = childFile(parent, displayName)
         var counter = 2
         while (target.exists()) {
             // Termux behavior: append " (N)" before extension on conflict.
@@ -175,17 +179,22 @@ class ZedDocumentsProvider : DocumentsProvider() {
         return target.absolutePath
     }
 
+    // Deletes symlinks, not what they point to: `~/storage/shared` links to
+    // shared storage. Kotlin's `File.deleteRecursively` follows them.
+    @OptIn(ExperimentalPathApi::class)
     override fun deleteDocument(documentId: String) {
         val file = getFileForDocId(documentId)
-        if (!file.deleteRecursively()) {
-            throw FileNotFoundException("deleteDocument failed: $documentId")
+        try {
+            file.toPath().deleteRecursively()
+        } catch (e: IOException) {
+            throw FileNotFoundException("deleteDocument failed: $documentId: ${e.message}")
         }
     }
 
     override fun renameDocument(documentId: String, displayName: String): String {
         val file = getFileForDocId(documentId)
         val parent = file.parentFile ?: throw FileNotFoundException("rename: no parent for $documentId")
-        var target = File(parent, displayName)
+        var target = childFile(parent, displayName)
         var counter = 2
         while (target.exists() && target != file) {
             val (base, ext) = splitNameAndExt(displayName)
@@ -198,12 +207,10 @@ class ZedDocumentsProvider : DocumentsProvider() {
         return target.absolutePath
     }
 
-    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
-        // Path-prefix check is enough for our absolute-path docId scheme.
-        // Append separator to avoid `/foo` matching `/foobar`.
-        return documentId == parentDocumentId
-            || documentId.startsWith("$parentDocumentId${File.separator}")
-    }
+    // Compares whole path components after resolving `..`, so neither
+    // `/foo` vs `/foobar` nor `/foo/../bar` passes.
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
+        File(documentId).normalize().startsWith(File(parentDocumentId).normalize())
 
     override fun getDocumentType(documentId: String): String =
         getMime(getFileForDocId(documentId))
@@ -236,10 +243,26 @@ class ZedDocumentsProvider : DocumentsProvider() {
         }
     }
 
+    // Resolves `..` without following symlinks, so `~/storage/shared` stays
+    // browsable while `~/../databases` is refused.
     private fun getFileForDocId(docId: String): File {
-        val file = File(docId)
+        val file = File(docId).normalize()
+        if (!file.isAbsolute || !file.startsWith(baseDir)) {
+            throw FileNotFoundException("$docId is outside $baseDir")
+        }
         if (!file.exists()) throw FileNotFoundException("$docId not found")
         return file
+    }
+
+    // Display names come from other apps; a `/` or `..` would create or
+    // rename files outside `parent`.
+    private fun childFile(parent: File, displayName: String): File {
+        if (displayName.isEmpty() || displayName == "." || displayName == ".." ||
+            displayName.contains(File.separatorChar)
+        ) {
+            throw FileNotFoundException("invalid document name: $displayName")
+        }
+        return File(parent, displayName)
     }
 
     private fun getMime(file: File): String {
