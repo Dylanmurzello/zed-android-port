@@ -227,8 +227,8 @@ impl AndroidWindowStatePtr {
             ),
             // Alpha-aware compositor mode (PreMultiplied with
             // Inherit fallback). The SurfaceView's pixel format is
-            // what actually decides the compositor's alpha-awareness:
-            // MainActivity (GameActivity) ends up
+            // what actually decides the compositor's alpha-awareness
+            // on Samsung: MainActivity (GameActivity) ends up
             // OPAQUE and ExtraWindowActivity's holder is explicitly
             // OPAQUE too, so the wgpu surface's alpha_mode falls back
             // to Inherit and behaves opaque regardless of this flag.
@@ -248,12 +248,13 @@ impl AndroidWindowStatePtr {
             //
             // Triple-buffer (`Some(3)`) was tried and reverted: at 120Hz
             // the cost is +8.33ms of in-flight latency which is invisible,
-            // but adaptive-refresh panels aggressively drop to
+            // but Samsung's smart-refresh aggressively drops the panel to
             // 60/30Hz when the app isn't actively rendering, and at those
             // rates the extra image adds 16-33ms of perceived input
             // latency that the user feels as overall sluggishness. Stay
             // at the wgpu default of 2 until we have a way to keep the
-            // panel pinned at 120Hz.
+            // panel pinned at 120Hz. See
+            // `docs/workarounds/deferred-render-pipeline-perf.md`.
             preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
         };
 

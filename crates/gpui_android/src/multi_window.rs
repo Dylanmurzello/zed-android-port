@@ -1,8 +1,8 @@
 //! Multi-window bridge: each `cx.open_window` beyond the GameActivity-owned
 //! primary spawns an `ExtraWindowActivity` (separate AppCompatActivity), and
 //! its `SurfaceView`'s native window backs a fresh `VkSurfaceKHR` on the Rust
-//! side. On freeform-windowing devices (Android 16 Desktop Mode, vendor
-//! desktop modes, ChromeOS) each Activity becomes a real OS-chromed
+//! side. On freeform-windowing devices (DeX, Pixel desktop windowing,
+//! Android 16 Desktop Mode, ChromeOS) each Activity becomes a real OS-chromed
 //! freeform window with close X / drag bar / resize handles. On phones
 //! (non-freeform) each Activity lands in its own Recents task; usable but no
 //! chrome.
@@ -49,12 +49,13 @@ use jni::objects::{GlobalRef, JFloatArray, JIntArray, JObject, JValue};
 use ndk::native_window::NativeWindow;
 
 /// Hard cap on how long `create_extra_window_blocking` will wait for the
-/// Activity's `surfaceCreated` callback. A cold Activity start in a freeform
-/// window takes ~530-700ms on a high-end tablet; the budget covers that
-/// plus headroom. If exceeded we return Err and gpui surfaces the failure to
-/// the caller (UX: "couldn't open, try again") instead of freezing the
-/// Workspace forever. Yes 2s is long; warm reopens are sub-100ms because
-/// the Activity stays alive in Recents.
+/// Activity's `surfaceCreated` callback. Cold Activity start in DeX desktop
+/// windowing is ~530-700ms; the budget covers that plus headroom (see
+/// `docs/workarounds/activity-launch-cold-timeout.md`). If exceeded we
+/// return Err and gpui surfaces the failure to the caller (UX: "couldn't
+/// open, try again") instead of freezing the Workspace forever. Yes 2s is
+/// long; warm reopens are sub-100ms because the Activity stays alive in
+/// Recents.
 const ACTIVITY_LAUNCH_TIMEOUT: Duration = Duration::from_millis(4000);
 
 /// Events from the JNI side (UI thread) that the gpui main thread needs to
@@ -136,7 +137,7 @@ static REGISTERED_WINDOWS: Mutex<Option<std::collections::HashSet<u64>>> = Mutex
 /// We use a Mutex (not a OnceLock) because Android may recreate the
 /// hosting Activity within the same OS process — e.g. after a
 /// configuration change, an OOM-recovery kill that didn't actually
-/// free the .so, or desktop windowing-mode flips. Each Activity recreation
+/// free the .so, or DeX windowing-mode flips. Each Activity recreation
 /// re-enters `android_main`, which constructs a fresh AndroidPlatform
 /// and expects a fresh receiver. Panicking on the second init is the
 /// "activity-recreation-idempotency" trap our docs warn about.
@@ -478,7 +479,7 @@ fn launch_extra_activity_inner(
     // `documentLaunchMode="always"` on the manifest already implies
     // FLAG_ACTIVITY_NEW_DOCUMENT | FLAG_ACTIVITY_MULTIPLE_TASK, so we don't
     // set them here — setting them additionally was causing MainActivity
-    // to be backgrounded under freeform windowing.
+    // to be backgrounded under DeX freeform windowing.
     if let Some(rect) = bounds {
         // Build ActivityOptions.makeBasic().setLaunchBounds(Rect) and pass
         // its Bundle to startActivity. Lets us request an initial freeform

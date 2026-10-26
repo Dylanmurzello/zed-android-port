@@ -10,8 +10,8 @@ import android.view.Surface
 /// `AXIS_RELATIVE_X` / `AXIS_RELATIVE_Y` are NOT accumulated across
 /// batched samples by the framework; `getAxisValue` returns only the
 /// most recent. Without summing the historical samples fast finger
-/// motion loses ~80% of its travel (a trackpad can batch ~6-10
-/// samples per event).
+/// motion loses ~80% of its travel (Samsung's cover trackpad batches
+/// ~6-10 samples per event).
 internal fun sumRelativeAxis(event: MotionEvent, axis: Int, pointerIndex: Int): Float {
     var sum = 0f
     val historySize = event.historySize

@@ -37,8 +37,8 @@ pub(crate) enum InputSource {
     /// Treated identically to mouse for click timing because both are
     /// precision-aimed.
     Stylus,
-    /// Standalone trackpad (rare on Android; Samsung's cover trackpad
-    /// surfaces as Mouse instead). Currently behaves like mouse; reserved as a
+    /// Standalone trackpad (rare on Android; the DeX trackpad surfaces
+    /// as Mouse instead). Currently behaves like mouse; reserved as a
     /// distinct variant for the pointer-capture branch.
     Touchpad,
     /// Finger on touchscreen. Default when source/tool_type don't

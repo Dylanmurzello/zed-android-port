@@ -94,6 +94,7 @@ pub(crate) fn write(android_app: &AndroidApp, item: ClipboardItem) {
     // Calling JNI from here trips StackOverflowError on the JVM side
     // (mid-printStackTrace, no less — the linker can't even tell us
     // what failed). Same class of bug as the read-path 60fps cascade.
+    // See `docs/workarounds/jvm-clipboard-stack-overflow.md`.
     //
     // Fix: fire-and-forget on a fresh thread with 2MB stack. AndroidApp
     // doesn't expose a Clone; we extract the raw JavaVM* and Activity*

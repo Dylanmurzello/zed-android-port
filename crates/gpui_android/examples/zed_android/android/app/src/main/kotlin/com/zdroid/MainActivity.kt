@@ -936,7 +936,7 @@ class MainActivity : GameActivity(), ImeHost {
      * GameActivity forwards input to gpui from the Activity-level
      * onTouchEvent / onGenericMotionEvent, in window coordinates, while gpui
      * expects them relative to the SurfaceView. The two differ when the
-     * surface doesn't start at the window's top-left corner, as in some
+     * surface doesn't start at the window's top-left corner, as in DeX
      * freeform windows, where every click and hover landed off by the
      * surface's offset. Applied only there, after the view tree has
      * dispatched the event, so sibling views like the extras row still
@@ -1362,7 +1362,7 @@ class MainActivity : GameActivity(), ImeHost {
     ///
     /// We've declared every config-change axis we care about in
     /// AndroidManifest.xml (`android:configChanges="orientation|...|
-    /// uiMode|fontScale|..."`), so rotation, desktop mode, dark-mode flips, etc.
+    /// uiMode|fontScale|..."`), so rotation, DeX, dark-mode flips, etc.
     /// don't destroy the Activity in the first place — those keep the
     /// process and Activity continuous, no re-entry. The only paths that
     /// reach `onDestroy` are genuine teardowns: user closed the app,

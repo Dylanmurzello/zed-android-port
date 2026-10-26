@@ -10,6 +10,13 @@ here so future sessions don't re-derive it from scratch. When a workaround
 is replaced by something cleaner, mark it Reverted and link to the
 replacement.
 
+## Reference hardware
+
+Unless a writeup says otherwise, the observations and measurements here and
+in code comments come from a Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2,
+Adreno 740 GPU, 120 Hz adaptive-refresh panel, ~336 dpi) running One UI,
+with the Book Cover Keyboard's trackpad, in both tablet mode and DeX.
+
 ## How to read this
 
 | Status | Meaning |

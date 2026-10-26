@@ -70,11 +70,12 @@ const TARGET_FRAME_RATE_HZ: f32 = 120.0;
 /// refresh rate. No-op on API 26-29 (returns `false`).
 ///
 /// CRITICAL: passing `0.0` Hz here means "I'm inactive / I have no
-/// preference" — an adaptive-refresh panel reads that as a hint to drop
+/// preference" — Samsung's adaptive panel reads that as a hint to drop
 /// to its idle rate (as low as 30Hz), producing visible 33ms
 /// vsync intervals and the user-visible stutter that motivated this
 /// fix. Always pass a positive frame rate so the panel knows we're an
-/// active app that wants high refresh.
+/// active app that wants high refresh. See
+/// `docs/workarounds/deferred-render-pipeline-perf.md`.
 ///
 /// The pointer must be a valid `ANativeWindow*` for at least the
 /// duration of this call. Caller (window.rs::attach_surface) holds an
