@@ -102,6 +102,8 @@ pub(crate) enum ExtraWindowEvent {
         meta_state: u32,
         repeat_count: i32,
     },
+    /// `onWindowFocusChanged` on the extra window's Activity.
+    FocusChanged { window_id: u64, focused: bool },
 }
 
 /// Senders for the first `surfaceCreated` of each extra window. The receiver
@@ -728,6 +730,19 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceDestroye
     let window_id = window_id as u64;
     log::info!("multi_window: nativeOnExtraSurfaceDestroyed windowId={window_id}");
     dispatch_event(ExtraWindowEvent::SurfaceDestroyed { window_id });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraFocusChanged<'local>(
+    _env: jni::JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    window_id: i64,
+    has_focus: jni::sys::jboolean,
+) {
+    let window_id = window_id as u64;
+    let focused = has_focus != 0;
+    log::debug!("multi_window: nativeOnExtraFocusChanged windowId={window_id} focused={focused}");
+    dispatch_event(ExtraWindowEvent::FocusChanged { window_id, focused });
 }
 
 #[unsafe(no_mangle)]

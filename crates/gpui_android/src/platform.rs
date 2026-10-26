@@ -519,20 +519,19 @@ impl AndroidPlatform {
         // Must defer to a later tick: gpui registers the
         // `on_active_status_change` callback inside `Window::new`, which
         // runs AFTER our `open_extra_window` returns. Firing synchronously
-        // here would no-op against an empty callback slot.
+        // here would no-op against an empty callback slot. The Activity's
+        // focus may have changed by then, so send the current state.
         let executor = self.common.borrow().foreground_executor.clone();
         let window_ptr = window.ptr();
         executor
             .spawn(async move {
-                window_ptr.notify_active_status_change(true);
+                let active = window_ptr.state.borrow().active;
+                window_ptr.notify_active_status_change(active);
             })
             .detach();
         Ok(Box::new(window))
     }
 
-    /// Pull JNI-originated extra-window events off the channel and dispatch
-    /// to the matching `AndroidWindowStatePtr`. Called once per iteration of
-    /// the platform's main loop.
     /// Drops extra windows that gpui has closed. gpui drops an extra
     /// window's `AndroidWindow` when it closes it, which marks the window
     /// closed, but the platform still holds it. Refreshing it would make
@@ -563,6 +562,21 @@ impl AndroidPlatform {
         }
     }
 
+    /// Mirrors an Activity's input focus onto its gpui window. Losing focus
+    /// keeps the platform's active window: focus also moves to system UI,
+    /// such as the notification shade, and Zed opens things in the active
+    /// window.
+    fn window_focus_changed(&self, window_ptr: &AndroidWindowStatePtr, focused: bool) {
+        if focused {
+            let handle = window_ptr.state.borrow().handle;
+            self.common.borrow_mut().active_window = Some(handle);
+        }
+        window_ptr.set_active(focused);
+    }
+
+    /// Pull JNI-originated extra-window events off the channel and dispatch
+    /// to the matching `AndroidWindowStatePtr`. Called once per iteration of
+    /// the platform's main loop.
     fn drain_extra_window_events(&self) {
         use crate::multi_window::ExtraWindowEvent;
 
@@ -695,6 +709,14 @@ impl AndroidPlatform {
                         repeat_count,
                     ) {
                         state.handle_input(input);
+                    }
+                }
+                ExtraWindowEvent::FocusChanged { window_id, focused } => {
+                    // A closing window's Activity loses focus after gpui
+                    // has already dropped it, so an unknown id is expected.
+                    let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
+                    if let Some(window_ptr) = entry {
+                        self.window_focus_changed(&window_ptr, focused);
                     }
                 }
             }
@@ -1180,6 +1202,13 @@ impl AndroidPlatform {
             MainEvent::RedrawNeeded { .. } => {
                 if let Some(window_ptr) = self.common.borrow().window.clone() {
                     window_ptr.refresh();
+                }
+            }
+            MainEvent::GainedFocus | MainEvent::LostFocus => {
+                let focused = matches!(event, MainEvent::GainedFocus);
+                let primary = self.common.borrow().window.clone();
+                if let Some(window_ptr) = primary {
+                    self.window_focus_changed(&window_ptr, focused);
                 }
             }
             MainEvent::Destroy => {

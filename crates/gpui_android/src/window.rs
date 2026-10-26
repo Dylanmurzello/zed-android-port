@@ -108,6 +108,11 @@ pub(crate) struct AndroidWindowState {
     /// Set when gpui closes an extra window and drops its `AndroidWindow`.
     /// The platform run loop then drops the window from `extra_windows`.
     pub(crate) closed: bool,
+    /// Whether the window's Activity has input focus. Starts true because
+    /// each window opens in front. Zed closes the active window for
+    /// `workspace::CloseWindow`, so with every window reporting active,
+    /// Ctrl+W in Settings closed the main window instead, and Zed quit.
+    pub(crate) active: bool,
     /// Cheap clone (Arc internally) used by `AndroidWindow::Drop` to issue
     /// `multi_window::finish_extra_activity` for extra windows. Always set
     /// at construction time (both primary and extras carry it; primary just
@@ -453,6 +458,23 @@ impl AndroidWindowStatePtr {
         }
     }
 
+    /// Records the window's Activity gaining or losing input focus and tells
+    /// gpui when that changes.
+    pub(crate) fn set_active(&self, active: bool) {
+        let was_active = {
+            let mut state = self.state.borrow_mut();
+            // gpui has already removed a closed window, so its callback
+            // would only fail with "window not found".
+            if state.closed {
+                return;
+            }
+            std::mem::replace(&mut state.active, active)
+        };
+        if was_active != active {
+            self.notify_active_status_change(active);
+        }
+    }
+
     /// Dispatches a translated input event into gpui via the registered
     /// `on_input` callback, then routes printable `KeyDown`s through the
     /// active `PlatformInputHandler` (gpui's text-input path) when the
@@ -527,6 +549,7 @@ impl AndroidWindow {
             last_present_failed: false,
             os_closed: AtomicBool::new(false),
             closed: false,
+            active: true,
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
             captured: crate::captured_pointer::CapturedPointerState::default(),
@@ -674,7 +697,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn is_active(&self) -> bool {
-        true
+        self.ptr.state.borrow().active
     }
 
     fn visibility(&self) -> WindowVisibility {

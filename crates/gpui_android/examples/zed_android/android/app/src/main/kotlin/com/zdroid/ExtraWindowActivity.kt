@@ -451,6 +451,9 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        if (extraWindowId >= 0L) {
+            NativeBridge.nativeOnExtraFocusChanged(extraWindowId, hasFocus)
+        }
         // Mirror MainActivity: request capture when this window gains
         // focus and a trackpad/mouse is connected, release when focus
         // is lost. Without this, spawned windows fall back to
