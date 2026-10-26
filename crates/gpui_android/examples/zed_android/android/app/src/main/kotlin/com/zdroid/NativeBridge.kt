@@ -55,6 +55,10 @@ object NativeBridge {
     /// synchronously inside this callback.
     external fun nativeOnExtraSurfaceDestroyed(windowId: Long)
 
+    /// Posted from `ExtraWindowActivity.onWindowFocusChanged`, so gpui knows
+    /// which window is active. Zed closes the active window for Ctrl+W.
+    external fun nativeOnExtraFocusChanged(windowId: Long, hasFocus: Boolean)
+
     /// MotionEvent fields marshaled into primitive arrays (we can't share
     /// `MotionEvent` across the JNI boundary). Pointer indices are
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the
