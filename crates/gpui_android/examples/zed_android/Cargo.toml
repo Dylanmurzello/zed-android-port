@@ -102,6 +102,9 @@ uuid = { version = "1.10", features = ["v4"] }
 vim = { path = "../../../vim" }
 vim_mode_setting = { path = "../../../vim_mode_setting" }
 zed_actions = { path = "../../../zed_actions" }
+ui_prompt = { path = "../../../ui_prompt" }
+zlog = { path = "../../../zlog" }
+zlog_settings = { path = "../../../zlog_settings" }
 # Force RustEmbed to bake assets into the binary even in debug builds —
 # without this, settings/theme assets are looked up from the host filesystem
 # at runtime, which doesn't work on a device.
@@ -348,6 +351,7 @@ toolchain_selector = { opt-level = "z" }
 ui = { opt-level = "z" }
 ui_input = { opt-level = "z" }
 ui_macros = { opt-level = "z" }
+ui_prompt = { opt-level = "z" }
 util = { opt-level = "z" }
 vim = { opt-level = "z" }
 vim_mode_setting = { opt-level = "z" }
@@ -364,5 +368,6 @@ zed_credentials_provider = { opt-level = "z" }
 zed_env_vars = { opt-level = "z" }
 zeta_prompt = { opt-level = "z" }
 zlog = { opt-level = "z" }
+zlog_settings = { opt-level = "z" }
 ztracing = { opt-level = "z" }
 ztracing_macro = { opt-level = "z" }
