@@ -14,7 +14,7 @@ target = "aarch64-linux-android"
 [target.aarch64-linux-android]
 rustflags = [
     "-C", "relocation-model=static",
-    "-C", "target-feature=+crt-static",
+    "-C", "target-feature=+crt-static,-outline-atomics",
     "-C", "force-frame-pointers=yes",
     "-C", "link-arg=-nostdlib",
     "-C", "link-arg=-nostartfiles",
