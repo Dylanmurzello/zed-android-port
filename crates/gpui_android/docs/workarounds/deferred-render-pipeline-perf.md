@@ -52,10 +52,10 @@ without CPU compositing.
   `ALOOPER_POLL_CALLBACK` (which it documents shouldn't happen)
   whenever our Choreographer FD callback dispatches — i.e. every
   vsync, by design. It's not an extra wake-up, it's the one we want.
-  Silenced via `env_logger` filter in `lib.rs`:
-  `"info,android_activity::activity_impl=off"`. Saves ~12ms/sec of
-  CPU spent in the logcat write path and removes 120 lines/sec of
-  log spam. Real frame-pacing tail (p99=20ms+) comes from occasional
+  Silenced in `examples/zed_android/src/logging.rs`
+  (`SPURIOUS_VSYNC_LOG_MODULE`), before both logcat and `Zed.log`.
+  Saves ~12ms/sec of CPU spent in the logcat write path and removes
+  120 lines/sec of log spam. Real frame-pacing tail (p99=20ms+) comes from occasional
   long paints, not wakes — see the frame_timing samples above.
 
 ## I/O integration started (2026-05-13)

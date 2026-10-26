@@ -12,10 +12,12 @@ replacement.
 
 ## Reference hardware
 
-Unless a writeup says otherwise, the observations and measurements here and
-in code comments come from a Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2,
-Adreno 740 GPU, 120 Hz adaptive-refresh panel, ~336 dpi) running One UI,
-with the Book Cover Keyboard's trackpad, in both tablet mode and DeX.
+Zdroid is developed and tested on a Samsung Galaxy Tab S9 Ultra, the tablet
+Dylan used too (see "Tested on" in the top-level README). Unless a writeup
+says otherwise, the observations and measurements here and in code comments
+come from it: Snapdragon 8 Gen 2, Adreno 740 GPU, 120 Hz adaptive-refresh
+panel, ~336 dpi, Android 16 with One UI 8, and the Book Cover Keyboard's
+trackpad, in both tablet mode and DeX.
 
 ## How to read this
 

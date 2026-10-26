@@ -53,7 +53,7 @@ use ndk::native_window::NativeWindow;
 /// windowing is ~530-700ms; the budget covers that plus headroom (see
 /// `docs/workarounds/activity-launch-cold-timeout.md`). If exceeded we
 /// return Err and gpui surfaces the failure to the caller (UX: "couldn't
-/// open, try again") instead of freezing the Workspace forever. Yes 2s is
+/// open, try again") instead of freezing the Workspace forever. Yes 4s is
 /// long; warm reopens are sub-100ms because the Activity stays alive in
 /// Recents.
 const ACTIVITY_LAUNCH_TIMEOUT: Duration = Duration::from_millis(4000);
