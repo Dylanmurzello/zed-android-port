@@ -45,13 +45,9 @@ git diff --name-only $(git merge-base origin/main upstream/main)..origin/main \
 
 These use normal 3-way merge. Expect occasional conflicts when upstream refactors them; resolve case-by-case.
 
-### Helpers the fork extracted (silent-staleness class)
+### Startup code the app copies (silent-staleness class)
 
-Some functions were MOVED out of `crates/zed` so the Android entry point can reach them without linking the desktop binary crate: `editor::open_local_file`, `editor::open_bundled_file`, `editor::init_bundled_file_actions`, `workspace::open_settings_file`, `workspace::init_settings_file_actions`. Upstream keeps evolving its originals inside `crates/zed`, and because our copies live at different paths the merge produces NO conflict there — the extracted copies silently freeze. On every merge, diff each extracted helper against upstream's version of the original and port body/signature changes by hand (2026-08: `open_local_file` gained a `Option<Task<Result<Entity<Editor>>>>` return; `open_settings_file` was made sequential).
-
-### Action namespace rule
-
-`actions!(zed, [...])` is declared in BOTH `crates/zed/src/zed.rs` and `crates/zed_actions`. One home per action name, ever: an action referenced outside `crates/zed` (workspace/editor registrations, the Android app) must live in `zed_actions`, and `zed.rs` must not re-declare it. Keep-both compiles and then breaks action dispatch at runtime (the registry keys on name strings).
+The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/zed/migrate.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand (see "Syncing a Zed release" in FORK.md).
 
 When you resolve a conflict in one of these, ALSO check if a workaround doc under `crates/gpui_android/docs/workarounds/` covers the affected file: the doc explains why the patch is there, which makes the resolution obvious.
 

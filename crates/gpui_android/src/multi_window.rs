@@ -10,8 +10,9 @@
 //! Threading: `create_extra_window_blocking` runs on the gpui main (game)
 //! thread inside `AndroidPlatform::open_window`. It posts the Activity launch
 //! via JNI `startActivity`, then blocks the game thread on a `oneshot` until
-//! the Activity's first `surfaceCreated` callback fires. A 500ms hard timeout
-//! guards against ANR-class freezes if Android is slow to launch the Activity.
+//! the Activity's first `surfaceCreated` callback fires. A hard timeout
+//! (`ACTIVITY_LAUNCH_TIMEOUT`) guards against ANR-class freezes if Android is
+//! slow to launch the Activity.
 //!
 //! Touch + ongoing-lifecycle events arrive on the UI thread (via
 //! `NativeBridge` JNI hooks) and are forwarded to the game thread through an
@@ -235,17 +236,18 @@ pub(crate) struct LaunchBounds {
 /// it with [`crate::platform::AndroidPlatform`] so future
 /// `ExtraWindowEvent`s for this id route correctly.
 ///
-/// `wait` runs between checks, for at most the given time. It must handle
-/// the main Activity's lifecycle commands: when the new Activity covers the
-/// main one, Android pauses the main Activity first, and GameActivity holds
-/// the UI thread until this thread acknowledges the pause. The new Activity
-/// starts on that same UI thread, so without the acknowledgement its surface
-/// only arrives once GameActivity gives up, after 2 seconds.
+/// `wait` runs between checks, for at most the given time, and returns
+/// whether to keep waiting. It must handle the main Activity's lifecycle
+/// commands: when the new Activity covers the main one, Android pauses the
+/// main Activity first, and GameActivity holds the UI thread until this
+/// thread acknowledges the pause. The new Activity starts on that same UI
+/// thread, so without the acknowledgement its surface only arrives once
+/// GameActivity gives up, after 2 seconds.
 pub(crate) fn create_extra_window_blocking(
     android_app: &AndroidApp,
     window_id: u64,
     bounds: Option<LaunchBounds>,
-    mut wait: impl FnMut(Duration),
+    mut wait: impl FnMut(Duration) -> bool,
 ) -> Result<NativeWindow> {
     let (tx, rx) = oneshot::channel();
     {
@@ -279,14 +281,23 @@ pub(crate) fn create_extra_window_blocking(
                 bail!("extra surface creation channel dropped (sender canceled)");
             }
         }
-        if std::time::Instant::now() >= deadline {
+        let timed_out = std::time::Instant::now() >= deadline;
+        if timed_out || !wait(Duration::from_millis(8)) {
             pending_table().as_mut().and_then(|m| m.remove(&window_id));
-            bail!(
-                "ExtraWindowActivity startup exceeded {}ms",
-                ACTIVITY_LAUNCH_TIMEOUT.as_millis()
-            );
+            // The surface may have arrived since the check above.
+            if let Ok(Some(native_window)) = rx.try_recv() {
+                return Ok(native_window);
+            }
+            // Otherwise the Activity may still start later, with no window
+            // to draw; `drain_extra_window_events` finishes it then.
+            if timed_out {
+                bail!(
+                    "ExtraWindowActivity startup exceeded {}ms",
+                    ACTIVITY_LAUNCH_TIMEOUT.as_millis()
+                );
+            }
+            bail!("the app is shutting down");
         }
-        wait(Duration::from_millis(8));
     }
 }
 

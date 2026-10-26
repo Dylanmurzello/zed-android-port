@@ -280,8 +280,12 @@ android {
 }
 
 dependencies {
-    // The version android-activity's native GameActivity code is built from.
-    implementation("androidx.games:games-activity:4.4.0")
+    // android-activity's native GameActivity code is version 4.4 and
+    // supports the 4.0 Java side. 4.4.0's Java side attaches input listeners
+    // to its SurfaceView, which send captured mouse and trackpad events
+    // through native code that leaks them, and it focuses that SurfaceView
+    // on every window focus change, away from the IME host.
+    implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
     // ActivityResultLauncher / ActivityResultContracts for SAF picker.
