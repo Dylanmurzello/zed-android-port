@@ -138,6 +138,31 @@ pub fn clamp_to_root(path: &[u8], out: &mut [u8]) -> Result<usize, PathError> {
     Ok(writer.finish())
 }
 
+/// Copy an absolute path with every `..` collapsed lexically (and
+/// climbs above the root dropped). Not for syscall arguments, where the
+/// kernel must see `..` to resolve it through symlinked directories;
+/// this is for deciding where a path lands, the way a person reads it.
+pub fn normalize(path: &[u8], out: &mut [u8]) -> Result<usize, PathError> {
+    if !is_absolute(path) {
+        return Err(PathError::NotAbsolute);
+    }
+    let mut writer = Writer::new(out);
+    writer.push(b"/")?;
+    for component in components(path) {
+        if component == b".." {
+            let kept = writer.as_bytes();
+            let cut = match kept.iter().rposition(|&byte| byte == b'/') {
+                Some(0) | None => 1,
+                Some(index) => index,
+            };
+            writer.len = cut;
+            continue;
+        }
+        writer.push_component(component)?;
+    }
+    Ok(writer.finish())
+}
+
 /// Relative path that reaches absolute `target` from inside absolute
 /// directory `from_dir`, lexically. An empty result means "the same
 /// directory", written as `.`.
@@ -252,6 +277,21 @@ mod tests {
     fn clamp_reports_overflow() {
         let mut out = [0u8; 4];
         assert_eq!(clamp_to_root(b"/abcdef", &mut out), Err(PathError::TooLong));
+    }
+
+    #[test]
+    fn normalize_collapses_dotdot() {
+        let norm = |path: &str| {
+            let mut out = [0u8; 256];
+            let len = normalize(path.as_bytes(), &mut out).unwrap();
+            String::from_utf8(out[..len].to_vec()).unwrap()
+        };
+        assert_eq!(norm("/tmp/../etc/hostname"), "/etc/hostname");
+        assert_eq!(norm("/usr/lib/../../tmp/z"), "/tmp/z");
+        assert_eq!(norm("/../../a"), "/a");
+        assert_eq!(norm("/a/b/../.."), "/");
+        assert_eq!(norm("/a/./b/"), "/a/b");
+        assert_eq!(norm("/"), "/");
     }
 
     #[test]

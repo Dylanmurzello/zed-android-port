@@ -8,7 +8,7 @@
 use crate::bindings::Bindings;
 use crate::path::{
     MAX_PATH, PathError, Writer, clamp_to_root, components, depth, dirname, is_absolute,
-    relative_path, strip_prefix,
+    normalize, relative_path, strip_prefix,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,13 +116,16 @@ impl<'a> Translator<'a> {
 
     /// Target to store for a symlink the guest creates at `link` (a guest
     /// absolute path) pointing at `target`. Keeps every link resolvable
-    /// by the kernel without translation:
-    /// - absolute targets inside a binding become the host absolute path
-    ///   (identity bindings keep their guest spelling);
-    /// - absolute targets under the rootfs become relative to the link's
-    ///   directory;
-    /// - relative targets keep their form, minus `..` components that
-    ///   would climb above the guest root.
+    /// by the kernel without translation. The kernel resolves a relative
+    /// target from the link's host directory, so a relative form is only
+    /// meaningful when the link and the target sit in the same host tree
+    /// (both under the rootfs, or both under the same binding):
+    /// - same tree, absolute target: relative to the link's directory;
+    /// - same tree, relative target: kept, minus `..` components that
+    ///   would climb above the guest root;
+    /// - different trees: the target's host absolute path (identity
+    ///   bindings keep their guest spelling), which `readlinkat`
+    ///   de-translates back.
     pub fn rewrite_symlink_target(
         &self,
         link: &[u8],
@@ -130,36 +133,75 @@ impl<'a> Translator<'a> {
         out: &mut [u8],
     ) -> Result<usize, TranslateError> {
         let link_dir = dirname(link);
-        if is_absolute(target) {
-            let mut clamped = [0u8; MAX_PATH];
-            let len = clamp_to_root(target, &mut clamped)?;
-            let target = &clamped[..len];
-            if let Some((binding, rest)) = self.bindings.match_guest(target) {
-                let mut writer = Writer::new(out);
-                writer.push(binding.host)?;
-                writer.push(rest)?;
-                return Ok(writer.finish());
-            }
-            return Ok(relative_path(link_dir, target, out)?);
+        let link_tree = self.tree_of(link_dir);
+        let mut absolute = [0u8; MAX_PATH];
+        let absolute_len = if is_absolute(target) {
+            normalize(target, &mut absolute)?
+        } else {
+            let mut joined = [0u8; MAX_PATH];
+            let mut writer = Writer::new(&mut joined);
+            writer.push(link_dir)?;
+            writer.push_component(target)?;
+            let joined_len = writer.finish();
+            normalize(&joined[..joined_len], &mut absolute)?
+        };
+        let target_absolute = &absolute[..absolute_len];
+        if self.tree_of(target_absolute) != link_tree {
+            return match self.guest_to_host(target_absolute, out)? {
+                Translated::Host(len) => Ok(len),
+                // Absolute and not a /proc special: always a host path.
+                _ => Err(TranslateError::TooLong),
+            };
         }
-        let mut writer = Writer::new(out);
-        let mut remaining_depth = depth(link_dir);
+        if is_absolute(target) {
+            return Ok(relative_path(link_dir, target_absolute, out)?);
+        }
+        // A relative target is kept verbatim while it stays inside the
+        // tree: the kernel then walks the same directories the guest
+        // meant. Once it climbs above the tree's root the host parent is
+        // not the guest parent, so it is re-expressed from the normalized
+        // target instead.
+        let tree_root_depth = match link_tree {
+            Tree::Rootfs => 0,
+            Tree::Binding { guest, .. } => depth(guest),
+        };
+        let mut remaining = depth(link_dir).saturating_sub(tree_root_depth);
+        let mut escapes = false;
         for component in components(target) {
             if component == b".." {
-                if remaining_depth == 0 {
-                    continue;
+                if remaining == 0 {
+                    escapes = true;
+                    break;
                 }
-                remaining_depth -= 1;
+                remaining -= 1;
             } else {
-                remaining_depth += 1;
+                remaining += 1;
             }
-            writer.push_component(component)?;
         }
-        if writer.is_empty() {
-            writer.push(b".")?;
+        if escapes {
+            return Ok(relative_path(link_dir, target_absolute, out)?);
         }
+        let mut writer = Writer::new(out);
+        writer.push(target)?;
         Ok(writer.finish())
     }
+
+    /// Which host tree a guest absolute path lives in.
+    fn tree_of(&self, guest: &[u8]) -> Tree<'a> {
+        match self.bindings.match_guest(guest) {
+            Some((binding, _)) => Tree::Binding {
+                guest: binding.guest,
+                host: binding.host,
+            },
+            None => Tree::Rootfs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tree<'a> {
+    Rootfs,
+    Binding { guest: &'a [u8], host: &'a [u8] },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,12 +350,31 @@ mod tests {
     fn symlink_targets() {
         assert_eq!(symlink("/usr/bin/python3", "/etc/alternatives/python3"), "../../etc/alternatives/python3");
         assert_eq!(symlink("/bin", "/usr/bin"), "usr/bin");
-        assert_eq!(symlink("/etc/mtab", "../proc/self/mounts"), "../proc/self/mounts");
+        // /proc is bound from the host: a relative target would land in the
+        // rootfs's empty proc mount point when the kernel resolves it.
+        assert_eq!(symlink("/etc/mtab", "../proc/self/mounts"), "/proc/self/mounts");
         assert_eq!(symlink("/x", "../../etc/passwd"), "etc/passwd");
         assert_eq!(symlink("/a/b/x", "../../../../etc"), "../../etc");
         assert_eq!(symlink("/etc/resolv.conf", "/dev/null"), "/dev/null");
         assert_eq!(symlink("/home/me/tmp", "/tmp"), "/data/user/0/com.zdroid/files/tmp");
         assert_eq!(symlink("/root/proj", "/data/data/com.zdroid/files/home/proj"), "/data/user/0/com.zdroid/files/home/proj");
+    }
+
+    #[test]
+    fn symlink_targets_across_trees() {
+        // A link in the bound /tmp cannot reach the rootfs relatively:
+        // its host directory is <files>/tmp, which has no sibling etc.
+        assert_eq!(symlink("/tmp/hn", "/etc/hostname"), "/data/user/0/com.zdroid/files/rootfs/etc/hostname");
+        assert_eq!(symlink("/tmp/x", "../etc/hostname"), "/data/user/0/com.zdroid/files/rootfs/etc/hostname");
+        assert_eq!(symlink("/tmp/a", "/tmp/b"), "b");
+        assert_eq!(symlink("/tmp/d/a", "../b"), "../b");
+        assert_eq!(symlink("/dev/shm/s", "/tmp/y"), "/data/user/0/com.zdroid/files/tmp/y");
+        assert_eq!(symlink("/usr/lib/x", "../../tmp/z"), "/data/user/0/com.zdroid/files/tmp/z");
+        // Climbs out of the binding and back in: re-expressed so it does
+        // not depend on the binding's host directory name.
+        assert_eq!(symlink("/tmp/back", "../../tmp/hn"), "hn");
+        assert_eq!(symlink("/tmp/d/e/x", "../../d/y"), "../../d/y");
+        assert_eq!(symlink("/usr/lib/x", "./a/../b"), "./a/../b");
     }
 
     #[test]

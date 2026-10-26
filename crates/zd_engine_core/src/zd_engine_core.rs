@@ -10,8 +10,10 @@
 
 pub mod bindings;
 pub mod bpf;
+pub mod compat;
 pub mod elf;
 pub mod path;
+pub mod shebang;
 pub mod stack;
 pub mod sysno;
 pub mod translate;
