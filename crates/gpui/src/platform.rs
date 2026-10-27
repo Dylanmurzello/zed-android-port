@@ -1304,26 +1304,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
-    /// Toggle the on-screen IME on Android. The Android impl
-    /// distinguishes between "user explicitly dismissed and wants
-    /// to bring it back" (this call) and the implicit show that
-    /// fires on text-input focus; the latter is suppressed once
-    /// the user has dismissed the IME so we don't fight the user
-    /// every time they scroll through text. No-op on every other
-    /// platform — IME visibility is OS-managed elsewhere.
-    fn toggle_soft_keyboard(&self) {}
-
-    /// True when the on-screen IME is currently visible from the OS's
-    /// perspective (Android: tracked by Kotlin's `imeShown` flag,
-    /// kept in sync via the WindowInsetsListener and our own
-    /// show/hide calls). The pane tab-bar keyboard button uses this
-    /// to drive its `toggle_state` highlight — same lit-up convention
-    /// other Zed togglable buttons follow. Default false on platforms
-    /// where IME visibility isn't a meaningful concept here.
-    fn soft_keyboard_visible(&self) -> bool {
-        false
-    }
-
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;

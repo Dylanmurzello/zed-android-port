@@ -563,14 +563,14 @@ pub struct TabBarSettingsContent {
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, PartialEq, Eq)]
 pub struct AndroidInputSettingsContent {
     /// Whether to enable the on-screen IME (soft keyboard) and the
-    /// pane keyboard toggle button. Disable when relying on a
+    /// status bar keyboard button. Disable when relying on a
     /// hardware keyboard, so the IME stops auto-showing on
-    /// text-input focus and the pane button is hidden.
+    /// text-input focus and the button is hidden.
     ///
     /// Default: true
     pub on_screen_keyboard: Option<bool>,
     /// MASTER toggle for the virtual trackpad feature. When true,
-    /// the pane tab bar exposes a trackpad-mode icon and the user
+    /// the status bar exposes a trackpad-mode icon and the user
     /// can switch the screen between direct touch and a VNC-style
     /// virtual mouse via that icon. When false, the icon is hidden
     /// and the whole module is inert regardless of
@@ -583,7 +583,7 @@ pub struct AndroidInputSettingsContent {
     /// (one-finger drag moves an on-screen cursor; tap clicks at
     /// the cursor; two-finger tap right-clicks; two-finger drag
     /// scrolls). Only honored when [`trackpad_mode`] (master) is
-    /// also true. Mutated by the pane tab-bar icon so the state
+    /// also true. Mutated by the status bar icon so the state
     /// survives across launches, not edited directly through the
     /// settings UI.
     ///
@@ -598,7 +598,7 @@ pub struct AndroidInputSettingsContent {
     /// floating mode (the row stays anchored to the editor and
     /// can't follow a floating keyboard).
     ///
-    /// Default: true
+    /// Default: false
     pub programming_extras_row: Option<bool>,
     /// Invert scroll direction (macOS-style natural vs traditional)
     /// for the trackpad two-finger scroll and the mouse wheel. Affects

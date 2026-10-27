@@ -96,7 +96,7 @@ class ZdroidInputConnection(private val hostView: View) : BaseInputConnection(ho
         // char has no virtual-keyboard mapping `getEvents` returns null
         // for the batch; we fall through to a plain commit so nothing is
         // silently dropped (e.g. an emoji pasted in normal mode).
-        if (s.isNotEmpty() && NativeBridge.nativeImeRouteAsKeys()) {
+        if (s.isNotEmpty() && NativeBridge.nativeImeRouteAsKeys(windowId)) {
             val keyMap = android.view.KeyCharacterMap
                 .load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
             val events = keyMap.getEvents(s.toCharArray())

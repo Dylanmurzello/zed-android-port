@@ -4179,22 +4179,6 @@ impl Window {
         self.platform_window.last_input_was_touch()
     }
 
-    /// Toggle the Android on-screen IME visibility. Called from
-    /// the workspace's `ToggleSoftKeyboard` action handler, which
-    /// the pane tab-bar button dispatches. No-op on platforms
-    /// where IME visibility is OS-managed (macOS / Linux / Windows).
-    pub fn toggle_soft_keyboard(&self) {
-        self.platform_window.toggle_soft_keyboard();
-    }
-
-    /// True when the on-screen IME is currently visible. Reads
-    /// from Kotlin's `imeShown` mirror (pushed via JNI on every
-    /// show/hide/toggle and on WindowInsetsListener edges). Used
-    /// by the pane keyboard toggle button to draw its lit-up state.
-    pub fn soft_keyboard_visible(&self) -> bool {
-        self.platform_window.soft_keyboard_visible()
-    }
-
     /// Updates the cursor style for the entire window at the platform level. A cursor
     /// style using this method will have precedence over any cursor style set using
     /// `set_cursor_style`. This method should only be called during the paint

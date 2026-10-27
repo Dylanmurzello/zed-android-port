@@ -209,14 +209,14 @@ fn android_input_page() -> SettingsPage {
             SettingsPageItem::SectionHeader("Touch Behavior"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Enable Virtual Trackpad",
-                description: "Add a tab-bar toggle that switches \
+                description: "Add a status bar toggle that switches \
                     the screen into VNC-style trackpad mode: drag \
                     moves an on-screen cursor, tap clicks, \
                     two-finger tap is right-click, two-finger drag \
                     scrolls. While trackpad mode is active, standard \
                     Android touch (direct-tap on UI elements, scroll, \
                     splitter drag) is disabled; toggle off from the \
-                    tab-bar icon to go back.",
+                    status bar icon to go back.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.trackpad_mode"),

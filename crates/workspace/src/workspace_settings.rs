@@ -228,15 +228,8 @@ impl Settings for AndroidInputSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let android_input = content.android_input.clone().unwrap_or_default();
         AndroidInputSettings {
-            // All Android Input features default to OFF. The
-            // onboarding card surfaces all three switches on first
-            // launch (Soft Keyboard, Programming Keys Row, Virtual
-            // Trackpad), and the Settings panel exposes the same row
-            // under "Android Input" with search. Off-by-default also
-            // sidesteps the boot-time race between Kotlin's field
-            // initialization and the Rust→Kotlin push (an unexpected
-            // "row appears while setting is off" was the original
-            // symptom that drove this choice).
+            // The defaults come from default.json; these fallbacks
+            // only apply to a key it lacks.
             on_screen_keyboard: android_input.on_screen_keyboard.unwrap_or(false),
             trackpad_mode: android_input.trackpad_mode.unwrap_or(false),
             trackpad_mode_active: android_input.trackpad_mode_active.unwrap_or(false),

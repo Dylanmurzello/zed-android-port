@@ -4394,86 +4394,9 @@ fn default_render_tab_bar_buttons(
                         cx,
                     )
                 })
-        });
-
-    // Android-only: keyboard toggle next to the pane controls.
-    // Hidden when `android_input.on_screen_keyboard` is false (user
-    // is on a hardware keyboard and doesn't need the soft IME). The
-    // pane render reads the setting each frame so toggling it in
-    // settings.json takes effect without an app restart. The runtime
-    // gate atomic that the platform reconcile loop consults to gate
-    // auto-show is mirrored via a SettingsStore observer registered
-    // in `zed_android::lib::main` — NOT here, because the pane
-    // doesn't render during onboarding (no project open) and the
-    // atomic would otherwise stay at its `true` default while the
-    // user toggles the setting off in Settings.
-    #[cfg(target_os = "android")]
-    let right_children = {
-        let android_input = crate::AndroidInputSettings::get_global(cx);
-        let on_screen_keyboard_enabled = android_input.on_screen_keyboard;
-        // Master / runtime split for the trackpad-mode icon:
-        // `trackpad_mode` gates icon visibility, `trackpad_mode_active`
-        // controls its toggle state. The runtime atomic the touch
-        // dispatcher reads is pushed from the SettingsStore observer
-        // in `zed_android::lib::main`, not here.
-        let trackpad_master = android_input.trackpad_mode;
-        let trackpad_active = trackpad_master && android_input.trackpad_mode_active;
-
-        let right_children = if on_screen_keyboard_enabled {
-            let keyboard_visible = window.soft_keyboard_visible();
-            right_children.child(
-                IconButton::new("toggle_soft_keyboard", IconName::Keyboard)
-                    .icon_size(IconSize::Small)
-                    .toggle_state(keyboard_visible)
-                    .on_click(|_, window, _| {
-                        window.toggle_soft_keyboard();
-                    })
-                    .tooltip(move |_window, cx| {
-                        Tooltip::for_action(
-                            if keyboard_visible {
-                                "Hide Keyboard"
-                            } else {
-                                "Show Keyboard"
-                            },
-                            &crate::ToggleSoftKeyboard,
-                            cx,
-                        )
-                    }),
-            )
-        } else {
-            right_children
-        };
-
-        // Trackpad-mode toggle — only rendered when the master
-        // `trackpad_mode` setting is on. Tap flips
-        // `trackpad_mode_active` (the runtime state), which the
-        // next pane render will pick up and push to the gpui_android
-        // atomic. When the user disables the master in settings the
-        // icon disappears entirely.
-        if trackpad_master {
-            right_children.child(
-                IconButton::new("toggle_trackpad_mode", IconName::Crosshair)
-                    .icon_size(IconSize::Small)
-                    .toggle_state(trackpad_active)
-                    .on_click(cx.listener(|_pane, _, _window, cx| {
-                        settings::update_settings_file(<dyn fs::Fs>::global(cx), cx, |content, _| {
-                            let android_input = content.android_input.get_or_insert_default();
-                            let current = android_input.trackpad_mode_active.unwrap_or(false);
-                            android_input.trackpad_mode_active = Some(!current);
-                        });
-                    }))
-                    .tooltip(Tooltip::text(if trackpad_active {
-                        "Disable Trackpad Mode"
-                    } else {
-                        "Enable Trackpad Mode (virtual mouse)"
-                    })),
-            )
-        } else {
-            right_children
-        }
-    };
-
-    let right_children = right_children.into_any_element().into();
+        })
+        .into_any_element()
+        .into();
     (None, right_children)
 }
 

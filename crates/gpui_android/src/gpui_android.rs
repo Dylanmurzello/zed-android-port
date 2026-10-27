@@ -76,13 +76,10 @@ pub fn set_invert_scroll(enabled: bool) {
     ime::INVERT_SCROLL.store(enabled, std::sync::atomic::Ordering::Release);
 }
 
-/// Push the focused editor's vim "command mode" decision to the runtime
-/// atomic that Kotlin's `commitText` reads via the `nativeImeRouteAsKeys`
-/// JNI query. True means soft-keyboard text is converted to key events so
-/// vim's keymap sees `j`/`d`/`w` as commands; false means normal text
-/// insertion. Called from the app-side vim observer in `zed_android::lib`.
-pub fn set_ime_route_as_keys(route_as_keys: bool) {
-    ime::IME_ROUTE_AS_KEYS.store(route_as_keys, std::sync::atomic::Ordering::Release);
+/// Whether the on-screen keyboard is showing, as Kotlin last reported it
+/// (or as just requested, until Kotlin confirms).
+pub fn soft_keyboard_visible() -> bool {
+    ime::soft_keyboard_visible()
 }
 
 use std::rc::Rc;

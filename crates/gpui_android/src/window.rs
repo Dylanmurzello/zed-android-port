@@ -15,8 +15,8 @@ use gpui::{
     AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, GpuSpecs, Modifiers,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Pixels,
     FrameRequestSource, Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
-    WindowVisibility, point, px, size,
+    TextInputStateChange, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowParams, WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
@@ -596,6 +596,20 @@ pub(crate) struct AndroidWindow {
 }
 
 impl AndroidWindow {
+    /// An explicit request to show or hide the soft keyboard.
+    fn request_soft_keyboard(&self, show: bool) {
+        let (android_app, extra_window_id) = {
+            let state = self.ptr.state.borrow();
+            (state.android_app.clone(), state.extra_window_id)
+        };
+        // Set our view of the keyboard before the asynchronous JNI call:
+        // Kotlin confirms 100-500 ms later, after the IME animation, and a
+        // button showing the old state that long reads as a missed tap.
+        // Kotlin's insets listener corrects it if the request fails.
+        crate::ime::SOFT_KEYBOARD_VISIBLE.store(show, std::sync::atomic::Ordering::Release);
+        crate::ime::request_keyboard(&android_app, extra_window_id, show);
+    }
+
     pub(crate) fn new(
         handle: AnyWindowHandle,
         _params: WindowParams,
@@ -884,29 +898,27 @@ impl PlatformWindow for AndroidWindow {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn toggle_soft_keyboard(&self) {
-        let (android_app, extra_window_id) = {
-            let state = self.ptr.state.borrow();
-            (state.android_app.clone(), state.extra_window_id)
-        };
-        // Optimistically flip our local view of IME visibility
-        // BEFORE the JNI roundtrip. The actual hide/show on Kotlin
-        // side is async (runOnUiThread + IME animation), so Kotlin's
-        // post-toggle `setImeShown` call can land 100-500ms after
-        // the user tapped the button. Without the optimistic flip
-        // the pane button's `toggle_state` lags by that much, the
-        // user perceives "first tap didn't work, second tap did"
-        // because by the time the visual catches up, they've already
-        // tapped again. Kotlin's WindowInsetsListener will correct
-        // if the OS-side toggle fails for any reason.
-        let new_visible = !crate::ime::soft_keyboard_visible();
-        crate::ime::SOFT_KEYBOARD_VISIBLE
-            .store(new_visible, std::sync::atomic::Ordering::Release);
-        crate::ime::toggle_keyboard(&android_app, extra_window_id);
+    fn show_soft_keyboard(&self) {
+        self.request_soft_keyboard(true);
     }
 
-    fn soft_keyboard_visible(&self) -> bool {
-        crate::ime::soft_keyboard_visible()
+    fn hide_soft_keyboard(&self) {
+        self.request_soft_keyboard(false);
+    }
+
+    fn text_input_state_changed(&self, change: TextInputStateChange) {
+        let ime_window_id = self.ptr.state.borrow().extra_window_id.unwrap_or(0);
+        match change {
+            TextInputStateChange::FocusGained => {
+                crate::ime::set_text_input_focused(ime_window_id, true)
+            }
+            TextInputStateChange::FocusLost => {
+                crate::ime::set_text_input_focused(ime_window_id, false)
+            }
+            // Zed's editor doesn't report these yet; the run loop polls the
+            // selection while the keyboard is up.
+            TextInputStateChange::SelectionChanged | TextInputStateChange::ContentChanged => {}
+        }
     }
 
     fn draw(&self, scene: &Scene) {

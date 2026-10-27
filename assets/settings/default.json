@@ -1484,13 +1484,13 @@
   // Android-only: behavior of the on-screen IME (soft keyboard).
   // Ignored on other platforms.
   "android_input": {
-    // Enable the on-screen keyboard and the pane keyboard-toggle
+    // Enable the on-screen keyboard and the status bar keyboard
     // button. Disable when relying on a hardware keyboard, so the
-    // IME stops auto-showing on text-input focus and the pane
-    // button is hidden from the tab bar.
+    // IME stops auto-showing on text-input focus and the button
+    // is hidden.
     "on_screen_keyboard": true,
     // Master toggle for the VNC-style virtual trackpad feature.
-    // When true, the pane tab bar gains a trackpad-mode toggle
+    // When true, the status bar gains a trackpad-mode toggle
     // icon so the user can switch the screen between direct
     // touch and a virtual mouse at runtime. When false the icon
     // is hidden and the whole module is inert.
@@ -1500,9 +1500,12 @@
     // finger drag moves an on-screen cursor; tap clicks at the
     // cursor; two-finger tap right-clicks; two-finger drag
     // scrolls). Only honored when "trackpad_mode" above is also
-    // true. Toggled by the pane tab-bar icon, not edited here
+    // true. Toggled by the status bar icon, not edited here
     // directly.
     "trackpad_mode_active": false,
+    // Show a row of programming keys (Esc, Tab, Ctrl, Alt, arrows)
+    // above the on-screen keyboard.
+    "programming_extras_row": false,
     // Invert scroll direction (macOS-style natural vs traditional) for
     // the trackpad two-finger scroll and the mouse wheel. Affects the
     // hardware/Book Cover trackpad, the wheel, and the virtual trackpad.
