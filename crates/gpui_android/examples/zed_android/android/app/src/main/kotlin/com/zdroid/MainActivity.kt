@@ -583,7 +583,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// of the GameActivity SurfaceView (API 29+). Null on older devices
     /// and during the brief window between Activity create and
     /// pointer-capture acquire.
-    private var cursorOverlay: CursorSurfaceControl? = null
+    private var cursorOverlay: CursorOverlay? = null
 
     /// Desktop-classic auto-hide: cursor disappears on the first
     /// keystroke and reappears on any pointer motion. Tracked so we

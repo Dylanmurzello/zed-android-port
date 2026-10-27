@@ -119,7 +119,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     /// Hardware-composited cursor sprite. Child SurfaceControl of
     /// `surfaceView` (API 29+). Null on older devices and prior to
     /// first pointer-capture acquire.
-    private var cursorOverlay: CursorSurfaceControl? = null
+    private var cursorOverlay: CursorOverlay? = null
 
     // Cursor modality is the process-wide [InputModality] flag.
     // See `MainActivity` for the longer note; settings/picker
@@ -797,7 +797,6 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             event.metaState,
             event.buttonState,
             event.flags,
-            event.eventTime,
             vscroll,
             hscroll,
             xs,

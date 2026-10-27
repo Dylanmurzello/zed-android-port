@@ -25,6 +25,7 @@ breadcrumbs = { path = "../../../breadcrumbs" }
 call_hierarchy = { path = "../../../call_hierarchy" }
 client = { path = "../../../client" }
 collections = { path = "../../../collections" }
+copilot_chat = { path = "../../../copilot_chat" }
 command_palette = { path = "../../../command_palette" }
 tabular_data_preview = { path = "../../../tabular_data_preview" }
 db = { path = "../../../db" }
@@ -56,6 +57,7 @@ keymap_editor = { path = "../../../keymap_editor" }
 language = { path = "../../../language" }
 language_onboarding = { path = "../../../language_onboarding" }
 language_model = { path = "../../../language_model" }
+language_models = { path = "../../../language_models" }
 language_selector = { path = "../../../language_selector" }
 language_tools = { path = "../../../language_tools" }
 lsp_command_selector = { path = "../../../lsp_command_selector" }
@@ -101,6 +103,8 @@ shellexpand = "3.1"
 url = "2.2"
 util = { path = "../../../util" }
 watch = { path = "../../../watch" }
+web_search = { path = "../../../web_search" }
+web_search_providers = { path = "../../../web_search_providers" }
 workspace = { path = "../../../workspace" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
 platform_title_bar = { path = "../../../platform_title_bar" }

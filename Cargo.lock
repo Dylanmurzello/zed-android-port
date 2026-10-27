@@ -7591,10 +7591,10 @@ dependencies = [
  "ndk",
  "raw-window-handle",
  "serde_json",
+ "tempfile",
  "ureq",
  "util",
  "uuid",
- "zip 2.6.1",
 ]
 
 [[package]]

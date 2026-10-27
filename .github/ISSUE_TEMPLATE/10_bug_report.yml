@@ -27,7 +27,7 @@ body:
       options:
         - Bootstrap (in-app Termux userland)
         - Kali chroot (zd-spawnd + Magisk module)
-        - External Termux app
+        - External Termux (legacy unsupported selection)
         - Not configured yet
     validations:
       required: true

@@ -18,6 +18,7 @@ mod jni_env;
 mod keyboard;
 mod multi_window;
 mod platform;
+pub mod project_import;
 mod saf;
 pub(crate) mod splash;
 pub mod storage;

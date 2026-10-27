@@ -1,22 +1,3 @@
-//! Runtime adapter picker — lets the user pick which userland Zdroid
-//! routes its spawns through (chroot, bootstrap, external Termux).
-//!
-//! Surfaces as a centered modal triggered by the `zdroid: pick runtime`
-//! action. Mirrors Zed's welcome-page card aesthetic.
-//!
-//! v1 scope (this commit):
-//!   - Render three cards with name, tagline, live health snapshot.
-//!   - Select button per card. Click logs the choice + dismisses.
-//!     Persistence to `runtime.toml` lands once we've nailed down
-//!     where Zdroid stores adapter config (likely `$PREFIX/etc/zd-runtime.toml`)
-//!     and added the file-write helper.
-//!
-//! Future scope (queued in tasks #33/#34):
-//!   - Install / Uninstall buttons backed by adapter `install()` paths.
-//!   - "Restart Zdroid" prompt after a switch.
-//!   - First-launch auto-open when no `runtime.toml` exists yet.
-
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
@@ -34,10 +15,8 @@ use ui::{
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
-    HealthStatus, RuntimeId, RuntimeProvider, adapters,
-    adapters::chroot::SPAWND_RELEASE_URL,
-    config::{BootstrapConfig, ChrootConfig, ExternalTermuxConfig, RuntimeFile},
-    health::ProgressSink,
+    HealthStatus, RuntimeId, RuntimeProvider, adapters, adapters::chroot::SPAWND_RELEASE_URL,
+    config::RuntimeFile, health::ProgressSink,
 };
 
 /// Bridges the sync `ProgressSink` trait (called from the background
@@ -52,19 +31,18 @@ struct ChannelProgressSink {
 impl ProgressSink for ChannelProgressSink {
     fn step(&mut self, label: &str) {
         log::info!("zdroid_runtime_picker: step: {}", label);
-        let _ = self.tx.unbounded_send(label.to_string());
+        self.tx.unbounded_send(label.to_string()).log_err();
     }
     fn progress(&mut self, _done: u64, _total: u64) {}
     fn warn(&mut self, message: &str) {
         log::warn!("zdroid_runtime_picker: warn: {}", message);
-        let _ = self.tx.unbounded_send(format!("warning: {message}"));
+        self.tx
+            .unbounded_send(format!("warning: {message}"))
+            .log_err();
     }
 }
 
-/// Where Zdroid stores the active-adapter selection. Lives inside
-/// `$PREFIX/etc/` so the bootstrap-extraction step doesn't clobber it
-/// (extraction doesn't touch `etc/`), and so it persists across
-/// editor APK updates the same way other user state does.
+// The bootstrap installer preserves this file when replacing the prefix.
 const RUNTIME_TOML_PATH: &str = "/data/data/com.zdroid/files/usr/etc/zd-runtime.toml";
 
 actions!(
@@ -118,7 +96,7 @@ pub fn render_onboarding_section(tab_index: &mut isize, cx: &mut App) -> AnyElem
     {
         Some(RuntimeId::Chroot) => "Current: Kali chroot",
         Some(RuntimeId::Bootstrap) => "Current: Bootstrap",
-        Some(RuntimeId::ExternalTermux) => "Current: External Termux",
+        Some(RuntimeId::ExternalTermux) => "External Termux unavailable — choose another runtime",
         None => "Not configured yet",
     };
     let button_tab_index = *tab_index;
@@ -175,14 +153,6 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
     }
 
     let app_id = ReleaseChannel::global(cx).app_id();
-    // Sized to fit all three adapter cards on a fresh open without the
-    // user having to drag the window taller. The cards (with NotInstalled
-    // detail lines visible) come in around ~165px each in DP; three
-    // stacked plus header, title bar, gap_3 spacing, and p_6 container
-    // padding lands at ~700 DP minimum content. The 800 DP height gives
-    // headroom for theme variance and Samsung DeX's chrome insets.
-    // Width stays generous so the right-hand action button doesn't
-    // wrap into the body text on the longest tagline.
     let window_size = Size {
         width: px(640.0),
         height: px(800.0),
@@ -225,6 +195,8 @@ pub struct RuntimePicker {
     title_bar: Option<Entity<PlatformTitleBar>>,
     focus_handle: FocusHandle,
     entries: Vec<AdapterEntry>,
+    configuration: Option<RuntimeFile>,
+    error: Option<String>,
     /// The currently active adapter (from disk). Marked with a
     /// "Current" badge in the UI; `Select` is a no-op if the user
     /// picks the same one.
@@ -253,11 +225,28 @@ impl RuntimePicker {
         } else {
             None
         };
+        let (configuration, mut error) =
+            match RuntimeFile::load(std::path::Path::new(RUNTIME_TOML_PATH)) {
+                Ok(configuration) => (configuration, None),
+                Err(error) => (
+                    None,
+                    Some(format!("Could not read runtime settings: {error:#}")),
+                ),
+            };
+        let current = configuration.as_ref().map(|file| file.runtime.kind);
+        if current == Some(RuntimeId::ExternalTermux) {
+            error = Some(
+                "External Termux is unavailable. Select Bootstrap or Chroot to run local tools."
+                    .into(),
+            );
+        }
         Self {
             title_bar,
             focus_handle: cx.focus_handle(),
-            entries: build_entries(),
-            current: detect_current(),
+            entries: build_entries(configuration.as_ref()),
+            configuration,
+            error,
+            current,
             install_status: None,
             restart_required: false,
         }
@@ -274,51 +263,42 @@ impl RuntimePicker {
             return; // already in progress
         }
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
+        let config = self
+            .configuration
+            .as_ref()
+            .and_then(|file| file.bootstrap.clone())
+            .unwrap_or_default();
         self.install_status = Some("Starting install".into());
+        self.error = None;
         cx.notify();
 
-        // Background: run the actual install. Blocks on ureq +
-        // zip extract. ProgressSink pushes status strings into the
-        // channel; the foreground poller below picks them up.
-        cx.background_executor()
-            .spawn(async move {
-                let config = default_bootstrap_config();
-                let adapter = match adapters::bootstrap::BootstrapAdapter::new(config) {
-                    Ok(a) => a,
-                    Err(err) => {
-                        log::error!("zdroid_runtime_picker: BootstrapAdapter::new failed: {err:#}");
-                        let _ = tx.unbounded_send(format!("Failed: {err:#}"));
-                        return;
-                    }
-                };
-                let mut sink = ChannelProgressSink { tx: tx.clone() };
-                if let Err(err) = adapter.install(&mut sink) {
-                    log::error!("zdroid_runtime_picker: BootstrapAdapter::install failed: {err:#}");
-                    let _ = tx.unbounded_send(format!("Install failed: {err:#}"));
-                }
-                // tx + sink drop here → channel closes → foreground exits.
-            })
-            .detach();
-
-        // Foreground poll: drain the channel, write each message into
-        // self.install_status + cx.notify so the card label updates.
-        // When the channel closes (background task done), refresh the
-        // adapter entries and clear the in-progress state.
+        let install = cx.background_spawn(async move {
+            let adapter = adapters::bootstrap::BootstrapAdapter::new(config)?;
+            adapter.install(&mut ChannelProgressSink { tx })
+        });
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
-            while let Some(msg) = rx.next().await {
-                let _ = this.update(cx, |this, cx| {
-                    this.install_status = Some(msg);
+            while let Some(message) = rx.next().await {
+                this.update(cx, |this, cx| {
+                    this.install_status = Some(message);
                     cx.notify();
-                });
+                })?;
             }
-            let _ = this.update(cx, |this, cx| {
+            let result = install.await;
+            if let Err(error) = &result {
+                log::error!("zdroid_runtime_picker: install failed: {error:#}");
+            }
+            this.update(cx, |this, cx| {
                 this.install_status = None;
-                this.entries = build_entries();
+                this.error = result
+                    .err()
+                    .map(|error| format!("Install failed: {error:#}"));
+                this.entries = build_entries(this.configuration.as_ref());
                 cx.notify();
-            });
+            })?;
+            anyhow::Ok(())
         })
-        .detach();
+        .detach_and_log_err(cx);
     }
 
     fn select(&mut self, id: RuntimeId, _window: &mut Window, cx: &mut Context<Self>) {
@@ -328,9 +308,17 @@ impl RuntimePicker {
         }
 
         let path = std::path::PathBuf::from(RUNTIME_TOML_PATH);
-        let file = RuntimeFile::with_defaults(id);
-        match file.save(&path) {
-            Ok(()) => {
+        let result = (|| {
+            let mut file =
+                RuntimeFile::load(&path)?.unwrap_or_else(|| RuntimeFile::with_defaults(id));
+            file.select(id)?;
+            file.save(&path)?;
+            anyhow::Ok(file)
+        })();
+        match result {
+            Ok(file) => {
+                self.configuration = Some(file);
+                self.error = None;
                 log::info!(
                     "zdroid_runtime_picker: selected {:?} -> wrote {}; restart Zdroid to apply",
                     id,
@@ -362,6 +350,8 @@ impl RuntimePicker {
                     path.display(),
                     err
                 );
+                self.error = Some(format!("Could not save runtime settings: {err:#}"));
+                cx.notify();
             }
         }
     }
@@ -447,6 +437,9 @@ impl Render for RuntimePicker {
                     ),
             )
             .when_some(banner, |this, banner| this.child(banner))
+            .when_some(self.error.as_ref(), |this, error| {
+                this.child(Label::new(Arc::<str>::from(error.as_str())).color(Color::Error))
+            })
             .child(v_flex().gap_3().children(cards));
 
         client_side_decorations(
@@ -556,13 +549,7 @@ fn render_card(
                     )
                 }),
         )
-        // Cascade priority: install actions WIN over the "Selected"
-        // decorative chip, even when the unhealthy adapter is the
-        // user's current runtime.toml selection. If Bootstrap is
-        // selected but its $PREFIX is empty (Phase 6 fresh-install
-        // state), the user needs the Install button — showing a
-        // "Selected" chip there would leave them stuck without a way
-        // to trigger the download.
+        // An unhealthy selected runtime still needs its setup action.
         .child(
             if id == RuntimeId::Chroot && !matches!(entry.health, HealthStatus::Healthy) {
                 // Chroot adapter requires the zdroid-spawnd Magisk module
@@ -582,14 +569,6 @@ fn render_card(
             } else if id == RuntimeId::Bootstrap
                 && matches!(entry.health, HealthStatus::NotInstalled { .. })
             {
-                // Bootstrap adapter has its 240 MB userland in a separate
-                // GitHub repo (`<release_repo>`); Phase 6 of the Termux-
-                // divestment refactor stopped bundling it in the APK and
-                // moved download to `BootstrapAdapter::install`. Tap
-                // "Install" to kick off the async download + extract; the
-                // button label switches to the live `install_status` for
-                // the duration. After completion the card flips to
-                // Healthy → normal Select.
                 if let Some(status) = install_status {
                     Button::new(("installing", idx), status.to_string())
                         .disabled(true)
@@ -611,6 +590,7 @@ fn render_card(
                     .into_any_element()
             } else {
                 Button::new(("select", idx), "Select")
+                    .disabled(!entry.health.is_healthy())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.select(id, window, cx);
                     }))
@@ -620,27 +600,25 @@ fn render_card(
         .into_any_element()
 }
 
-/// Build the per-adapter health snapshot at modal-open time. Each
-/// adapter is constructed with on-device defaults so the health probe
-/// can run; the user's eventual `runtime.toml` overrides these when
-/// the adapter is actually selected.
-fn build_entries() -> Vec<AdapterEntry> {
-    let chroot_health = adapters::chroot::ChrootAdapter::new(default_chroot_config())
-        .map(|a| a.health_check())
-        .unwrap_or_else(|err| HealthStatus::Failed {
-            error: err.to_string(),
-        });
-    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(default_bootstrap_config())
-        .map(|a| a.health_check())
-        .unwrap_or_else(|err| HealthStatus::Failed {
-            error: err.to_string(),
-        });
-    let termux_health =
-        adapters::external_termux::ExternalTermuxAdapter::new(default_termux_config())
-            .map(|a| a.health_check())
-            .unwrap_or_else(|err| HealthStatus::Failed {
-                error: err.to_string(),
-            });
+fn build_entries(configuration: Option<&RuntimeFile>) -> Vec<AdapterEntry> {
+    let chroot_health = adapters::chroot::ChrootAdapter::new(
+        configuration
+            .and_then(|file| file.chroot.clone())
+            .unwrap_or_default(),
+    )
+    .map(|a| a.health_check())
+    .unwrap_or_else(|err| HealthStatus::Failed {
+        error: err.to_string(),
+    });
+    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(
+        configuration
+            .and_then(|file| file.bootstrap.clone())
+            .unwrap_or_default(),
+    )
+    .map(|a| a.health_check())
+    .unwrap_or_else(|err| HealthStatus::Failed {
+        error: err.to_string(),
+    });
 
     vec![
         AdapterEntry {
@@ -653,44 +631,5 @@ fn build_entries() -> Vec<AdapterEntry> {
             tagline: "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
             health: bootstrap_health,
         },
-        AdapterEntry {
-            id: RuntimeId::ExternalTermux,
-            tagline: "Bridges to the user's installed Termux app via Intent IPC. Slowest path; uses the user's existing setup.",
-            health: termux_health,
-        },
     ]
-}
-
-fn default_chroot_config() -> ChrootConfig {
-    ChrootConfig {
-        root: PathBuf::from("/data/local/nhsystem/kali-arm64"),
-        home_bind: PathBuf::from("/zed"),
-        spawnd_socket: PathBuf::from("/data/data/com.zdroid/files/run/zd-spawn"),
-        su_path: PathBuf::from("/product/bin/su"),
-    }
-}
-
-fn default_bootstrap_config() -> BootstrapConfig {
-    BootstrapConfig {
-        prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
-        proot_rootfs: None,
-        release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
-    }
-}
-
-fn default_termux_config() -> ExternalTermuxConfig {
-    ExternalTermuxConfig {
-        package: "com.termux".into(),
-        prefix: PathBuf::from("/data/data/com.termux/files/usr"),
-    }
-}
-
-/// Read the active adapter id from `runtime.toml`. Returns `None` if
-/// the file is missing (first-launch state) or unparseable; the picker
-/// just doesn't render a "Current" badge in those cases.
-fn detect_current() -> Option<RuntimeId> {
-    RuntimeFile::load(std::path::Path::new(RUNTIME_TOML_PATH))
-        .ok()
-        .flatten()
-        .map(|file| file.runtime.kind)
 }

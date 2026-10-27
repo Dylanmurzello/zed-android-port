@@ -551,9 +551,6 @@ fn android_main(app: AndroidApp) {
     //     so dpkg patches, apt Post-Invoke hooks, and bootstrap-side
     //     tooling keep working unchanged.
     //
-    //   - External Termux returns a minimal bionic env; spawns route
-    //     via Intent (Phase 7) so nothing here leaks across.
-    //
     // The active provider also publishes a terminal env overlay that
     // `crates/terminal/src/terminal.rs` applies when the PTY spawns,
     // since alacritty wipes inherited env on bringup.
@@ -1229,27 +1226,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     project::trusted_worktrees::init(db_trusted_paths, cx);
     Project::init(&client, cx);
 
-    // Extensions (Phase L3 — previously deferred). Mirrors production
-    // zed/src/main.rs:623, 631–637, 741. The store creates the
-    // global ExtensionStore, watches `paths::extensions_dir()` for new
-    // installations, and asynchronously fetches the registry from
-    // Zed's API. Theme/debug-adapter proxies register against the
-    // already-installed `ExtensionHostProxy` from `extension::init`
-    // earlier in boot. extensions_ui registers the workspace observer
-    // that handles the `zed_actions::Extensions` action — taps from
-    // the title-bar settings menu open the browse/install pane.
-    //
-    // Wasmtime engine init (`crates/extension_host/src/wasm_host.rs:564`)
-    // currently uses Cranelift JIT. Whether that survives Android's
-    // `untrusted_app_27` SELinux W^X policy is open — modern Android
-    // (API 30+) typically allows anonymous executable mappings for
-    // app processes, so it MAY just work; if not, the engine init
-    // will panic at first extension load and we switch wasmtime's
-    // strategy to Pulley interpreter (one Cargo.toml feature flip +
-    // a `Config::strategy(Strategy::Pulley)` line). See
-    // `deferred-render-pipeline-perf.md` philosophy: read the actual
-    // failure first, don't preemptively configure for a problem that
-    // may not exist.
+    // Android uses Zed's provider registry and extension proxy. The registry
+    // must exist before extensions register their language model providers.
+    language_model::init(cx);
+    language_models::init_extension_proxy(cx);
     {
         let extension_host_proxy = extension::ExtensionHostProxy::global(cx);
         extension_host::init(
@@ -1287,8 +1267,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     vim::init(cx);
     // In the order of Zed's main(). Left out: audio, call and livekit
-    // (collab), copilot and language_models (AI model providers: agent_ui
-    // runs ACP agents only), debugger_ui and repl, and telemetry and crashes.
+    // (collab), Copilot edit prediction, debugger_ui and repl, and telemetry
+    // and crashes.
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1313,18 +1293,26 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     settings_profile_selector::init(cx);
     language_tools::init(cx);
     feedback::init(cx);
-    // language_model::init only registers the GlobalLanguageModelRegistry —
-    // no actual AI runtime spins up. git_panel.rs reads from this registry
-    // for the optional commit-message generation; without it, the panel
-    // panics at first paint with "no state of type
-    // language_model::registry::GlobalLanguageModelRegistry exists".
-    language_model::init(cx);
-    // Agent Panel for external ACP agents (Claude Code, Codex, ...), in the
-    // same order as crates/zed/src/main.rs. On remote projects the agent runs
-    // on the remote host through the remote server, so nothing agent-related
-    // is spawned on Android. language_models::init is deliberately skipped:
-    // with no model providers registered, Zed's built-in agent and the inline
-    // assistant have no model, and only ACP agents can run.
+    // Keep provider startup in the same order as Zed's main.rs. Android's
+    // platform credential API stores these credentials in Android Keystore.
+    copilot_chat::init(
+        app_state.client.http_client(),
+        app_state.client.credentials_provider(),
+        copilot_chat::CopilotChatConfiguration {
+            enterprise_uri: settings::CopilotSettings::get_global(cx)
+                .enterprise_uri
+                .clone(),
+        },
+        cx,
+    );
+    client::RefreshLlmTokenListener::register(
+        app_state.client.clone(),
+        app_state.user_store.clone(),
+        cx,
+    );
+    language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
+    web_search::init(cx);
+    web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
     let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
     // Zed counts an install as new when it creates the installation ID; the
     // app has none, and onboarding hasn't run yet on a new install.

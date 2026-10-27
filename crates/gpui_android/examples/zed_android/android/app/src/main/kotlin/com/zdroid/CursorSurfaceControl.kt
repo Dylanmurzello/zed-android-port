@@ -5,12 +5,22 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
+import android.graphics.Rect
 import android.os.Build
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceControl
 import android.view.SurfaceView
 import androidx.annotation.RequiresApi
+
+// Activities retain this interface after constructing the API 29 implementation
+// behind a version check; calling it does not itself require a newer Android API.
+internal interface CursorOverlay {
+    fun move(x: Float, y: Float)
+    fun setStyle(style: Int)
+    fun setVisible(visible: Boolean)
+    fun release()
+}
 
 /// Hardware-composited cursor sprite. Lives as a child `SurfaceControl`
 /// of the main SurfaceView's SurfaceControl, so SurfaceFlinger composes
@@ -38,7 +48,7 @@ internal class CursorSurfaceControl(
     context: Context,
     parentSurfaceView: SurfaceView,
     private val displaySizePx: Int,
-) {
+) : CursorOverlay {
     private val arrowBitmap = loadCursor(context, R.drawable.cursor_arrow, displaySizePx)
     private val iBeamBitmap = loadCursor(context, R.drawable.cursor_ibeam, displaySizePx)
     private val handBitmap = loadCursor(context, R.drawable.cursor_hand, displaySizePx)
@@ -65,8 +75,7 @@ internal class CursorSurfaceControl(
             .setName("zdroid_cursor_overlay")
             .setParent(parent)
             .setBufferSize(displaySizePx, displaySizePx)
-            .setFormat(PixelFormat.TRANSLUCENT)
-            .setHidden(true)
+            .setFormat(PixelFormat.RGBA_8888)
             .build()
     } catch (t: Throwable) {
         Log.e(TAG, "SurfaceControl.Builder failed", t)
@@ -80,6 +89,7 @@ internal class CursorSurfaceControl(
     /// methods return `this`, so chaining + apply() then re-using the same
     /// object is the documented pattern.
     private val transaction = SurfaceControl.Transaction()
+    private val cursorFrame = Rect()
 
     private var currentStyle: Int = STYLE_ARROW
     private var visible: Boolean = false
@@ -115,10 +125,11 @@ internal class CursorSurfaceControl(
         // refresh drops the panel to 30Hz on idle and the cursor
         // (composed at the panel rate) inherits the drop.
         surfaceControl?.let { sc ->
-            transaction
-                .setLayer(sc, 1)
-                .setFrameRate(sc, 120f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
-                .apply()
+            transaction.setLayer(sc, 1)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                transaction.setFrameRate(sc, 120f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+            }
+            transaction.apply()
         }
         // Paint the initial arrow sprite so the buffer is non-empty
         // before first show.
@@ -130,15 +141,24 @@ internal class CursorSurfaceControl(
     /// subtracted so the sprite's tip points AT (x, y), not its
     /// top-left corner. Hot path: called per captured-pointer motion
     /// event (~200 Hz on Samsung trackpad).
-    fun move(x: Float, y: Float) {
+    override fun move(x: Float, y: Float) {
         if (released) return
         val sc = surfaceControl ?: return
         lastX = x
         lastY = y
         val (hotX, hotY) = hotSpots[currentStyle] ?: (0 to 0)
-        transaction
-            .setPosition(sc, x - hotX, y - hotY)
-            .apply()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            transaction.setPosition(sc, x - hotX, y - hotY)
+        } else {
+            // Android 10–12 expose this mapping through setGeometry;
+            // setPosition became public in Android 13.
+            val left = (x - hotX).toInt()
+            val top = (y - hotY).toInt()
+            cursorFrame.set(left, top, left + displaySizePx, top + displaySizePx)
+            @Suppress("DEPRECATION")
+            transaction.setGeometry(sc, null, cursorFrame, Surface.ROTATION_0)
+        }
+        transaction.apply()
     }
 
     /// Pending Arrow application, scheduled via [arrowHandler]. Held
@@ -146,7 +166,7 @@ internal class CursorSurfaceControl(
     private var pendingArrow: Runnable? = null
     private val arrowHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    fun setStyle(style: Int) {
+    override fun setStyle(style: Int) {
         if (released) return
         // Cancel any pending Arrow transition first — whether this
         // style is Arrow or not, a fresh decision arrives now.
@@ -197,7 +217,7 @@ internal class CursorSurfaceControl(
         }
     }
 
-    fun setVisible(visible: Boolean) {
+    override fun setVisible(visible: Boolean) {
         if (released) return
         if (this.visible == visible) return
         this.visible = visible
@@ -207,7 +227,7 @@ internal class CursorSurfaceControl(
             .apply()
     }
 
-    fun release() {
+    override fun release() {
         if (released) return
         released = true
         // Yank any debounced Arrow runnable before tearing the

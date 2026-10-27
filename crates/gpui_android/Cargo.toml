@@ -27,4 +27,12 @@ serde_json.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 util.workspace = true
 uuid.workspace = true
-zip = "2"
+
+# The importer has no Android APIs, so exercise file safety on the host too.
+[[test]]
+name = "project_import"
+path = "src/project_import.rs"
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true

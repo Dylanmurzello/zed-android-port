@@ -34,7 +34,7 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
 
 /// Path to the `zd-exec` binary the bridge dispatches through. zd-exec
 /// itself reads `zd-runtime.toml`, picks the active adapter, and routes
-/// the spawn into the chroot / bootstrap / external-Termux world. We
+/// the spawn into the selected runtime. We
 /// invoke it by short name so kernel PATH lookup finds the
 /// `$PREFIX/zd-runtime/zd-exec` symlink first (matching how every other
 /// PATH-resolved spawn enters the bridge) instead of hardcoding

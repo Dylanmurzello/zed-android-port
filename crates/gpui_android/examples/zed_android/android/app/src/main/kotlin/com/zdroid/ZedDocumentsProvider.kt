@@ -97,13 +97,14 @@ class ZedDocumentsProvider : DocumentsProvider() {
         val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         val root = getFileForDocId(rootId)
         val rootCanonical = try {
-            root.canonicalPath
+            root.canonicalFile
         } catch (t: Throwable) {
             Log.w(TAG, "querySearchDocuments: cannot resolve canonical path for root: ${t.message}")
             return cursor
         }
         val needle = query.lowercase()
         val pending = LinkedList<File>()
+        val visited = HashSet<File>()
         pending.add(root)
         while (pending.isNotEmpty() && cursor.count < SEARCH_MAX) {
             val file = pending.removeFirst()
@@ -111,7 +112,8 @@ class ZedDocumentsProvider : DocumentsProvider() {
             // path leaves the root subtree (e.g. ~/storage/shared symlink
             // would otherwise expose all of /sdcard during search).
             try {
-                if (!file.canonicalPath.startsWith(rootCanonical)) continue
+                val canonical = file.canonicalFile
+                if (!canonical.startsWith(rootCanonical) || !visited.add(canonical)) continue
             } catch (t: Throwable) {
                 continue
             }
@@ -184,6 +186,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
     @OptIn(ExperimentalPathApi::class)
     override fun deleteDocument(documentId: String) {
         val file = getFileForDocId(documentId)
+        if (file == baseDir) throw FileNotFoundException("cannot delete the home directory")
         try {
             file.toPath().deleteRecursively()
         } catch (e: IOException) {
@@ -193,6 +196,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
 
     override fun renameDocument(documentId: String, displayName: String): String {
         val file = getFileForDocId(documentId)
+        if (file == baseDir) throw FileNotFoundException("cannot rename the home directory")
         val parent = file.parentFile ?: throw FileNotFoundException("rename: no parent for $documentId")
         var target = childFile(parent, displayName)
         var counter = 2
@@ -218,7 +222,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
     private fun includeFile(cursor: MatrixCursor, file: File) {
         val mime = getMime(file)
         var flags = 0
-        val parentWritable = file.parentFile?.canWrite() == true
+        val parentWritable = file != baseDir && file.parentFile?.canWrite() == true
         if (file.isDirectory) {
             if (file.canWrite()) {
                 flags = flags or DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE

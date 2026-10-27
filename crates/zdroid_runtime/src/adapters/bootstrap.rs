@@ -60,8 +60,7 @@ mod android_impl {
 
     /// Wraps a `std::process::Child` so the rest of zdroid_runtime can
     /// treat bootstrap-spawned processes like daemon-spawned ones via
-    /// the [`SpawnHandle`] trait. The handle holds the child by value;
-    /// dropping kills+reaps if not already exited.
+    /// the [`SpawnHandle`] trait. The caller waits for the child to exit.
     pub(super) struct BootstrapSpawnHandle {
         child: std::process::Child,
     }
@@ -76,10 +75,6 @@ mod android_impl {
             } else {
                 Ok(-1)
             }
-        }
-
-        fn kill(&mut self) -> Result<()> {
-            self.child.kill().context("kill bootstrap child")
         }
     }
 
@@ -224,29 +219,10 @@ impl RuntimeProvider for BootstrapAdapter {
     }
 
     fn install(&self, progress: &mut dyn ProgressSink) -> anyhow::Result<()> {
-        // Pull the latest release zip from the configured bootstrap
-        // repo, extract into `$PREFIX` atomically, write a version
-        // sentinel. Idempotent: re-running when the on-disk version
-        // matches the latest release tag is a no-op without touching
-        // the network. See `super::bootstrap_install` for the wire
-        // protocol + extraction details.
         super::bootstrap_install::install_latest(
             &self.config.prefix,
             &self.config.release_repo,
             progress,
-        )
-    }
-
-    fn uninstall(&self) -> anyhow::Result<()> {
-        // Wipe `$PREFIX/{bin,lib,etc,share,...}` while preserving
-        // user-state dirs (`$PREFIX/etc/zd-runtime.toml`,
-        // `$PREFIX/home`, `$PREFIX/var/lib/apt` apt cache, etc.) is the
-        // intended behavior, but distinguishing "ours" vs "user-
-        // created" inside a 240-MB unpack is fragile without a manifest
-        // we don't currently ship. Pending until the bootstrap-repo
-        // split adds a `MANIFEST.txt` listing extract-owned paths.
-        anyhow::bail!(
-            "BootstrapAdapter::uninstall pending: needs MANIFEST.txt in the bootstrap zip"
         )
     }
 
@@ -433,11 +409,6 @@ impl RuntimeProvider for BootstrapAdapter {
                 "TERMUX_APP__PACKAGE_NAME".into(),
                 EnvOp::Set(OsString::from("com.zdroid")),
             ),
-            // Override HOME for the bash subshell: process-side HOME
-            // points at data_path (so upstream dirs::home_dir() does
-            // not panic), but bash inheriting that makes `~/projects`
-            // resolve to a non-existent dir. Aligning with TERMUX__HOME
-            // matches Termux convention.
             ("HOME".into(), EnvOp::Set(termux_home.into_os_string())),
             // termux-exec.so hooks execve to translate hardcoded
             // /data/data/com.termux/... shebangs in upstream maintainer

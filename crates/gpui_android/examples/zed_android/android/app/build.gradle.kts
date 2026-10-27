@@ -9,7 +9,7 @@ plugins {
 // gitignored: contributors who clone the repo can still build the debug
 // variant, but a release build that produces a signed APK requires the
 // keystore + properties to be present locally (or provided by CI via
-// env-var injected secrets, future work).
+// a separate signing job in CI).
 val signingPropsFile = file("signing.properties")
 val signingProps = Properties().apply {
     if (signingPropsFile.exists()) {
@@ -17,22 +17,6 @@ val signingProps = Properties().apply {
     }
 }
 val hasReleaseSigning = signingPropsFile.exists()
-
-// Bootstrap-zip distribution.
-//
-// Pre-Phase-6: the APK bundled bootstrap-aarch64.zip (~239 MB) as an
-// asset, downloaded by a `downloadBootstrap` Gradle task from a
-// GitHub release at build time, then extracted at first launch.
-//
-// Phase 6 moved the download to runtime, owned by
-// `BootstrapAdapter::install` (see `crates/zdroid_runtime/src/
-// adapters/bootstrap_install.rs`). The APK no longer bundles the
-// zip; the Bootstrap adapter pulls it directly from
-// `https://github.com/<release_repo>/releases/latest` when the user
-// selects Bootstrap and the on-disk version sentinel doesn't match.
-//
-// Chroot users (Magisk + zd-spawnd module) never trigger the
-// bootstrap install. Saves ~239 MB of fat for the majority case.
 
 // zd-exec bundling.
 //
@@ -60,9 +44,6 @@ val hasReleaseSigning = signingPropsFile.exists()
 val workspaceRoot = file("../../../../../..").canonicalFile
 val zdExecBin = file("${workspaceRoot}/target/aarch64-linux-android/release/zd-exec")
 val zdExecAsset = file("src/main/assets/zd-exec")
-val zdExecSrc = fileTree("${workspaceRoot}/crates/zdroid_runtime/src") {
-    include("**/*.rs")
-}
 
 tasks.register<Exec>("buildZdExec") {
     description = "Build zd-exec via cargo-ndk and stage into assets/."
@@ -79,6 +60,8 @@ tasks.register<Exec>("buildZdExec") {
         "build",
         "--release",
         "--locked",
+        "--target-dir",
+        file("${workspaceRoot}/target").absolutePath,
         "-p",
         "zdroid_runtime",
         "--bin",
@@ -96,8 +79,9 @@ tasks.register<Exec>("buildZdExec") {
         environment("ANDROID_NDK_HOME", ndk)
     }
 
-    inputs.files(zdExecSrc)
-    inputs.file("${workspaceRoot}/crates/zdroid_runtime/Cargo.toml")
+    // Cargo tracks transitive sources, lockfiles and build flags; a Gradle
+    // source-only check can reuse a helper from a different dependency graph.
+    outputs.upToDateWhen { false }
     outputs.file(zdExecBin)
 }
 
@@ -139,9 +123,6 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 val askpassHelperDir = file("${workspaceRoot}/crates/gpui_android/examples/zed_android/askpass-helper")
 val askpassHelperBin = file("${askpassHelperDir}/target/aarch64-linux-android/release/zed-askpass-helper")
 val askpassHelperAsset = file("src/main/assets/zed-askpass-helper")
-val askpassHelperSrc = fileTree("${askpassHelperDir}/src") {
-    include("**/*.rs")
-}
 
 tasks.register<Exec>("buildAskpassHelper") {
     description = "Build zed-askpass-helper (static aarch64) via cargo-ndk and stage into assets/."
@@ -158,15 +139,15 @@ tasks.register<Exec>("buildAskpassHelper") {
         "build",
         "--release",
         "--locked",
+        "--target-dir",
+        file("${askpassHelperDir}/target").absolutePath,
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
         environment("ANDROID_NDK_HOME", ndk)
     }
 
-    inputs.files(askpassHelperSrc)
-    inputs.file("${askpassHelperDir}/Cargo.toml")
-    inputs.file("${askpassHelperDir}/.cargo/config.toml")
+    outputs.upToDateWhen { false }
     outputs.file(askpassHelperBin)
 }
 
@@ -211,8 +192,8 @@ android {
         // denied — the entire L2 plan stops working. Skipping Play Store
         // eligibility is the explicit trade.
         targetSdk = 28
-        versionCode = 57
-        versionName = "0.9.16"
+        versionCode = 58
+        versionName = "0.9.17"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -222,14 +203,6 @@ android {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
         }
-    }
-
-    // Don't deflate bootstrap-aarch64.zip during APK packaging — it's
-    // already a deflated zip, and re-deflating it (a) wastes APK size
-    // (b) forces AAssetManager to decompress at runtime, which prevents
-    // the bootstrap extractor from using the mmap-able buffer path.
-    androidResources {
-        noCompress += listOf("zip")
     }
 
     compileOptions {

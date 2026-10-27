@@ -1,16 +1,9 @@
 //! Download + extract path for [`super::bootstrap::BootstrapAdapter::install`].
 //!
-//! Pulls the latest release tarball from `<release_repo>`'s GitHub
+//! Pulls the latest release ZIP from `<release_repo>`'s GitHub
 //! releases endpoint, downloads `bootstrap-aarch64.zip`, extracts the
-//! contents into a staging dir, swaps the staging into `$PREFIX`
-//! atomically, and writes a version sentinel so subsequent boots skip
-//! re-extraction.
-//!
-//! Lives in `zdroid_runtime` rather than `gpui_android` so the adapter
-//! is self-contained — the historical extraction code in
-//! `gpui_android::termux_bootstrap` couples to APK assets and the older
-//! bundled-zip flow. Phase 8 of the Termux-divestment refactor sweeps
-//! the legacy module; this is the replacement for the install path.
+//! contents into a staging dir, replaces `$PREFIX`, and writes a version
+//! sentinel so repeated installations of the same version skip extraction.
 
 use std::fs;
 use std::io::{Cursor, Read, Write as _};
@@ -25,15 +18,8 @@ use sha2::{Digest, Sha256};
 
 use crate::health::ProgressSink;
 
-/// Preferred asset name inside the GitHub release. The
-/// bootstrap-build pipeline names every release's archive identically;
-/// the version is encoded in the release TAG, not the asset filename.
-///
-/// On 404 we fall back to enumerating the release's assets via the
-/// GitHub API and picking the first whose name matches
-/// `ASSET_NAME_REGEX_PATTERN` (eg. `bootstrap-aarch64-r4.zip`). The
-/// fallback path is robust to typos at upload time; the canonical
-/// name keeps the steady-state path off `api.github.com`.
+/// Preferred asset name. Also used when GitHub's release metadata is
+/// unavailable, so the download can continue through anonymous API limits.
 const RELEASE_ASSET_NAME: &str = "bootstrap-aarch64.zip";
 
 /// Prefix + extension that any acceptable bootstrap asset must match.
@@ -44,16 +30,13 @@ const RELEASE_ASSET_NAME: &str = "bootstrap-aarch64.zip";
 const ASSET_NAME_PREFIX: &str = "bootstrap-aarch64";
 const ASSET_NAME_SUFFIX: &str = ".zip";
 
-/// Manifest entry inside the bootstrap zip carrying symlink targets
-/// the zip format itself can't represent on extraction (Android's
-/// extract path doesn't preserve mode bits + symlinks the way `unzip`
-/// does on a real Unix). Replayed after the regular extract pass.
 /// Upper bounds that keep a corrupt or hostile archive from exhausting
 /// memory or storage. The real bootstrap is ~250 MB with ~20k entries.
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 300_000;
 
+/// Termux's archive records symlink targets separately from regular files.
 const SYMLINKS_ENTRY: &str = "SYMLINKS.txt";
 const SYMLINKS_DELIM: &str = "←";
 
@@ -88,7 +71,7 @@ fn http_agent(redirects: u32) -> ureq::Agent {
 /// ureq's default.
 const MAX_REDIRECTS: u32 = 5;
 
-/// Download the latest release zip + extract into `<prefix>` atomically.
+/// Download the latest release ZIP and replace `<prefix>` after extraction.
 /// Idempotent against `<prefix>/.bootstrap-version` — if the on-disk
 /// sentinel matches the latest tag and the prefix still has its shell, the
 /// function returns Ok without touching the network or filesystem beyond a

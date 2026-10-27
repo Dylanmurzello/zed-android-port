@@ -116,13 +116,12 @@ const TAP_WINDOW: Duration = Duration::from_millis(200);
 const TAP_MOTION_PX: f32 = 6.0;
 
 /// Two-finger tap → right-click detection. The second finger must
-/// land within this window of the first and the gesture must not
-/// have drifted past `TWO_FINGER_TAP_MOTION_PX` yet. Arms the right-
+/// land and lift within this window of the first finger's down, and the
+/// gesture must not drift past `TWO_FINGER_TAP_MOTION_PX`. Arms the right-
 /// click on `ACTION_POINTER_DOWN`; the click only fires on
 /// `ACTION_POINTER_UP` so a two-finger SCROLL (which moves before
 /// lifting) disarms via the motion-accum path and doesn't accidentally
-/// pop a context menu mid-scroll. Matches `events/touch.rs`'s
-/// touchscreen two-finger-tap behavior for consistency.
+/// pop a context menu after a slow scroll on Samsung's keyboard-cover trackpad.
 const TWO_FINGER_TAP_WINDOW: Duration = Duration::from_millis(300);
 const TWO_FINGER_TAP_MOTION_PX: f32 = 6.0;
 
@@ -207,8 +206,6 @@ pub(crate) struct CapturedEvent {
     /// `MotionEvent.getMetaState()`: the modifier keys held on any keyboard.
     pub meta_state: i32,
     pub pointer_count: usize,
-    pub xs: Vec<f32>,
-    pub ys: Vec<f32>,
     pub rxs: Vec<f32>,
     pub rys: Vec<f32>,
     pub vscroll: f32,
@@ -272,7 +269,7 @@ pub(crate) struct CapturedPointerState {
     /// Latched on `ACTION_DOWN` (first finger). Cleared on Up, Cancel,
     /// or when motion exceeds `TAP_MOTION_PX`. Used to synthesize a
     /// click on a clean Down→Up with minimal motion.
-    primary_down: Option<TapAnchor>,
+    primary_down: Option<Instant>,
     /// When the first finger of the current gesture landed. Distinct
     /// from `primary_down` because the latter clears on small cursor
     /// motion (to prevent tap-on-up after a drag) but this stays
@@ -357,11 +354,6 @@ pub(crate) struct CapturedPointerState {
     last_cursor: Point<Pixels>,
 }
 
-struct TapAnchor {
-    when: Instant,
-    cursor: Point<Pixels>,
-}
-
 /// Push a captured event from the JVM listener thread onto the channel.
 /// The game thread drains and synthesizes.
 fn dispatch(event: CapturedEvent) {
@@ -444,7 +436,7 @@ pub(crate) fn translate(
                 // trigger another tap-tap-drag commit on top.
                 state.tap_drag_pending = false;
                 state.last_tap_at = None;
-                state.primary_down = Some(TapAnchor { when: now, cursor });
+                state.primary_down = Some(now);
                 state.first_finger_at = Some(now);
                 state.last_motion_at = None;
                 state.motion_accum = 0.0;
@@ -485,7 +477,7 @@ pub(crate) fn translate(
                     <= TAP_DRAG_POSITION_SLOP_PX as f64;
             state.tap_drag_pending = qualifies_as_tap_drag;
             state.last_tap_at = None;
-            state.primary_down = Some(TapAnchor { when: now, cursor });
+            state.primary_down = Some(now);
             state.first_finger_at = Some(now);
             state.last_motion_at = None;
             state.motion_accum = 0.0;
@@ -558,7 +550,9 @@ pub(crate) fn translate(
                     state.drag_active,
                     state.button_held,
                 );
-                state.right_click_armed = true;
+                state.right_click_armed = event.pointer_count == 2
+                    && hold_elapsed <= TWO_FINGER_TAP_WINDOW
+                    && state.motion_accum <= TWO_FINGER_TAP_MOTION_PX;
                 // Verified empirically: the cover trackpad's
                 // ACTION_BUTTON_PRESS fires shortly after finger 1
                 // DOWN regardless of user intent. If it already
@@ -623,10 +617,10 @@ pub(crate) fn translate(
                     let sum_ry: f32 = event.rys.iter().sum();
                     let dx = sum_rx / n / scale;
                     let dy = sum_ry / n / scale;
-                    // Any meaningful motion disarms right-click
-                    // (gesture is no longer a quick two-finger
-                    // tap).
-                    if (dx * dx + dy * dy).sqrt() > TWO_FINGER_TAP_MOTION_PX {
+                    // Captured trackpad motion arrives in small steps. Test
+                    // the whole gesture so a slow scroll cannot end as a tap.
+                    state.motion_accum += (dx * dx + dy * dy).sqrt();
+                    if state.motion_accum > TWO_FINGER_TAP_MOTION_PX {
                         state.right_click_armed = false;
                     }
                     if dx != 0.0 || dy != 0.0 {
@@ -797,7 +791,7 @@ pub(crate) fn translate(
                 }));
                 state.drag_active = false;
             } else if let Some(anchor) = state.primary_down.take()
-                && anchor.when.elapsed() < TAP_WINDOW
+                && anchor.elapsed() < TAP_WINDOW
                 && state.motion_accum <= TAP_MOTION_PX
             {
                 out.push(PlatformInput::MouseDown(MouseDownEvent {
@@ -843,7 +837,12 @@ pub(crate) fn translate(
             //   - When pointer_count drops to 1, clear
             //     in_multi_touch so subsequent single-finger MOVE
             //     events route through the cursor path
-            if state.right_click_armed && !state.drag_active {
+            if state.right_click_armed
+                && !state.drag_active
+                && state
+                    .first_finger_at
+                    .is_some_and(|started| started.elapsed() <= TWO_FINGER_TAP_WINDOW)
+            {
                 out.push(PlatformInput::MouseDown(MouseDownEvent {
                     button: MouseButton::Right,
                     position: cursor,
@@ -857,8 +856,8 @@ pub(crate) fn translate(
                     modifiers,
                     click_count: 1,
                 }));
-                state.right_click_armed = false;
             }
+            state.right_click_armed = false;
             // Keep in_multi_touch true while hold-drag is active
             // (finger 2 wavering doesn't end the gesture; only
             // ACTION_UP does). Clear it otherwise so single-finger
@@ -999,8 +998,6 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'loc
     button_state: i32,
     meta_state: i32,
     pointer_count: i32,
-    xs: JFloatArray<'local>,
-    ys: JFloatArray<'local>,
     rxs: JFloatArray<'local>,
     rys: JFloatArray<'local>,
     vscroll: f32,
@@ -1009,8 +1006,6 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'loc
     cursor_physical_y: f32,
 ) {
     let n = pointer_count.max(0) as usize;
-    let xs = read_floats(&env, &xs, n);
-    let ys = read_floats(&env, &ys, n);
     let rxs = read_floats(&env, &rxs, n);
     let rys = read_floats(&env, &rys, n);
     dispatch(CapturedEvent {
@@ -1020,8 +1015,6 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'loc
         button_state,
         meta_state,
         pointer_count: n,
-        xs,
-        ys,
         rxs,
         rys,
         vscroll,

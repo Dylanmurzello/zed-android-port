@@ -1,9 +1,0 @@
-// Auto-resync zd-runtime wrappers after apt operations.
-//
-// Installed at /etc/apt/apt.conf.d/99-zd-runtime inside the rootfs by
-// zd-runtime-sync. dpkg fires Post-Invoke after every install/remove;
-// the hook walks PATH dirs for any binary that doesn't yet have a
-// wrapper symlink in /zed-runtime (= $PREFIX/zd-runtime via bind-mount)
-// and creates one. Quiet on no-op.
-
-DPkg::Post-Invoke { "[ -x /usr/local/sbin/zd-runtime-hook ] && /usr/local/sbin/zd-runtime-hook || true"; };
