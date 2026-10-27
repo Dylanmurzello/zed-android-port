@@ -796,10 +796,12 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         val xs = FloatArray(pointerCount)
         val ys = FloatArray(pointerCount)
         val ids = IntArray(pointerCount)
+        val toolTypes = IntArray(pointerCount)
         for (i in 0 until pointerCount) {
             xs[i] = event.getX(i)
             ys[i] = event.getY(i)
             ids[i] = event.getPointerId(i)
+            toolTypes[i] = event.getToolType(i)
         }
         // ACTION_SCROLL (mouse wheel + trackpad two-finger scroll) carries
         // its delta on the AXIS_VSCROLL / AXIS_HSCROLL axes — getX/Y return
@@ -814,12 +816,14 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             event.actionIndex,
             event.metaState,
             event.buttonState,
+            event.flags,
             event.eventTime,
             vscroll,
             hscroll,
             xs,
             ys,
             ids,
+            toolTypes,
         )
     }
 

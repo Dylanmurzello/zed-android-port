@@ -171,8 +171,10 @@ An audit of `crates/gpui_android`'s input code found 22 problems. These are the 
 
 **Touch**
 
+With `android_input.legacy_touch` off (step 1 of the touch plan below), 6 and 7 are fixed and the long press in 8 fires from a timer. Until step 2 claims long presses, a long press nothing claims still ends as a tap when the finger lifts. The items stay open for the default, `touch.rs`'s finger state machine.
+
 6. **Starting a scroll or long press can click.** Touch-down sends a mouse down at once, and the gesture ends with a `click_count: 0` mouse up, which gpui still treats as a click. Starting a scroll on a project-panel file can open it, and every scroll moves the editor's caret to where the finger landed. Fix: send the mouse down only once a tap is decided, as `TrackpadTouchState` already does.
-7. **A two-finger swipe right-clicks.** `touch.rs` fires the right-click as soon as a second finger lands within 800 ms and 250 px, so most two-finger swipes open the context menu. `docs/workarounds/two-finger-rightclick.md` still says 300 ms and 12 px. Fix: fire on lift if the fingers barely moved.
+7. **A two-finger swipe right-clicks.** `touch.rs` fires the right-click as soon as a second finger lands within 800 ms and 250 px, so most two-finger swipes open the context menu. Fix: fire on lift if the fingers barely moved.
 8. **Long press and trackpad-mode hold-to-drag fire only on the next move event**, and capture's drag lock releases only on the next finger down; a perfectly still finger never long-presses. Losing pointer capture isn't reported to Rust either.
 
 **Extra windows (Settings and other pop-ups)**
@@ -202,6 +204,8 @@ The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parall
 2. Upstream doesn't claim touch drags anywhere yet, so add claims (`prevent_default` on a started `TouchDragEvent`) to the scrollbar thumb, the editor scrollbar, the pane splitter and the dock resize handle, replacing the fork's `set_drag_active` calls. Add a `LongPressEvent` claim to the editor for word selection with drag-to-extend, and move the terminal's long-press menu onto it. These are small, platform-neutral edits that could go upstream.
 3. gpui's recognizer has no two-finger tap: detect it in gpui_android before forwarding (cancel the touches, then send a secondary click), or propose it upstream.
 4. Remove `set_drag_active`, `last_input_was_touch` and `last_platform_input_was_touch` from gpui and the finger state machine from `touch.rs`.
+
+Step 1 landed behind `android_input.legacy_touch` (default on, which keeps `touch.rs`'s state machine; off sends fingers to gpui's recognizer through `touch::TouchFeed`). It folds in step 3: `TouchFeed` turns a two-finger tap into a secondary click when the fingers lift, and a two-finger drag into one touch at the fingers' centroid.
 
 Also evaluate `Application::run_embedded` as a replacement for the custom android run-loop shim, and upstream's `ThreadedDispatcher` as a replacement for the hand-rolled calloop worker pool in `gpui_android/src/dispatcher.rs`.
 

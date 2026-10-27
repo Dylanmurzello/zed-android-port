@@ -33,23 +33,29 @@
 //! `(action_masked, positions, ...)` tuples. Both build a `TouchEvent`
 //! via the local helpers and feed it to the same `on_event` SM. One
 //! state machine, two sources, fully testable in isolation.
+//!
+//! With `android_input.legacy_touch` off, finger gestures skip the SM:
+//! [`TouchFeed`] passes them to gpui's own gesture recognizer as raw
+//! `PlatformInput::Touch` events instead.
 
 use std::collections::HashMap;
+use std::mem;
 use std::time::{Duration, Instant};
 
 use android_activity::AndroidApp;
-use android_activity::input::{MetaState, MotionAction, MotionEvent};
+use android_activity::input::{MetaState, MotionAction, MotionEvent, ToolType};
 use gpui::{
     MouseButton, MouseDownEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta,
-    ScrollEvent, ScrollSource, TouchPhase, point, px,
+    ScrollEvent, ScrollSource, TouchId, TouchPhase, point, px,
 };
 
-use crate::events::MotionInputs;
 use crate::events::keyboard;
 use crate::events::{
     JAVA_ACTION_CANCEL, JAVA_ACTION_DOWN, JAVA_ACTION_MOVE, JAVA_ACTION_POINTER_DOWN,
-    JAVA_ACTION_POINTER_UP, JAVA_ACTION_UP,
+    JAVA_ACTION_POINTER_UP, JAVA_ACTION_UP, JAVA_FLAG_CANCELED, JAVA_TOOL_TYPE_FINGER,
+    JAVA_TOOL_TYPE_PALM,
 };
+use crate::events::{MotionInputs, TranslatedMotion};
 use crate::window::AndroidWindowState;
 
 /// Logical-pixel motion threshold for committing to scroll instead of
@@ -91,6 +97,8 @@ pub(crate) struct TouchEvent {
     pub action: TouchAction,
     pub modifiers: gpui::Modifiers,
     pub pointers: Vec<TouchPointer>,
+    /// `MotionEvent.FLAG_CANCELED`: the pointer going up was cancelled.
+    pub canceled: bool,
 }
 
 /// Action the SM dispatches on. Java `MotionEvent.ACTION_*` collapsed
@@ -124,30 +132,33 @@ pub(crate) struct TouchPointer {
     pub id: i32,
     pub pos: Point<Pixels>,
     pub history: Vec<Point<Pixels>>,
+    /// `MotionEvent.TOOL_TYPE_PALM`: the system decided this contact is a
+    /// palm resting on the screen.
+    pub palm: bool,
+}
+
+/// Which recognizer a finger gesture goes to. Decided when the first
+/// finger lands and kept until the gesture ends, so changing
+/// `android_input.legacy_touch` mid-gesture can't split a gesture
+/// between them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FingerRoute {
+    /// Zdroid's finger state machine, [`TouchState`].
+    #[default]
+    Legacy,
+    /// gpui's touch gesture recognizer, through [`TouchFeed`].
+    Gestures,
 }
 
 pub(crate) fn dispatch_primary(
     state: &mut AndroidWindowState,
     event: &MotionEvent,
     scale_factor: f32,
-) -> MotionInputs {
+) -> TranslatedMotion {
     let Some(touch_event) = build_from_motion_event(event, scale_factor) else {
-        return MotionInputs::new();
+        return TranslatedMotion::default();
     };
-    if crate::ime::trackpad_mode_enabled() {
-        let android_app = state.android_app.clone();
-        let extra_window_id = state.extra_window_id;
-        let bounds = state.bounds.size;
-        return state.trackpad_touch.on_event(
-            &touch_event,
-            &android_app,
-            scale_factor,
-            extra_window_id,
-            bounds,
-        );
-    }
-    let drag_capture = state.drag_active.load(std::sync::atomic::Ordering::Relaxed);
-    state.touch.on_event(&touch_event, drag_capture)
+    dispatch(state, &touch_event, true, scale_factor)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -158,34 +169,71 @@ pub(crate) fn dispatch_extra(
     action_index: i32,
     meta_state: i32,
     _button_state: i32,
+    flags: i32,
     _vscroll: f32,
     _hscroll: f32,
     positions: &[(f32, f32, i32)],
+    tool_types: &[i32],
     scale_factor: f32,
 ) -> MotionInputs {
     let Some(touch_event) = build_from_extra_fields(
         action_masked,
         action_index,
         meta_state,
+        flags,
         positions,
+        tool_types,
         scale_factor,
     ) else {
         return MotionInputs::new();
     };
+    // Mouse and stylus input reaches this path in extra windows too.
+    let finger = tool_types.first() == Some(&JAVA_TOOL_TYPE_FINGER);
+    dispatch(state, &touch_event, finger, scale_factor).inputs
+}
+
+/// Sends a touch event to the virtual trackpad, the finger state machine or
+/// gpui's gesture recognizer. `finger` says whether a gesture starting with
+/// this event may go to gpui's recognizer.
+fn dispatch(
+    state: &mut AndroidWindowState,
+    touch_event: &TouchEvent,
+    finger: bool,
+    scale_factor: f32,
+) -> TranslatedMotion {
     if crate::ime::trackpad_mode_enabled() {
+        let mut inputs = state.touch_feed.abandon();
         let android_app = state.android_app.clone();
         let extra_window_id = state.extra_window_id;
         let bounds = state.bounds.size;
-        return state.trackpad_touch.on_event(
-            &touch_event,
+        inputs.extend(state.trackpad_touch.on_event(
+            touch_event,
             &android_app,
             scale_factor,
             extra_window_id,
             bounds,
-        );
+        ));
+        return inputs.into();
     }
-    let drag_capture = state.drag_active.load(std::sync::atomic::Ordering::Relaxed);
-    state.touch.on_event(&touch_event, drag_capture)
+    if matches!(touch_event.action, TouchAction::Down) {
+        state.finger_route = if finger && !crate::ime::legacy_touch_enabled() {
+            FingerRoute::Gestures
+        } else {
+            FingerRoute::Legacy
+        };
+    }
+    match state.finger_route {
+        FingerRoute::Gestures => TranslatedMotion {
+            inputs: state.touch_feed.on_event(touch_event, Instant::now()),
+            handled: true,
+        },
+        FingerRoute::Legacy => {
+            let mut inputs = state.touch_feed.abandon();
+            let drag_capture = state.drag_active.load(std::sync::atomic::Ordering::Relaxed);
+            inputs.extend(state.touch.on_event(touch_event, drag_capture));
+            inputs.into()
+        }
+    }
 }
 
 /// Build a [`TouchEvent`] from an Android NDK `MotionEvent`. Carries
@@ -222,12 +270,14 @@ fn build_from_motion_event(event: &MotionEvent, scale_factor: f32) -> Option<Tou
             id: p.pointer_id(),
             pos,
             history,
+            palm: p.tool_type() == ToolType::Palm,
         });
     }
     Some(TouchEvent {
         action,
         modifiers,
         pointers,
+        canceled: event.flags().0 & JAVA_FLAG_CANCELED as u32 != 0,
     })
 }
 
@@ -239,7 +289,9 @@ fn build_from_extra_fields(
     action_masked: i32,
     action_index: i32,
     meta_state: i32,
+    flags: i32,
     positions: &[(f32, f32, i32)],
+    tool_types: &[i32],
     scale_factor: f32,
 ) -> Option<TouchEvent> {
     if positions.is_empty() {
@@ -258,16 +310,19 @@ fn build_from_extra_fields(
     let modifiers = keyboard::modifiers_from_meta(MetaState(meta_state as u32));
     let pointers = positions
         .iter()
-        .map(|(x, y, id)| TouchPointer {
+        .enumerate()
+        .map(|(index, (x, y, id))| TouchPointer {
             id: *id,
             pos: point(px(x / scale_factor), px(y / scale_factor)),
             history: Vec::new(),
+            palm: tool_types.get(index) == Some(&JAVA_TOOL_TYPE_PALM),
         })
         .collect();
     Some(TouchEvent {
         action,
         modifiers,
         pointers,
+        canceled: flags & JAVA_FLAG_CANCELED != 0,
     })
 }
 
@@ -1246,5 +1301,701 @@ impl TrackpadTouchState {
         self.pointers.clear();
         self.phase = TrackpadGesturePhase::Idle;
         self.scroll_centroid = None;
+    }
+}
+
+// ============================================================================
+// Raw touches for gpui's gesture recognizer
+// ============================================================================
+//
+// With `android_input.legacy_touch` off, `TouchFeed` passes each finger to
+// gpui as raw `PlatformInput::Touch` events, and gpui's recognizer
+// (`gpui::gestures`) turns them into taps, pans with momentum and long
+// presses. That recognizer follows one touch at a time, so `TouchFeed`
+// resolves two-finger gestures itself: a two-finger tap becomes a secondary
+// click, and a two-finger drag a single touch at the fingers' centroid.
+
+/// How far each finger of a two-finger tap may move from where it landed,
+/// in touch slops.
+const TWO_FINGER_TAP_SLOP_FACTOR: f64 = 2.0;
+
+/// How soon after the second finger lands the last finger must lift for the
+/// gesture to be a two-finger tap.
+const TWO_FINGER_TAP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A touch gpui has seen start and not yet end.
+struct OpenTouch {
+    id: TouchId,
+    start: Point<Pixels>,
+    position: Point<Pixels>,
+    /// Whether the touch has left the touch slop around its start, which
+    /// makes it a pan in gpui's recognizer for good.
+    left_slop: bool,
+}
+
+#[derive(Default)]
+enum TwoFingerGesture {
+    /// Fingers reach gpui as they are.
+    #[default]
+    None,
+    /// A second finger landed while the first was still within the touch
+    /// slop. The first finger's touch was cancelled, and nothing reaches
+    /// gpui until the fingers lift (a secondary click) or move (a pan).
+    Pending {
+        /// Where the first finger landed: the secondary click goes there.
+        anchor: Point<Pixels>,
+        second_landed_at: Instant,
+        /// The fingers' Android pointer ids and landing points.
+        fingers: [(i32, Point<Pixels>); 2],
+        one_lifted: bool,
+    },
+    /// The fingers moved: gpui sees one touch at their centroid.
+    Panning { touch: OpenTouch, fingers: [i32; 2] },
+    /// The two-finger gesture is over or became something else; the rest
+    /// of it doesn't reach gpui.
+    Ignored,
+}
+
+impl TwoFingerGesture {
+    fn follows(&self, pointer_id: i32) -> bool {
+        match self {
+            Self::Pending { fingers, .. } => fingers.iter().any(|(id, _)| *id == pointer_id),
+            Self::Panning { fingers, .. } => fingers.contains(&pointer_id),
+            Self::None | Self::Ignored => false,
+        }
+    }
+}
+
+/// Feeds one window's finger input to gpui's touch gesture recognizer.
+pub(crate) struct TouchFeed {
+    touch_slop: Pixels,
+    /// gpui forbids reusing a `TouchId`, and Android numbers pointers from
+    /// 0 again in every gesture, so ids come from a counter that only grows.
+    next_touch_id: u64,
+    /// By Android pointer id.
+    open_touches: HashMap<i32, OpenTouch>,
+    two_finger: TwoFingerGesture,
+}
+
+impl TouchFeed {
+    pub(crate) fn new(touch_slop: Pixels) -> Self {
+        Self {
+            touch_slop,
+            next_touch_id: 0,
+            open_touches: HashMap::default(),
+            two_finger: TwoFingerGesture::None,
+        }
+    }
+
+    /// Cancels every touch gpui follows, for when the rest of a gesture
+    /// goes elsewhere: gpui's recognizer takes no new touch while one is
+    /// open.
+    pub(crate) fn abandon(&mut self) -> MotionInputs {
+        let mut out = MotionInputs::new();
+        self.cancel_all(&mut out);
+        out
+    }
+
+    /// `now` is when the event arrived. Batched history samples aren't
+    /// replayed: gpui timestamps touches as they arrive, so they would look
+    /// simultaneous and distort the fling speed.
+    pub(crate) fn on_event(&mut self, event: &TouchEvent, now: Instant) -> MotionInputs {
+        let mut out = MotionInputs::new();
+        match event.action {
+            TouchAction::Down => {
+                self.cancel_all(&mut out);
+                if let Some(pointer) = event.pointers.first()
+                    && !pointer.palm
+                {
+                    self.start(pointer, &mut out);
+                }
+            }
+            TouchAction::PointerDown { index } => {
+                self.reject_palms(event, &mut out);
+                if let Some(pointer) = event.pointers.get(index)
+                    && !pointer.palm
+                {
+                    self.pointer_down(pointer, now, &mut out);
+                }
+            }
+            TouchAction::Move => {
+                self.reject_palms(event, &mut out);
+                self.pointers_moved(event, &mut out);
+            }
+            TouchAction::PointerUp { index } => {
+                self.reject_palms(event, &mut out);
+                if let Some(pointer) = event.pointers.get(index) {
+                    self.pointer_up(pointer, event, now, &mut out);
+                }
+            }
+            TouchAction::Up => {
+                self.reject_palms(event, &mut out);
+                if let Some(pointer) = event.pointers.first() {
+                    self.pointer_up(pointer, event, now, &mut out);
+                }
+                self.cancel_all(&mut out);
+            }
+            TouchAction::Cancel => self.cancel_all(&mut out),
+        }
+        out
+    }
+
+    fn start(&mut self, pointer: &TouchPointer, out: &mut MotionInputs) {
+        if let Some(touch) = self.open_touches.remove(&pointer.id) {
+            out.push(touch_input(touch.id, TouchPhase::Cancelled, touch.position));
+        }
+        let Some(id) = self.allocate_touch_id() else {
+            return;
+        };
+        self.open_touches.insert(
+            pointer.id,
+            OpenTouch {
+                id,
+                start: pointer.pos,
+                position: pointer.pos,
+                left_slop: false,
+            },
+        );
+        out.push(touch_input(id, TouchPhase::Started, pointer.pos));
+    }
+
+    fn allocate_touch_id(&mut self) -> Option<TouchId> {
+        let id = TouchId(self.next_touch_id);
+        let Some(next_touch_id) = self.next_touch_id.checked_add(1) else {
+            log::error!("touch: exhausted touch identifiers");
+            return None;
+        };
+        self.next_touch_id = next_touch_id;
+        Some(id)
+    }
+
+    fn pointer_down(&mut self, pointer: &TouchPointer, now: Instant, out: &mut MotionInputs) {
+        match self.two_finger {
+            TwoFingerGesture::None => {
+                if let Some(first_pointer_id) = self.sole_touch_within_slop()
+                    && let Some(first) = self.open_touches.remove(&first_pointer_id)
+                {
+                    out.push(touch_input(first.id, TouchPhase::Cancelled, first.position));
+                    self.two_finger = TwoFingerGesture::Pending {
+                        anchor: first.start,
+                        second_landed_at: now,
+                        fingers: [(first_pointer_id, first.start), (pointer.id, pointer.pos)],
+                        one_lifted: false,
+                    };
+                } else {
+                    // gpui ignores it while it follows the first finger.
+                    self.start(pointer, out);
+                }
+            }
+            TwoFingerGesture::Pending { .. } | TwoFingerGesture::Panning { .. } => {
+                self.ignore_two_finger_gesture(out);
+            }
+            TwoFingerGesture::Ignored => {}
+        }
+    }
+
+    /// The Android pointer id of the only open touch, if it hasn't left the
+    /// touch slop.
+    fn sole_touch_within_slop(&self) -> Option<i32> {
+        if self.open_touches.len() != 1 {
+            return None;
+        }
+        self.open_touches
+            .iter()
+            .find(|(_, touch)| !touch.left_slop)
+            .map(|(pointer_id, _)| *pointer_id)
+    }
+
+    fn pointers_moved(&mut self, event: &TouchEvent, out: &mut MotionInputs) {
+        let touch_slop = f64::from(self.touch_slop);
+        for pointer in &event.pointers {
+            let Some(touch) = self.open_touches.get_mut(&pointer.id) else {
+                continue;
+            };
+            if touch.position == pointer.pos {
+                continue;
+            }
+            touch.position = pointer.pos;
+            touch.left_slop |= (pointer.pos - touch.start).magnitude() > touch_slop;
+            out.push(touch_input(touch.id, TouchPhase::Moved, pointer.pos));
+        }
+
+        match &mut self.two_finger {
+            TwoFingerGesture::Pending {
+                fingers,
+                one_lifted,
+                ..
+            } => {
+                let tap_slop = touch_slop * TWO_FINGER_TAP_SLOP_FACTOR;
+                let moved = fingers.iter().any(|(pointer_id, landing_point)| {
+                    event.pointers.iter().any(|pointer| {
+                        pointer.id == *pointer_id
+                            && (pointer.pos - *landing_point).magnitude() > tap_slop
+                    })
+                });
+                if !moved {
+                    return;
+                }
+                let fingers = [fingers[0].0, fingers[1].0];
+                let one_lifted = *one_lifted;
+                self.two_finger = if one_lifted {
+                    TwoFingerGesture::Ignored
+                } else {
+                    self.start_two_finger_pan(event, fingers, out)
+                };
+            }
+            TwoFingerGesture::Panning { touch, fingers } => {
+                if let Some(centroid) = centroid_of(&event.pointers, fingers)
+                    && centroid != touch.position
+                {
+                    touch.position = centroid;
+                    out.push(touch_input(touch.id, TouchPhase::Moved, centroid));
+                }
+            }
+            TwoFingerGesture::None | TwoFingerGesture::Ignored => {}
+        }
+    }
+
+    fn start_two_finger_pan(
+        &mut self,
+        event: &TouchEvent,
+        fingers: [i32; 2],
+        out: &mut MotionInputs,
+    ) -> TwoFingerGesture {
+        let Some(centroid) = centroid_of(&event.pointers, &fingers) else {
+            return TwoFingerGesture::Ignored;
+        };
+        let Some(id) = self.allocate_touch_id() else {
+            return TwoFingerGesture::Ignored;
+        };
+        out.push(touch_input(id, TouchPhase::Started, centroid));
+        TwoFingerGesture::Panning {
+            touch: OpenTouch {
+                id,
+                start: centroid,
+                position: centroid,
+                left_slop: false,
+            },
+            fingers,
+        }
+    }
+
+    fn pointer_up(
+        &mut self,
+        pointer: &TouchPointer,
+        event: &TouchEvent,
+        now: Instant,
+        out: &mut MotionInputs,
+    ) {
+        if let Some(touch) = self.open_touches.remove(&pointer.id) {
+            let phase = if event.canceled {
+                TouchPhase::Cancelled
+            } else {
+                TouchPhase::Ended
+            };
+            out.push(touch_input(touch.id, phase, pointer.pos));
+        }
+        if !self.two_finger.follows(pointer.id) {
+            return;
+        }
+        if event.canceled {
+            self.ignore_two_finger_gesture(out);
+            return;
+        }
+        match &mut self.two_finger {
+            TwoFingerGesture::Pending {
+                anchor,
+                second_landed_at,
+                one_lifted,
+                ..
+            } => {
+                if !*one_lifted {
+                    *one_lifted = true;
+                    return;
+                }
+                let anchor = *anchor;
+                let tapped =
+                    now.saturating_duration_since(*second_landed_at) <= TWO_FINGER_TAP_TIMEOUT;
+                self.two_finger = TwoFingerGesture::Ignored;
+                if tapped {
+                    out.push(PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Right,
+                        position: anchor,
+                        modifiers: event.modifiers,
+                        click_count: 1,
+                        first_mouse: false,
+                    }));
+                    out.push(PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Right,
+                        position: anchor,
+                        modifiers: event.modifiers,
+                        click_count: 1,
+                    }));
+                }
+            }
+            TwoFingerGesture::Panning { touch, .. } => {
+                out.push(touch_input(touch.id, TouchPhase::Ended, touch.position));
+                self.two_finger = TwoFingerGesture::Ignored;
+            }
+            TwoFingerGesture::None | TwoFingerGesture::Ignored => {}
+        }
+    }
+
+    /// Palms reach gpui as cancelled touches and end a two-finger gesture
+    /// they're part of.
+    fn reject_palms(&mut self, event: &TouchEvent, out: &mut MotionInputs) {
+        for pointer in event.pointers.iter().filter(|pointer| pointer.palm) {
+            if let Some(touch) = self.open_touches.remove(&pointer.id) {
+                out.push(touch_input(touch.id, TouchPhase::Cancelled, pointer.pos));
+            }
+            if self.two_finger.follows(pointer.id) {
+                self.ignore_two_finger_gesture(out);
+            }
+        }
+    }
+
+    fn ignore_two_finger_gesture(&mut self, out: &mut MotionInputs) {
+        if let TwoFingerGesture::Panning { touch, .. } =
+            mem::replace(&mut self.two_finger, TwoFingerGesture::Ignored)
+        {
+            out.push(touch_input(touch.id, TouchPhase::Cancelled, touch.position));
+        }
+    }
+
+    fn cancel_all(&mut self, out: &mut MotionInputs) {
+        for (_, touch) in self.open_touches.drain() {
+            out.push(touch_input(touch.id, TouchPhase::Cancelled, touch.position));
+        }
+        if let TwoFingerGesture::Panning { touch, .. } = mem::take(&mut self.two_finger) {
+            out.push(touch_input(touch.id, TouchPhase::Cancelled, touch.position));
+        }
+    }
+}
+
+/// The centroid of the given pointers, if the event has all of them.
+fn centroid_of(pointers: &[TouchPointer], pointer_ids: &[i32]) -> Option<Point<Pixels>> {
+    let mut sum = Point::<Pixels>::default();
+    for pointer_id in pointer_ids {
+        let pointer = pointers.iter().find(|pointer| pointer.id == *pointer_id)?;
+        sum = sum + pointer.pos;
+    }
+    let count = pointer_ids.len() as f32;
+    (count > 0.0).then(|| point(sum.x / count, sum.y / count))
+}
+
+fn touch_input(id: TouchId, phase: TouchPhase, position: Point<Pixels>) -> PlatformInput {
+    PlatformInput::Touch(gpui::TouchEvent {
+        id,
+        phase,
+        position,
+        predicted_position: None,
+        force: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    enum Output {
+        Touch(u64, TouchPhase, (f32, f32)),
+        SecondaryDown((f32, f32)),
+        SecondaryUp((f32, f32)),
+    }
+
+    fn outputs(inputs: MotionInputs) -> Vec<Output> {
+        let coordinates = |position: Point<Pixels>| (f32::from(position.x), f32::from(position.y));
+        inputs
+            .into_iter()
+            .map(|input| match input {
+                PlatformInput::Touch(touch) => {
+                    Output::Touch(touch.id.0, touch.phase, coordinates(touch.position))
+                }
+                PlatformInput::MouseDown(down) if down.button == MouseButton::Right => {
+                    Output::SecondaryDown(coordinates(down.position))
+                }
+                PlatformInput::MouseUp(up) if up.button == MouseButton::Right => {
+                    Output::SecondaryUp(coordinates(up.position))
+                }
+                other => panic!("unexpected input {other:?}"),
+            })
+            .collect()
+    }
+
+    fn finger(id: i32, x: f32, y: f32) -> TouchPointer {
+        TouchPointer {
+            id,
+            pos: point(px(x), px(y)),
+            history: Vec::new(),
+            palm: false,
+        }
+    }
+
+    fn palm(id: i32, x: f32, y: f32) -> TouchPointer {
+        TouchPointer {
+            palm: true,
+            ..finger(id, x, y)
+        }
+    }
+
+    fn event(action: TouchAction, pointers: Vec<TouchPointer>) -> TouchEvent {
+        TouchEvent {
+            action,
+            modifiers: gpui::Modifiers::default(),
+            pointers,
+            canceled: false,
+        }
+    }
+
+    fn feed() -> TouchFeed {
+        TouchFeed::new(px(8.0))
+    }
+
+    #[test]
+    fn touch_ids_are_never_reused() {
+        let mut feed = feed();
+        let now = Instant::now();
+        let down = event(TouchAction::Down, vec![finger(0, 10.0, 10.0)]);
+        let up = event(TouchAction::Up, vec![finger(0, 10.0, 10.0)]);
+        assert_eq!(
+            outputs(feed.on_event(&down, now)),
+            [Output::Touch(0, TouchPhase::Started, (10.0, 10.0))]
+        );
+        assert_eq!(
+            outputs(feed.on_event(&up, now)),
+            [Output::Touch(0, TouchPhase::Ended, (10.0, 10.0))]
+        );
+        assert_eq!(
+            outputs(feed.on_event(&down, now)),
+            [Output::Touch(1, TouchPhase::Started, (10.0, 10.0))]
+        );
+    }
+
+    #[test]
+    fn down_cancels_a_touch_left_open() {
+        let mut feed = feed();
+        let now = Instant::now();
+        feed.on_event(&event(TouchAction::Down, vec![finger(0, 10.0, 10.0)]), now);
+        assert_eq!(
+            outputs(feed.on_event(&event(TouchAction::Down, vec![finger(0, 30.0, 30.0)]), now)),
+            [
+                Output::Touch(0, TouchPhase::Cancelled, (10.0, 10.0)),
+                Output::Touch(1, TouchPhase::Started, (30.0, 30.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn canceled_lift_and_palm_cancel_the_touch() {
+        let mut feed = feed();
+        let now = Instant::now();
+        feed.on_event(&event(TouchAction::Down, vec![finger(0, 10.0, 10.0)]), now);
+        let mut up = event(TouchAction::Up, vec![finger(0, 10.0, 10.0)]);
+        up.canceled = true;
+        assert_eq!(
+            outputs(feed.on_event(&up, now)),
+            [Output::Touch(0, TouchPhase::Cancelled, (10.0, 10.0))]
+        );
+
+        feed.on_event(&event(TouchAction::Down, vec![finger(0, 10.0, 10.0)]), now);
+        let moved = event(TouchAction::Move, vec![palm(0, 12.0, 10.0)]);
+        assert_eq!(
+            outputs(feed.on_event(&moved, now)),
+            [Output::Touch(1, TouchPhase::Cancelled, (12.0, 10.0))]
+        );
+        let up = event(TouchAction::Up, vec![palm(0, 12.0, 10.0)]);
+        assert!(outputs(feed.on_event(&up, now)).is_empty());
+    }
+
+    #[test]
+    fn two_finger_tap_clicks_secondary_on_lift() {
+        let mut feed = feed();
+        let start = Instant::now();
+        let second_landed = start + Duration::from_millis(50);
+        feed.on_event(
+            &event(TouchAction::Down, vec![finger(0, 100.0, 100.0)]),
+            start,
+        );
+        let second_down = event(
+            TouchAction::PointerDown { index: 1 },
+            vec![finger(0, 101.0, 100.0), finger(1, 200.0, 100.0)],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&second_down, second_landed)),
+            [Output::Touch(0, TouchPhase::Cancelled, (100.0, 100.0))]
+        );
+        let jitter = event(
+            TouchAction::Move,
+            vec![finger(0, 104.0, 100.0), finger(1, 203.0, 100.0)],
+        );
+        assert!(outputs(feed.on_event(&jitter, second_landed)).is_empty());
+        let first_up = event(
+            TouchAction::PointerUp { index: 1 },
+            vec![finger(0, 104.0, 100.0), finger(1, 203.0, 100.0)],
+        );
+        assert!(
+            outputs(feed.on_event(&first_up, second_landed + Duration::from_millis(150)))
+                .is_empty()
+        );
+        let last_up = event(TouchAction::Up, vec![finger(0, 104.0, 100.0)]);
+        assert_eq!(
+            outputs(feed.on_event(&last_up, second_landed + Duration::from_millis(200))),
+            [
+                Output::SecondaryDown((100.0, 100.0)),
+                Output::SecondaryUp((100.0, 100.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn slow_two_finger_tap_does_nothing() {
+        let mut feed = feed();
+        let start = Instant::now();
+        feed.on_event(
+            &event(TouchAction::Down, vec![finger(0, 100.0, 100.0)]),
+            start,
+        );
+        feed.on_event(
+            &event(
+                TouchAction::PointerDown { index: 1 },
+                vec![finger(0, 100.0, 100.0), finger(1, 200.0, 100.0)],
+            ),
+            start,
+        );
+        let late = start + TWO_FINGER_TAP_TIMEOUT + Duration::from_millis(1);
+        let first_up = event(
+            TouchAction::PointerUp { index: 1 },
+            vec![finger(0, 100.0, 100.0), finger(1, 200.0, 100.0)],
+        );
+        assert!(outputs(feed.on_event(&first_up, late)).is_empty());
+        let last_up = event(TouchAction::Up, vec![finger(0, 100.0, 100.0)]);
+        assert!(outputs(feed.on_event(&last_up, late)).is_empty());
+    }
+
+    #[test]
+    fn two_finger_drag_pans_at_the_centroid() {
+        let mut feed = feed();
+        let now = Instant::now();
+        feed.on_event(
+            &event(TouchAction::Down, vec![finger(0, 100.0, 100.0)]),
+            now,
+        );
+        feed.on_event(
+            &event(
+                TouchAction::PointerDown { index: 1 },
+                vec![finger(0, 100.0, 100.0), finger(1, 200.0, 100.0)],
+            ),
+            now,
+        );
+        let drag = event(
+            TouchAction::Move,
+            vec![finger(0, 100.0, 130.0), finger(1, 200.0, 130.0)],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&drag, now)),
+            [Output::Touch(1, TouchPhase::Started, (150.0, 130.0))]
+        );
+        let drag = event(
+            TouchAction::Move,
+            vec![finger(0, 100.0, 140.0), finger(1, 200.0, 140.0)],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&drag, now)),
+            [Output::Touch(1, TouchPhase::Moved, (150.0, 140.0))]
+        );
+        let first_up = event(
+            TouchAction::PointerUp { index: 0 },
+            vec![finger(0, 100.0, 140.0), finger(1, 200.0, 140.0)],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&first_up, now)),
+            [Output::Touch(1, TouchPhase::Ended, (150.0, 140.0))]
+        );
+        let drag = event(TouchAction::Move, vec![finger(1, 200.0, 160.0)]);
+        assert!(outputs(feed.on_event(&drag, now)).is_empty());
+        let last_up = event(TouchAction::Up, vec![finger(1, 200.0, 160.0)]);
+        assert!(outputs(feed.on_event(&last_up, now)).is_empty());
+    }
+
+    #[test]
+    fn third_finger_cancels_the_pan() {
+        let mut feed = feed();
+        let now = Instant::now();
+        feed.on_event(
+            &event(TouchAction::Down, vec![finger(0, 100.0, 100.0)]),
+            now,
+        );
+        feed.on_event(
+            &event(
+                TouchAction::PointerDown { index: 1 },
+                vec![finger(0, 100.0, 100.0), finger(1, 200.0, 100.0)],
+            ),
+            now,
+        );
+        feed.on_event(
+            &event(
+                TouchAction::Move,
+                vec![finger(0, 100.0, 130.0), finger(1, 200.0, 130.0)],
+            ),
+            now,
+        );
+        let third_down = event(
+            TouchAction::PointerDown { index: 2 },
+            vec![
+                finger(0, 100.0, 130.0),
+                finger(1, 200.0, 130.0),
+                finger(2, 300.0, 130.0),
+            ],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&third_down, now)),
+            [Output::Touch(1, TouchPhase::Cancelled, (150.0, 130.0))]
+        );
+        let drag = event(
+            TouchAction::Move,
+            vec![
+                finger(0, 100.0, 160.0),
+                finger(1, 200.0, 160.0),
+                finger(2, 300.0, 160.0),
+            ],
+        );
+        assert!(outputs(feed.on_event(&drag, now)).is_empty());
+    }
+
+    #[test]
+    fn second_finger_after_the_first_left_the_slop_is_forwarded() {
+        let mut feed = feed();
+        let now = Instant::now();
+        feed.on_event(
+            &event(TouchAction::Down, vec![finger(0, 100.0, 100.0)]),
+            now,
+        );
+        let drag = event(TouchAction::Move, vec![finger(0, 100.0, 120.0)]);
+        assert_eq!(
+            outputs(feed.on_event(&drag, now)),
+            [Output::Touch(0, TouchPhase::Moved, (100.0, 120.0))]
+        );
+        let second_down = event(
+            TouchAction::PointerDown { index: 1 },
+            vec![finger(0, 100.0, 120.0), finger(1, 200.0, 100.0)],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&second_down, now)),
+            [Output::Touch(1, TouchPhase::Started, (200.0, 100.0))]
+        );
+        let first_up = event(
+            TouchAction::PointerUp { index: 0 },
+            vec![finger(0, 100.0, 120.0), finger(1, 200.0, 100.0)],
+        );
+        assert_eq!(
+            outputs(feed.on_event(&first_up, now)),
+            [Output::Touch(0, TouchPhase::Ended, (100.0, 120.0))]
+        );
+        let last_up = event(TouchAction::Up, vec![finger(1, 200.0, 100.0)]);
+        assert_eq!(
+            outputs(feed.on_event(&last_up, now)),
+            [Output::Touch(1, TouchPhase::Ended, (200.0, 100.0))]
+        );
     }
 }

@@ -19,6 +19,7 @@ pub struct AndroidInputSettings {
     pub trackpad_mode_active: bool,
     pub programming_extras_row: bool,
     pub invert_scroll: bool,
+    pub legacy_touch: bool,
 }
 
 impl Settings for AndroidInputSettings {
@@ -30,6 +31,7 @@ impl Settings for AndroidInputSettings {
             trackpad_mode_active: android_input.trackpad_mode_active.unwrap_or(false),
             programming_extras_row: android_input.programming_extras_row.unwrap_or(false),
             invert_scroll: android_input.invert_scroll.unwrap_or(false),
+            legacy_touch: android_input.legacy_touch.unwrap_or(true),
         }
     }
 }
@@ -45,6 +47,7 @@ pub fn set_default_settings(cx: &mut App) {
                 trackpad_mode_active: Some(false),
                 programming_extras_row: Some(false),
                 invert_scroll: Some(false),
+                legacy_touch: Some(true),
             });
         });
     });

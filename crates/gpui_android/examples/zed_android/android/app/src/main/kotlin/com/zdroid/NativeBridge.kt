@@ -64,19 +64,22 @@ object NativeBridge {
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the
     /// `MotionEvent.AXIS_VSCROLL`/`AXIS_HSCROLL` values for `ACTION_SCROLL`
     /// events (mouse wheel, trackpad two-finger scroll); zero on touch /
-    /// hover / button events.
+    /// hover / button events. `flags` is `MotionEvent.getFlags()` and
+    /// `toolTypes` each pointer's `MotionEvent.getToolType`.
     external fun nativeOnExtraTouchEvent(
         windowId: Long,
         actionMasked: Int,
         actionIndex: Int,
         metaState: Int,
         buttonState: Int,
+        flags: Int,
         eventTimeMillis: Long,
         vscroll: Float,
         hscroll: Float,
         xs: FloatArray,
         ys: FloatArray,
         pointerIds: IntArray,
+        toolTypes: IntArray,
     )
 
     /// Hardware key event forwarder. Called from `ExtraWindowActivity.

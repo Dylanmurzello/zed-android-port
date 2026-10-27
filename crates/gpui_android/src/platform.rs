@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
@@ -13,10 +13,11 @@ use anyhow::Result;
 use futures::channel::oneshot;
 use gpui::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds,
-    ClipboardItem, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem,
-    PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PriorityQueueReceiver,
-    RunnableVariant, Task, ThermalState, WindowAppearance, WindowParams,
+    ClipboardItem, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, GestureTuning, Keymap,
+    Menu, MenuItem, PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformGestures,
+    PlatformInput, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
+    PlatformWindow, PriorityQueueReceiver, RunnableVariant, ScrollPhysics, Task, ThermalState,
+    TouchPhase, WindowAppearance, WindowParams, px,
 };
 use gpui_wgpu::GpuContext;
 use ndk::configuration::UiModeNight;
@@ -400,9 +401,178 @@ fn jni_open_url(android_app: &AndroidApp, url: &str) -> Result<()> {
     })
 }
 
+/// Gesture feel for gpui's touch recognizer, from Android's
+/// `ViewConfiguration`. Only fingers fed to gpui as raw touches use it, so
+/// it does nothing while `android_input.legacy_touch` is on.
+struct AndroidGestures {
+    tuning: GestureTuning,
+}
+
+impl PlatformGestures for AndroidGestures {
+    fn tuning(&self) -> GestureTuning {
+        self.tuning
+    }
+}
+
+impl AndroidGestures {
+    /// `scale_factor` converts Android's physical pixels to gpui's logical
+    /// ones; without it, the display density is read over JNI.
+    fn new(android_app: &AndroidApp, scale_factor: Option<f32>) -> Self {
+        // AOSP's `ViewConfiguration` defaults, for when JNI fails. The
+        // double-tap slop stays gpui's: Android's 100 dp would merge taps
+        // on neighbouring words into a double tap.
+        let fallback = GestureTuning {
+            touch_slop: px(8.0),
+            multi_tap_interval: Duration::from_millis(300),
+            long_press_duration: Duration::from_millis(400),
+            min_fling_velocity: 50.0,
+            scroll_physics: ScrollPhysics::android(),
+            ..GestureTuning::default()
+        };
+        let tuning = match read_view_configuration(android_app, scale_factor) {
+            Ok(view_configuration) => GestureTuning {
+                touch_slop: px(view_configuration.touch_slop),
+                multi_tap_interval: view_configuration.double_tap_timeout,
+                long_press_duration: view_configuration.long_press_timeout,
+                min_fling_velocity: view_configuration.min_fling_velocity,
+                ..fallback
+            },
+            Err(error) => {
+                log::error!("gestures: reading ViewConfiguration failed: {error:#}");
+                fallback
+            }
+        };
+        log::info!("gestures: {tuning:?}");
+        Self { tuning }
+    }
+}
+
+/// `ViewConfiguration`'s values, with distances in logical pixels.
+struct ViewConfigurationValues {
+    touch_slop: f32,
+    double_tap_timeout: Duration,
+    long_press_timeout: Duration,
+    min_fling_velocity: f32,
+}
+
+fn read_view_configuration(
+    android_app: &AndroidApp,
+    scale_factor: Option<f32>,
+) -> Result<ViewConfigurationValues> {
+    use anyhow::Context;
+    use jni::objects::JValue;
+
+    const VIEW_CONFIGURATION: &str = "android/view/ViewConfiguration";
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let view_configuration = env
+            .call_static_method(
+                VIEW_CONFIGURATION,
+                "get",
+                "(Landroid/content/Context;)Landroid/view/ViewConfiguration;",
+                &[JValue::Object(activity)],
+            )
+            .context("ViewConfiguration.get")?
+            .l()?;
+        let touch_slop = env
+            .call_method(&view_configuration, "getScaledTouchSlop", "()I", &[])
+            .context("getScaledTouchSlop")?
+            .i()?;
+        let min_fling_velocity = env
+            .call_method(
+                &view_configuration,
+                "getScaledMinimumFlingVelocity",
+                "()I",
+                &[],
+            )
+            .context("getScaledMinimumFlingVelocity")?
+            .i()?;
+        let double_tap_timeout = env
+            .call_static_method(VIEW_CONFIGURATION, "getDoubleTapTimeout", "()I", &[])
+            .context("getDoubleTapTimeout")?
+            .i()?;
+        let long_press_timeout = env
+            .call_static_method(VIEW_CONFIGURATION, "getLongPressTimeout", "()I", &[])
+            .context("getLongPressTimeout")?
+            .i()?;
+        let density = match scale_factor {
+            Some(scale_factor) => scale_factor,
+            None => {
+                let resources = env
+                    .call_method(
+                        activity,
+                        "getResources",
+                        "()Landroid/content/res/Resources;",
+                        &[],
+                    )
+                    .context("getResources")?
+                    .l()?;
+                let display_metrics = env
+                    .call_method(
+                        &resources,
+                        "getDisplayMetrics",
+                        "()Landroid/util/DisplayMetrics;",
+                        &[],
+                    )
+                    .context("getDisplayMetrics")?
+                    .l()?;
+                env.get_field(&display_metrics, "density", "F")
+                    .context("DisplayMetrics.density")?
+                    .f()?
+            }
+        };
+        if density <= 0.0 {
+            anyhow::bail!("display density is {density}");
+        }
+        Ok(ViewConfigurationValues {
+            touch_slop: touch_slop as f32 / density,
+            double_tap_timeout: Duration::from_millis(double_tap_timeout.max(0) as u64),
+            long_press_timeout: Duration::from_millis(long_press_timeout.max(0) as u64),
+            min_fling_velocity: min_fling_velocity as f32 / density,
+        })
+    })
+}
+
+/// Touch moves held back within one input drain, the latest for each
+/// touch. The run loop drains input once per tick, so after a slow frame
+/// several moves arrive at once, and gpui, which measures fling speed from
+/// when touches arrive, would read them as a very fast finger.
+#[derive(Default)]
+struct PendingTouchMoves {
+    moves: Vec<(AndroidWindowStatePtr, gpui::TouchEvent)>,
+}
+
+impl PendingTouchMoves {
+    /// Dispatches `input` to `window`, but holds back a touch move until
+    /// [`Self::flush`] or the next other input.
+    fn dispatch(&mut self, window: &AndroidWindowStatePtr, input: PlatformInput) {
+        match input {
+            PlatformInput::Touch(touch) if touch.phase == TouchPhase::Moved => {
+                let pending = self.moves.iter_mut().find(|(pending_window, pending)| {
+                    Rc::ptr_eq(&pending_window.state, &window.state) && pending.id == touch.id
+                });
+                match pending {
+                    Some((_, pending)) => *pending = touch,
+                    None => self.moves.push((window.clone(), touch)),
+                }
+            }
+            input => {
+                self.flush();
+                window.handle_input(input);
+            }
+        }
+    }
+
+    fn flush(&mut self) {
+        for (window, touch) in self.moves.drain(..) {
+            window.handle_input(PlatformInput::Touch(touch));
+        }
+    }
+}
+
 pub struct AndroidPlatform {
     pub(crate) common: RefCell<AndroidCommon>,
     pub(crate) android_app: AndroidApp,
+    gestures: OnceCell<Rc<AndroidGestures>>,
 }
 
 impl AndroidPlatform {
@@ -415,7 +585,19 @@ impl AndroidPlatform {
         Self {
             common: RefCell::new(common),
             android_app,
+            gestures: OnceCell::new(),
         }
+    }
+
+    fn android_gestures(&self) -> Rc<AndroidGestures> {
+        self.gestures
+            .get_or_init(|| {
+                Rc::new(AndroidGestures::new(
+                    &self.android_app,
+                    self.config_scale_factor(),
+                ))
+            })
+            .clone()
     }
 
     /// Translate the gpui-side `WindowParams.bounds` (in logical pixels at
@@ -457,9 +639,13 @@ impl AndroidPlatform {
     /// becomes ~2.1x. Falls back to 1.0 if the density isn't yet
     /// reported (e.g. very early in startup before the first config arrives).
     fn compute_scale_factor(&self) -> f32 {
+        self.config_scale_factor().unwrap_or(1.0)
+    }
+
+    fn config_scale_factor(&self) -> Option<f32> {
         match self.android_app.config().density() {
-            Some(dpi) if dpi > 0 => (dpi as f32 / 160.0).max(1.0),
-            _ => 1.0,
+            Some(dpi) if dpi > 0 => Some((dpi as f32 / 160.0).max(1.0)),
+            _ => None,
         }
     }
 
@@ -525,6 +711,7 @@ impl AndroidPlatform {
             gpu_context,
             appearance,
             self.android_app.clone(),
+            self.android_gestures().tuning.touch_slop,
         );
         window.extra_window_id = Some(window_id);
         // Mirror to the state so the touch / trackpad dispatchers
@@ -648,7 +835,11 @@ impl AndroidPlatform {
             None => return,
         };
 
+        let mut touch_moves = PendingTouchMoves::default();
         while let Ok(event) = rx.try_recv() {
+            if !matches!(event, ExtraWindowEvent::Motion { .. }) {
+                touch_moves.flush();
+            }
             match event {
                 ExtraWindowEvent::Resized {
                     window_id,
@@ -745,10 +936,12 @@ impl AndroidPlatform {
                     action_index,
                     meta_state,
                     button_state,
+                    flags,
                     event_time_millis: _,
                     vscroll,
                     hscroll,
                     positions,
+                    tool_types,
                 } => {
                     let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
                     let Some(state) = entry else {
@@ -766,15 +959,17 @@ impl AndroidPlatform {
                             action_index,
                             meta_state,
                             button_state,
+                            flags,
                             vscroll,
                             hscroll,
                             &positions,
+                            &tool_types,
                             scale,
                             &mut window_state,
                         )
                     };
                     for input in inputs {
-                        state.handle_input(input);
+                        touch_moves.dispatch(&state, input);
                     }
                 }
                 ExtraWindowEvent::Key {
@@ -810,6 +1005,7 @@ impl AndroidPlatform {
                 }
             }
         }
+        touch_moves.flush();
 
         self.common.borrow_mut().extra_event_rx = Some(rx);
     }
@@ -1182,27 +1378,28 @@ impl AndroidPlatform {
             return;
         };
         let scale_factor = self.compute_scale_factor();
+        let mut touch_moves = PendingTouchMoves::default();
         loop {
             let read = iter.next(|event| match event {
                 InputEvent::KeyEvent(key) => match crate::events::translate_key_event(key) {
                     Some(input) => {
-                        window_ptr.handle_input(input);
+                        touch_moves.dispatch(&window_ptr, input);
                         InputStatus::Handled
                     }
                     None => InputStatus::Unhandled,
                 },
                 InputEvent::MotionEvent(motion) => {
-                    let inputs = {
+                    let translated = {
                         let mut state = window_ptr.state.borrow_mut();
                         crate::events::translate_motion_event(motion, scale_factor, &mut state)
                     };
-                    if inputs.is_empty() {
-                        InputStatus::Unhandled
-                    } else {
-                        for input in inputs {
-                            window_ptr.handle_input(input);
-                        }
+                    for input in translated.inputs {
+                        touch_moves.dispatch(&window_ptr, input);
+                    }
+                    if translated.handled {
                         InputStatus::Handled
+                    } else {
+                        InputStatus::Unhandled
                     }
                 }
                 _ => InputStatus::Unhandled,
@@ -1211,6 +1408,7 @@ impl AndroidPlatform {
                 break;
             }
         }
+        touch_moves.flush();
     }
 
     fn handle_main_event(&self, event: android_activity::MainEvent<'_>) {
@@ -1432,6 +1630,10 @@ impl Platform for AndroidPlatform {
         self.common.borrow().foreground_executor.clone()
     }
 
+    fn gestures(&self) -> Option<Rc<dyn PlatformGestures>> {
+        Some(self.android_gestures())
+    }
+
     fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
         self.common.borrow().text_system.clone()
     }
@@ -1442,6 +1644,8 @@ impl Platform for AndroidPlatform {
         // never fires. Clear it before `on_finish_launching` opens the
         // window, which requests the first frame.
         FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
+        // gpui reads the gesture tuning as each window opens.
+        self.android_gestures();
         log::info!("AndroidPlatform::run: invoking on_finish_launching");
         on_finish_launching();
         log::info!("AndroidPlatform::run: entering event loop");
@@ -1669,6 +1873,7 @@ impl Platform for AndroidPlatform {
             gpu_context,
             appearance,
             self.android_app.clone(),
+            self.android_gestures().tuning.touch_slop,
         );
 
         let native_window = self.android_app.native_window().ok_or_else(|| {
