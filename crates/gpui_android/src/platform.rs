@@ -542,11 +542,32 @@ impl AndroidPlatform {
             common.extra_windows.insert(window_id, window.ptr());
             common.active_window = Some(handle);
         }
-        if self.common.borrow().keep_screen_on
+        // These reach the Activities only when they change, so a window
+        // opened since then gets their current values here. Without the
+        // keyboard setting, its Activity refuses the keyboard's text
+        // connection, and typing falls back to plain key presses.
+        let (keep_screen_on, soft_keyboard_setting, trackpad_mode) = {
+            let common = self.common.borrow();
+            (
+                common.keep_screen_on,
+                common.last_soft_keyboard_setting,
+                common.last_trackpad_mode_enabled,
+            )
+        };
+        if keep_screen_on
             && let Err(error) =
                 call_activity_set_keep_screen_on(&self.android_app, Some(window_id), true)
         {
             log::warn!("set_keep_screen_on(w={window_id}, true): {error:#}");
+        }
+        if let Some(enabled) = soft_keyboard_setting
+            && let Err(error) =
+                call_activity_set_soft_keyboard(&self.android_app, Some(window_id), enabled)
+        {
+            log::warn!("set_soft_keyboard_enabled(w={window_id}): {error:#}");
+        }
+        if trackpad_mode {
+            crate::cursor::set_trackpad_mode_active(&self.android_app, Some(window_id), true);
         }
         // Fire the activation observers so the editor's
         // `cx.observe_window_activation` callback runs and enables cursor
