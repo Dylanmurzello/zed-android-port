@@ -6,12 +6,10 @@
 //! returns `[u32 username length][username][password]`.
 
 use android_activity::AndroidApp;
-use anyhow::{Context as _, Result, anyhow};
-use jni::{
-    JNIEnv, JavaVM,
-    objects::{JByteArray, JObject, JString, JValue},
-};
-use util::ResultExt as _;
+use anyhow::{Result, anyhow};
+use jni::objects::{JByteArray, JValue};
+
+use crate::jni_env::with_activity;
 
 pub(crate) fn write(
     android_app: &AndroidApp,
@@ -90,49 +88,4 @@ pub(crate) fn delete(android_app: &AndroidApp, url: &str) -> Result<()> {
             Err(anyhow!("failed to delete Android credential"))
         }
     })
-}
-
-/// Runs `callback` with an attached JNI env and the activity, clearing any
-/// pending Java exception before and after.
-pub(crate) fn with_activity<T>(
-    android_app: &AndroidApp,
-    callback: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T>,
-) -> Result<T> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach the current thread to the JVM")?;
-    // A Java exception left pending by an earlier JNI call on this thread
-    // makes every following call fail, so clear it first; and clear any
-    // exception our own call raises so it can't break the next caller.
-    take_pending_exception(&mut env);
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let result = callback(&mut env, &activity);
-    if let Some(exception) = take_pending_exception(&mut env) {
-        return Err(anyhow!("{exception}"));
-    }
-    result
-}
-
-/// Clears a pending Java exception and returns its description.
-fn take_pending_exception(env: &mut JNIEnv<'_>) -> Option<String> {
-    if !env.exception_check().unwrap_or(false) {
-        return None;
-    }
-    let exception = env.exception_occurred().ok();
-    env.exception_describe().log_err();
-    env.exception_clear().log_err();
-    let description = exception
-        .and_then(|exception| {
-            env.call_method(&exception, "toString", "()Ljava/lang/String;", &[])
-                .ok()
-        })
-        .and_then(|description| description.l().ok())
-        .and_then(|description| {
-            let description = JString::from(description);
-            env.get_string(&description).ok().map(String::from)
-        });
-    // `toString` itself can throw.
-    env.exception_clear().log_err();
-    Some(description.unwrap_or_else(|| "Java exception during a JNI call".to_string()))
 }

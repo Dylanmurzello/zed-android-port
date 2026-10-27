@@ -23,7 +23,7 @@ use jni::{
     sys::jboolean,
 };
 
-use crate::credentials::with_activity;
+use crate::jni_env::with_activity;
 
 /// Process-global AndroidApp handle. Set once at boot via
 /// [`register_android_app`] by `gpui_android::run`; read by the public

@@ -45,9 +45,9 @@ use std::time::Duration;
 use android_activity::AndroidApp;
 use anyhow::{Context as _, Result, bail};
 use futures::channel::{mpsc, oneshot};
-use jni::JavaVM;
 use jni::objects::{GlobalRef, JFloatArray, JIntArray, JObject, JValue};
 use ndk::native_window::NativeWindow;
+use util::ResultExt as _;
 
 /// Hard cap on how long `create_extra_window_blocking` will wait for the
 /// Activity's `surfaceCreated` callback. Cold Activity start in DeX desktop
@@ -286,7 +286,10 @@ pub(crate) fn create_extra_window_blocking(
         let timed_out = std::time::Instant::now() >= deadline;
         if timed_out || !wait(Duration::from_millis(8)) {
             pending_table().as_mut().and_then(|m| m.remove(&window_id));
-            // The surface may have arrived since the check above.
+            // Closing makes a send from now on fail, so the UI thread hands
+            // the surface to `drain_extra_window_events` instead; one that
+            // arrived since the check above is still here.
+            rx.close();
             if let Ok(Some(native_window)) = rx.try_recv() {
                 return Ok(native_window);
             }
@@ -316,9 +319,7 @@ pub(crate) fn create_extra_window_blocking(
 /// expecting the OS to surface that window — on Android we have to
 /// implement that surfacing ourselves.
 pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) {
-    let result = (|| -> Result<()> {
-        let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-        let mut env = vm.attach_current_thread()?;
+    let result = crate::jni_env::with_env(android_app, |env| {
         let activity_ref = match refs_table()
             .as_ref()
             .and_then(|m| m.get(&window_id))
@@ -374,9 +375,7 @@ pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) 
             let id = match env.get_field(&task_info, "taskId", "I") {
                 Ok(v) => v.i()?,
                 Err(_) => {
-                    if env.exception_check().unwrap_or(false) {
-                        let _ = env.exception_clear();
-                    }
+                    env.exception_clear().log_err();
                     env.get_field(&task_info, "id", "I")?.i()?
                 }
             };
@@ -385,12 +384,8 @@ pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) 
                 break;
             }
         }
-
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
         Ok(())
-    })();
+    });
     if let Err(err) = result {
         log::warn!("multi_window: activate_extra_activity({window_id}): {err:#}");
     }
@@ -400,11 +395,10 @@ pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) 
 /// the OS chrome's drag bar (in freeform/desktop windowing) and in Recents.
 /// Best-effort — silently no-ops if the windowId isn't registered (e.g.
 /// gpui called set_title before the Activity finished launching, or after
-/// it closed).
+/// it closed). Calls `setWindowTitle`, which posts `Activity.setTitle` to
+/// the UI thread it must run on.
 pub(crate) fn set_extra_activity_title(android_app: &AndroidApp, window_id: u64, title: &str) {
-    let result = (|| -> Result<()> {
-        let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-        let mut env = vm.attach_current_thread()?;
+    let result = crate::jni_env::with_env(android_app, |env| {
         let activity_ref = match refs_table()
             .as_ref()
             .and_then(|m| m.get(&window_id))
@@ -416,17 +410,12 @@ pub(crate) fn set_extra_activity_title(android_app: &AndroidApp, window_id: u64,
         let title_jstr = env.new_string(title)?;
         env.call_method(
             activity_ref.as_obj(),
-            "setTitle",
-            "(Ljava/lang/CharSequence;)V",
+            "setWindowTitle",
+            "(Ljava/lang/String;)V",
             &[JValue::Object(&title_jstr)],
         )?;
-        // CharSequence subtype check passes for String — JVM dispatches to
-        // setTitle(CharSequence) which delegates to the Activity's window.
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
         Ok(())
-    })();
+    });
     if let Err(err) = result {
         log::warn!("multi_window: set_extra_activity_title({window_id}): {err:#}");
     }
@@ -454,34 +443,23 @@ fn launch_extra_activity(
     window_id: u64,
     bounds: Option<LaunchBounds>,
 ) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let result = launch_extra_activity_inner(&mut env, android_app, window_id, bounds);
-    // The jni crate's `?`-propagation surfaces a Rust error but leaves the
-    // JNI env with a *pending* Java exception. Subsequent JNI calls (e.g.
-    // any logger that touches JNI on cleanup) trip
-    // "JNI GetObjectClass called with pending exception" → process abort.
-    // Always clear before returning.
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_clear();
-    }
-    result
+    crate::jni_env::with_activity(android_app, |env, main_activity| {
+        launch_extra_activity_inner(env, main_activity, window_id, bounds)
+    })
 }
 
 fn launch_extra_activity_inner(
-    env: &mut jni::AttachGuard<'_>,
-    android_app: &AndroidApp,
+    env: &mut jni::JNIEnv<'_>,
+    main_activity: &JObject<'_>,
     window_id: u64,
     bounds: Option<LaunchBounds>,
 ) -> Result<()> {
-    let main_activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-
     // Resolve `ExtraWindowActivity` via MainActivity's ClassLoader. Android
     // splits classloaders per app — the system classloader doesn't see app
     // classes, so `Class.forName(name)` fails with ClassNotFoundException.
     // The standard pattern is to grab the Activity's ClassLoader (which
     // knows about /data/app/<pkg>/base.apk's classes) and use that.
-    let main_class = env.get_object_class(&main_activity)?;
+    let main_class = env.get_object_class(main_activity)?;
     let class_loader = env
         .call_method(
             &main_class,
@@ -504,7 +482,7 @@ fn launch_extra_activity_inner(
     let intent = env.new_object(
         &intent_class,
         "(Landroid/content/Context;Ljava/lang/Class;)V",
-        &[JValue::Object(&main_activity), JValue::Object(&extra_class)],
+        &[JValue::Object(main_activity), JValue::Object(&extra_class)],
     )?;
 
     let extra_key = env.new_string("com.zdroid.window_id")?;
@@ -553,14 +531,14 @@ fn launch_extra_activity_inner(
             .call_method(&opts, "toBundle", "()Landroid/os/Bundle;", &[])?
             .l()?;
         env.call_method(
-            &main_activity,
+            main_activity,
             "startActivity",
             "(Landroid/content/Intent;Landroid/os/Bundle;)V",
             &[JValue::Object(&intent), JValue::Object(&bundle)],
         )?;
     } else {
         env.call_method(
-            &main_activity,
+            main_activity,
             "startActivity",
             "(Landroid/content/Intent;)V",
             &[JValue::Object(&intent)],
@@ -570,11 +548,11 @@ fn launch_extra_activity_inner(
     Ok(())
 }
 
-fn call_finish_and_remove_task(_android_app: &AndroidApp, activity: &GlobalRef) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(_android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    env.call_method(activity.as_obj(), "finishAndRemoveTask", "()V", &[])?;
-    Ok(())
+fn call_finish_and_remove_task(android_app: &AndroidApp, activity: &GlobalRef) -> Result<()> {
+    crate::jni_env::with_env(android_app, |env| {
+        env.call_method(activity.as_obj(), "finishAndRemoveTask", "()V", &[])?;
+        Ok(())
+    })
 }
 
 fn dispatch_event(event: ExtraWindowEvent) {

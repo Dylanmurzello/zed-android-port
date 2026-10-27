@@ -60,14 +60,17 @@
           relevant config tells the OS to deliver onConfigurationChanged()
           instead. density+colorMode handle cross-display moves; fontScale +
           fontWeightAdjustment handle accessibility setting changes;
-          layoutDirection handles RTL toggle. Verbose but cheap.
+          layoutDirection handles RTL toggle; grammaticalGender handles the
+          "Terms of address" language setting. A recreation would end the app:
+          MainActivity.onDestroy exits the process because gpui can't restart
+          in it. Verbose but cheap.
         -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Zdroid.Splash"
             android:windowLayoutInDisplayCutoutMode="always"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen|grammaticalGender"
             android:windowSoftInputMode="adjustResize|stateAlwaysHidden">
             <meta-data
                 android:name="android.app.lib_name"
@@ -93,7 +96,7 @@
             android:documentLaunchMode="always"
             android:taskAffinity="com.zdroid.extra"
             android:windowLayoutInDisplayCutoutMode="always"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen|grammaticalGender"
             android:windowSoftInputMode="adjustResize|stateAlwaysHidden"/>
 
         <!--

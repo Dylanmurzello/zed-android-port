@@ -907,9 +907,8 @@ pub(crate) fn translate(
             // `hscroll`, but no arm consumed them before, so the wheel
             // did nothing. Emit a Lines-based Scroll event so the editor
             // scales by line height like the desktop discrete-wheel
-            // path. Sign passes through as the framework reports it
-            // (positive vscroll = wheel away from user).
-            let dx = event.hscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
+            // path. Signs as in `events::mouse::wheel_scroll`.
+            let dx = -event.hscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
             let dy = event.vscroll * MOUSE_WHEEL_LINES_PER_NOTCH;
             if dx != 0.0 || dy != 0.0 {
                 out.push(PlatformInput::Scroll(ScrollEvent {

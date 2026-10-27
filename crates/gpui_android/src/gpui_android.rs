@@ -13,6 +13,7 @@ pub mod dns_bridge;
 mod events;
 mod frame_timing;
 mod ime;
+mod jni_env;
 mod keyboard;
 mod multi_window;
 mod platform;

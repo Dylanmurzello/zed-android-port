@@ -126,7 +126,6 @@ use android_activity::AndroidApp;
 use anyhow::Context as _;
 use futures::channel::mpsc;
 use jni::JNIEnv;
-use jni::JavaVM;
 use jni::objects::{JObject, JString, JValue};
 
 use crate::window::AndroidWindowStatePtr;
@@ -206,31 +205,26 @@ fn call_activity_restart_ime(
     extra_window_id: Option<u64>,
     mode_id: i32,
 ) -> anyhow::Result<()> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let args = [mode_id.into()];
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(activity_ref.as_obj(), "restartImeForTarget", "(I)V", &args)
-                .context("call ExtraWindowActivity.restartImeForTarget")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let args = [mode_id.into()];
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(activity_ref.as_obj(), "restartImeForTarget", "(I)V", &args)
+                    .context("call ExtraWindowActivity.restartImeForTarget")?;
+            }
+            None => {
+                env.call_method(activity, "restartImeForTarget", "(I)V", &args)
+                    .context("call MainActivity.restartImeForTarget")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, "restartImeForTarget", "(I)V", &args)
-                .context("call MainActivity.restartImeForTarget")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Input events the IME wants the gpui side to apply. Each variant
@@ -348,7 +342,7 @@ pub(crate) fn drain_ime_events(
     lookup_extra: impl Fn(u64) -> Option<AndroidWindowStatePtr>,
     rx: &mut mpsc::UnboundedReceiver<(u64, ImeEvent)>,
 ) {
-    while let Ok(Some((window_id, event))) = rx.try_next() {
+    while let Ok((window_id, event)) = rx.try_recv() {
         let target = if window_id == 0 {
             primary_window.cloned()
         } else {
@@ -588,49 +582,44 @@ fn call_activity_update_text_state(
     comp_start: i32,
     comp_end: i32,
 ) -> anyhow::Result<()> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let text_jstring = env.new_string(text).context("new_string for IME text")?;
-    let args = [
-        (&text_jstring).into(),
-        window_start.into(),
-        sel_start.into(),
-        sel_end.into(),
-        comp_start.into(),
-        comp_end.into(),
-    ];
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(
-                activity_ref.as_obj(),
-                "updateImeTextState",
-                "(Ljava/lang/String;IIIII)V",
-                &args,
-            )
-            .context("call ExtraWindowActivity.updateImeTextState")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let text_jstring = env.new_string(text).context("new_string for IME text")?;
+        let args = [
+            (&text_jstring).into(),
+            window_start.into(),
+            sel_start.into(),
+            sel_end.into(),
+            comp_start.into(),
+            comp_end.into(),
+        ];
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "updateImeTextState",
+                    "(Ljava/lang/String;IIIII)V",
+                    &args,
+                )
+                .context("call ExtraWindowActivity.updateImeTextState")?;
+            }
+            None => {
+                env.call_method(
+                    activity,
+                    "updateImeTextState",
+                    "(Ljava/lang/String;IIIII)V",
+                    &args,
+                )
+                .context("call MainActivity.updateImeTextState")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(
-                &activity,
-                "updateImeTextState",
-                "(Ljava/lang/String;IIIII)V",
-                &args,
-            )
-            .context("call MainActivity.updateImeTextState")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
@@ -780,33 +769,28 @@ fn call_activity(
     signature: &str,
     args: &[JValue],
 ) -> anyhow::Result<()> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                // Activity tore down between dispatch and call;
-                // silently drop. The keyboard would have no
-                // surface to attach to anyway.
-                return Ok(());
-            };
-            env.call_method(activity_ref.as_obj(), method, signature, args)
-                .with_context(|| format!("call ExtraWindowActivity.{method}()"))?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    // Activity tore down between dispatch and call;
+                    // silently drop. The keyboard would have no
+                    // surface to attach to anyway.
+                    return Ok(());
+                };
+                env.call_method(activity_ref.as_obj(), method, signature, args)
+                    .with_context(|| format!("call ExtraWindowActivity.{method}()"))?;
+            }
+            None => {
+                env.call_method(activity, method, signature, args)
+                    .with_context(|| format!("call MainActivity.{method}()"))?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, method, signature, args)
-                .with_context(|| format!("call MainActivity.{method}()"))?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 // --------------------------------------------------------------------

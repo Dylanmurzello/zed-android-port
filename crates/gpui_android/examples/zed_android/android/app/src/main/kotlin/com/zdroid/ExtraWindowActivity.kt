@@ -10,6 +10,7 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -358,6 +359,26 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 .hide(WindowInsetsCompat.Type.ime())
             setImeShown(false)
         }
+    }
+
+    /// Zed's "prevent idle sleep", requested while an agent works; see
+    /// `MainActivity.setKeepScreenOn`.
+    @Suppress("unused")
+    fun setKeepScreenOn(on: Boolean) {
+        runOnUiThread {
+            if (on) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    /// Called by Rust (`multi_window::set_extra_activity_title`) from the
+    /// gpui thread; `setTitle` must run on the UI thread.
+    @Suppress("unused")
+    fun setWindowTitle(windowTitle: String) {
+        runOnUiThread { title = windowTitle }
     }
 
     /// Show or hide the IME on the user's request; see
@@ -749,7 +770,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             InputModality.setNonPointer()
             applyCursorVisibility()
         }
-        if (extraWindowId >= 0L) {
+        if (extraWindowId >= 0L && !isSystemKey(event.keyCode)) {
             NativeBridge.nativeOnExtraKeyEvent(
                 extraWindowId,
                 event.action,
@@ -760,6 +781,18 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    // The keys GameActivity's default key filter leaves to the system in the
+    // main window, so volume and the like work in every window.
+    private fun isSystemKey(keyCode: Int): Boolean = when (keyCode) {
+        KeyEvent.KEYCODE_VOLUME_UP,
+        KeyEvent.KEYCODE_VOLUME_DOWN,
+        KeyEvent.KEYCODE_VOLUME_MUTE,
+        KeyEvent.KEYCODE_CAMERA,
+        KeyEvent.KEYCODE_ZOOM_IN,
+        KeyEvent.KEYCODE_ZOOM_OUT -> true
+        else -> false
     }
 
     private inner class SurfaceCallback(private val id: Long) : SurfaceHolder.Callback {

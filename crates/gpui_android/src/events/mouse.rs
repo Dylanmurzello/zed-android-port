@@ -9,7 +9,7 @@
 
 use gpui::{
     Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection, Pixels,
-    PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
+    PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point,
 };
 
 /// Android `MotionEvent.BUTTON_*` bit constants. NDK definitions live in
@@ -99,6 +99,12 @@ pub(crate) fn button_up(
 /// and macOS's raw `scrollingDeltaY`). The two conventions align: pass
 /// through unchanged. A prior `-vscroll` flip caused BT-mouse scrolls
 /// to feel backwards, reported via the @-mention loop on 2026-05-13.
+///
+/// `AXIS_HSCROLL` is +1.0 for "right", while gpui's `x` is +1.0 for "scroll
+/// content left" (Zed's Wayland backend negates horizontal axis values for
+/// the same reason), so `hscroll` is negated.
+///
+/// The `android_input.invert_scroll` setting applies here too.
 pub(crate) fn wheel_scroll(
     vscroll: f32,
     hscroll: f32,
@@ -110,27 +116,9 @@ pub(crate) fn wheel_scroll(
     }
     Some(PlatformInput::Scroll(ScrollEvent {
         position,
-        delta: ScrollDelta::Lines(point(hscroll, vscroll)),
+        delta: crate::ime::invert_scroll_delta(ScrollDelta::Lines(point(-hscroll, vscroll))),
         modifiers,
         touch_phase: TouchPhase::Moved,
         source: ScrollSource::Pointer,
     }))
-}
-
-/// Pixel-precision scroll synthesized from multi-touch centroid delta.
-/// Trackpad two-finger swipes that arrive as multi-pointer ACTION_MOVE
-/// (as from Samsung's cover trackpad) feed into this. Caller does the scale-
-/// factor divide and supplies logical-pixel deltas.
-pub(crate) fn pixel_scroll(
-    delta: Point<Pixels>,
-    position: Point<Pixels>,
-    modifiers: Modifiers,
-) -> PlatformInput {
-    PlatformInput::Scroll(ScrollEvent {
-        position,
-        delta: ScrollDelta::Pixels(delta),
-        modifiers,
-        touch_phase: TouchPhase::Moved,
-        source: ScrollSource::Pointer,
-    })
 }

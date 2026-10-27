@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use android_activity::AndroidApp;
 use anyhow::{Context as _, Result};
 use futures::channel::oneshot;
-use jni::{JavaVM, objects::JObject, objects::JString};
+use jni::objects::{JObject, JString};
 
 type PendingPathsSender = oneshot::Sender<Result<Option<Vec<PathBuf>>>>;
 type PendingPathSender = oneshot::Sender<Result<Option<PathBuf>>>;
@@ -93,26 +93,24 @@ fn send_cancel(p: Option<Pending>) {
 
 fn call_void_method(android_app: &AndroidApp, method: &str) -> Result<()> {
     log::info!("saf: calling MainActivity.{method}()");
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    env.call_method(&activity, method, "()V", &[])?;
-    log::info!("saf: MainActivity.{method}() returned");
-    Ok(())
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        env.call_method(activity, method, "()V", &[])?;
+        log::info!("saf: MainActivity.{method}() returned");
+        Ok(())
+    })
 }
 
 fn launch_create_document(android_app: &AndroidApp, suggested_name: Option<&str>) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let name = env.new_string(suggested_name.unwrap_or("untitled"))?;
-    env.call_method(
-        &activity,
-        "launchCreateDocument",
-        "(Ljava/lang/String;)V",
-        &[(&name).into()],
-    )?;
-    Ok(())
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let name = env.new_string(suggested_name.unwrap_or("untitled"))?;
+        env.call_method(
+            activity,
+            "launchCreateDocument",
+            "(Ljava/lang/String;)V",
+            &[(&name).into()],
+        )?;
+        Ok(())
+    })
 }
 
 /// Called from MainActivity's ActivityResultLauncher callback.
