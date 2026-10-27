@@ -3,9 +3,9 @@
 //! workspace stack and shows the WelcomePage on first launch (no auto-
 //! opened project) — matches official Zed's first-run behaviour.
 
+mod android_input;
 mod app_updater;
 mod header;
-mod input_buttons;
 mod logging;
 mod menu_bar;
 mod noexec_modal;
@@ -864,6 +864,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     info!("zed_android: settings + theme + editor init");
     settings::init(cx);
+    android_input::set_default_settings(cx);
     zlog_settings::init(cx);
     // `gpui_tokio::init` registers the global Tokio runtime that wasmtime's
     // async support taps into for extension epoch interruption + WASI
@@ -908,22 +909,17 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     theme_settings::init(theme::LoadThemes::All(Box::new(assets::Assets)), cx);
     editor::init(cx);
 
-    // Seed the `onboarding::runtime_global::ActiveRuntime` global with
-    // the user's runtime.toml selection — NOT `active_provider`'s
-    // result. `active_provider` falls back to a default Bootstrap
-    // adapter when no toml exists so env init has something to ask;
-    // that fallback is NOT a user selection and the onboarding label
-    // must not claim "Current: Bootstrap" for a user who never picked
-    // anything. Read the toml directly: `None` flows to the label as
-    // "Not configured yet" and disappears the instant the picker
-    // writes a selection via `cx.set_global` (see runtime_picker.rs).
     let current_from_toml = RuntimeFile::load(&data_path.join("usr/etc/zd-runtime.toml"))
         .ok()
         .flatten()
         .map(|f| f.runtime.kind);
-    cx.set_global(onboarding::runtime_global::ActiveRuntime {
+    cx.set_global(runtime_picker::ActiveRuntime {
         current: current_from_toml,
     });
+    cx.set_global(onboarding::AndroidBasicsSections(vec![
+        runtime_picker::render_onboarding_section,
+        android_input::render_onboarding_section,
+    ]));
 
     let app_db = AppDatabase::new();
     cx.set_global(app_db);
@@ -1055,7 +1051,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // is stale. Observer fires once immediately + on every
     // SettingsStore change, so the gate is always fresh.
     let push_android_input_atomics = |cx: &gpui::App| {
-        let android_input = workspace::AndroidInputSettings::get_global(cx);
+        let android_input = android_input::AndroidInputSettings::get_global(cx);
         gpui_android::set_on_screen_keyboard_enabled(android_input.on_screen_keyboard);
         let trackpad_active = android_input.trackpad_mode && android_input.trackpad_mode_active;
         gpui_android::set_trackpad_mode_enabled(trackpad_active);
@@ -1445,8 +1441,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         let header = cx.new(|_| header::Header::new(menu_bar, title_bar));
         workspace.set_titlebar_item(header.into(), window, cx);
 
-        let soft_keyboard_button = cx.new(input_buttons::SoftKeyboardButton::new);
-        let trackpad_mode_button = cx.new(input_buttons::TrackpadModeButton::new);
+        let soft_keyboard_button = cx.new(android_input::SoftKeyboardButton::new);
+        let trackpad_mode_button = cx.new(android_input::TrackpadModeButton::new);
         workspace.status_bar().update(cx, |status_bar, cx| {
             status_bar.add_right_item(soft_keyboard_button, window, cx);
             status_bar.add_right_item(trackpad_mode_button, window, cx);

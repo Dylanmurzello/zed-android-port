@@ -159,9 +159,9 @@ use util::{
 };
 use uuid::Uuid;
 pub use workspace_settings::{
-    AccessibleMode, AndroidInputSettings, AutosaveSetting, BottomDockLayout,
-    EncodingDisplayOptions, FocusFollowsMouse, RestoreOnStartupBehavior, StatusBarSettings,
-    TabBarSettings, WorkspaceSettings, closing_last_window_quits_app, observe_accessible_mode,
+    AccessibleMode, AutosaveSetting, BottomDockLayout, EncodingDisplayOptions, FocusFollowsMouse,
+    RestoreOnStartupBehavior, StatusBarSettings, TabBarSettings, WorkspaceSettings,
+    closing_last_window_quits_app, observe_accessible_mode,
 };
 use zed_actions::{Spawn, feedback::FileBugReport, theme::ToggleMode};
 
