@@ -293,7 +293,7 @@ impl TyLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// See note on RustLspAdapter — Android stub for compile-time only.
+// See the note on RustLspAdapter: the `-gnu` asset runs through the engine loader.
 #[cfg(target_os = "android")]
 impl TyLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
@@ -2463,7 +2463,7 @@ impl RuffLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// See note on RustLspAdapter — Android stub for compile-time only.
+// See the note on RustLspAdapter: the `-gnu` asset runs through the engine loader.
 #[cfg(target_os = "android")]
 impl RuffLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;

@@ -81,10 +81,11 @@ doesn't exist on Linux) and complains. **Bigger problem**: `HOME` and
 `~/.bashrc`, subprocess scratch space.
 
 Fix: filter known-Android-only env vars in `build_command_posix`
-before they reach the `exec env` invocation. Strip:
-`LD_PRELOAD`, `HOME`, `TMPDIR`, `PREFIX`, `SSL_CERT_FILE`,
-`CURL_CA_BUNDLE`, anything starting with `TERMUX__` or `TERMUX_APP__`.
-Generic dev env (NVM_DIR, PYENV_ROOT, RUSTUP_HOME, etc.) keeps
+before they reach the `exec env` invocation. Since the rootfs engine
+replaced the Termux bootstrap, the captured environment is the guest's
+(`HOME=/root`, `TMPDIR=/tmp`) plus the engine's own configuration, so
+the list is: `LD_PRELOAD`, `HOME`, `TMPDIR` and anything starting with
+`ZD_`. Generic dev env (NVM_DIR, PYENV_ROOT, RUSTUP_HOME, etc.) keeps
 forwarding so non-Android Zed clients aren't regressed.
 
 ### F. `failed to fetch release: "invalid channel: dev"`
@@ -162,9 +163,9 @@ whatever ReleaseChannel inferred, so the app data dir stays put.
 
 `crates/remote/src/transport/ssh.rs::build_command_posix` filters
 input_env before assembling the `exec env K=V K=V ./remote_server`
-invocation. The filter is keyed on env-var name — strips a fixed
-list of Android/Termux-only names, plus any `TERMUX__` /
-`TERMUX_APP__` prefix. Non-Android Zed clients are unaffected because
+invocation. The filter is keyed on env-var name and strips `LD_PRELOAD`,
+`HOME`, `TMPDIR` and any `ZD_` prefix (the rootfs engine's
+configuration block). Non-Android Zed clients are unaffected because
 those env vars don't exist in their environment.
 
 ## Verifying the fix on device

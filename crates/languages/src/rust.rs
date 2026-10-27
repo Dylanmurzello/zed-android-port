@@ -69,16 +69,13 @@ impl RustLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// Android: upstream rust-analyzer releases only publish `-gnu` and
-// `-musl` aarch64 assets, no `aarch64-linux-android` asset. The Android
-// runtime adapters (bootstrap, chroot) provide a Termux-flavored or
-// chroot-internal apt-installed rust-analyzer via `pkg install
-// rust-analyzer`, which `check_if_user_installed` resolves first. The
-// constants here only matter when PATH lookup misses and the download
-// fallback fires; default to the `-gnu` asset name so the URL at
-// least matches a real upstream artifact (the binary won't run on
-// bionic without a wrapper, but at minimum the error path stops
-// 404'ing on a malformed URL).
+// Android: upstream rust-analyzer publishes `-gnu` and `-musl` aarch64
+// assets and no `aarch64-linux-android` one. Every language server runs
+// inside the Ubuntu rootfs through the engine loader (see
+// `util::command`), so the `-gnu` build is the right asset: it is a
+// Linux binary and the loader runs it as one. `check_if_user_installed`
+// still wins when rustup's `rust-analyzer` component is installed, via
+// the `zd-runtime` farm on PATH.
 #[cfg(target_os = "android")]
 impl RustLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;

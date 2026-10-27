@@ -119,86 +119,121 @@ pub fn env_root_program_path(program: &OsStr) -> Option<std::path::PathBuf> {
     Some(path.to_path_buf())
 }
 
-/// Android-only shebang rewrite helper.
+/// Translate a `PATH` Zed built for a child, in host terms, into the
+/// guest view the loader will apply to that child.
 ///
-/// On Android the Zed app process lives in bionic's filesystem
-/// sandbox. There is no `/usr/bin/env` on host — it lives only
-/// inside the user's chroot / bootstrap. So a script whose first
-/// line is `#!/usr/bin/env python3` (the standard portable shebang)
-/// can't be exec'd directly: kernel exec reads the shebang, tries
-/// to launch `/usr/bin/env`, ENOENT, the whole spawn fails before
-/// PATH lookup ever happens.
+/// The loader installs the guest environment from `ZD_GUEST_ENV` at every
+/// exec Zed initiates, and its `PATH` entry replaces whatever the spawn
+/// carried, so a per-spawn `PATH` never reached the guest: npm's
+/// lifecycle scripts run as `sh -c "node install.js"` and need the managed
+/// Node's `bin` on it (esbuild installs itself that way). Entries that
+/// exist in the guest view keep their place ahead of the configured guest
+/// `PATH`; Android's own partitions and the bridge's symlink farm, which
+/// points at the loader itself, are host-only and dropped.
 ///
-/// We rescue this by detecting the pattern at `Command::new` time:
-/// if the program is an absolute path to a regular file whose first
-/// line is `#!/usr/bin/env <interp>`, return `(interp, path_to_script)`.
-/// The caller then builds the Command as
-/// `Command::new(interp).arg(script_path)` — the interpreter is a
-/// SHORT name, kernel PATH lookup finds `zd-runtime/<interp>`, that
-/// re-execs into `zd-exec`, the active runtime adapter dispatches
-/// the spawn into the right environment (chroot / bootstrap), and
-/// the script runs with its interpreter resolved against the
-/// adapter's `/usr/bin/python3` (or whichever) inside that env.
-///
-/// Returns `None` for: relative-path programs (PATH lookup handles
-/// them on its own), non-shebang files (ELF binaries), shebangs
-/// other than `#!/usr/bin/env <X>` (rare; would need different
-/// handling), and any I/O failure (we silently fall through to the
-/// stock spawn behavior — the original error surfaces unchanged).
-///
-/// Cost: one `open(2)` + first-line read at every `Command::new`.
-/// On a freshly-mmaped filesystem this is microseconds; for already
-/// hot pages it's a couple syscalls. LSP spawn is a once-per-session
-/// event, so even a few hundred microseconds is invisible.
+/// Returns the `ZD_GUEST_ENV` assignment to set on the child, or `None`
+/// when this process does not run under the rootfs engine.
 #[cfg(target_os = "android")]
-pub fn detect_env_shebang(program: &OsStr) -> Option<(std::ffi::OsString, std::path::PathBuf)> {
-    use std::io::{BufRead, BufReader, Read};
+pub fn guest_env_for_path(host_path: &OsStr) -> Option<(&'static str, std::ffi::OsString)> {
+    let spec = env::var(zd_engine_core::env::GUEST_ENV).ok()?;
+    let root = ENVIRONMENT_ROOT.get().map(|root| root.as_path());
+    let merged = merge_guest_path(&spec, &host_path.to_string_lossy(), root);
+    Some((zd_engine_core::env::GUEST_ENV, merged.into()))
+}
 
-    let path = std::path::Path::new(program);
-    if !path.is_absolute() {
-        return None;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn merge_guest_path(spec: &str, host_path: &str, root: Option<&std::path::Path>) -> String {
+    const HOST_ONLY_PREFIXES: &[&str] = &[
+        "/system/",
+        "/apex/",
+        "/vendor/",
+        "/product/",
+        "/odm/",
+        "/data/app/",
+    ];
+    let host_only = |entry: &str| {
+        HOST_ONLY_PREFIXES
+            .iter()
+            .any(|prefix| entry.starts_with(prefix))
+            || root.is_some_and(|root| {
+                let path = std::path::Path::new(entry);
+                path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin"))
+            })
+    };
+    let mut entries: Vec<&str> = Vec::new();
+    for entry in host_path.split(':') {
+        if entry.starts_with('/') && !host_only(entry) && !entries.contains(&entry) {
+            entries.push(entry);
+        }
     }
-    let file = std::fs::File::open(path).ok()?;
-    // Cap the read at a reasonable shebang length (256 bytes) so we
-    // never accidentally slurp a huge binary into memory just to find
-    // out it doesn't have a shebang.
-    let mut reader = BufReader::new(file.take(256));
-    let mut first = String::new();
-    reader.read_line(&mut first).ok()?;
-    let first = first.trim_end();
+    let separator = zd_engine_core::LIST_SEPARATOR.to_string();
+    let mut items: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for item in spec.split(&separator) {
+        if let Some(guest_path) = item.strip_prefix("PATH=") {
+            for entry in guest_path.split(':') {
+                if !entry.is_empty() && !entries.contains(&entry) {
+                    entries.push(entry);
+                }
+            }
+            items.push(format!("PATH={}", entries.join(":")));
+            replaced = true;
+        } else if !item.is_empty() {
+            items.push(item.to_string());
+        }
+    }
+    if !replaced {
+        items.push(format!("PATH={}", entries.join(":")));
+    }
+    items.join(&separator)
+}
 
-    let rest = first.strip_prefix("#!/usr/bin/env ")?;
-    // `#!/usr/bin/env -S python3 -u` (rare GNU extension) leaves the
-    // first whitespace-split token as `-S`; ignore those forms — we'd
-    // need full shebang arg parsing to handle them correctly and the
-    // chrooted env's kernel will itself handle them if we route there.
-    let interp = rest.split_whitespace().next()?;
-    if interp.starts_with('-') {
-        return None;
+#[cfg(test)]
+mod guest_path_tests {
+    use super::merge_guest_path;
+    use std::path::Path;
+
+    const SPEC: &str = "HOME=/root;PATH=/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp";
+
+    #[test]
+    fn managed_node_dir_leads_and_host_dirs_drop() {
+        let root = Path::new("/data/user/0/com.zdroid/files");
+        let host_path = "/data/user/0/com.zdroid/files/node/v24/bin:/data/user/0/com.zdroid/files/zd-runtime:/data/user/0/com.zdroid/files/bin:/system/bin";
+        assert_eq!(
+            merge_guest_path(SPEC, host_path, Some(root)),
+            "HOME=/root;PATH=/data/user/0/com.zdroid/files/node/v24/bin:/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp"
+        );
     }
 
-    Some((std::ffi::OsString::from(interp), path.to_path_buf()))
+    #[test]
+    fn a_captured_guest_path_keeps_its_order() {
+        let host_path = "/root/.local/bin:/usr/bin:/usr/local/bin:/bin";
+        assert_eq!(
+            merge_guest_path(SPEC, host_path, None),
+            "HOME=/root;PATH=/root/.local/bin:/usr/bin:/usr/local/bin:/bin;TMPDIR=/tmp"
+        );
+    }
+
+    #[test]
+    fn a_spec_without_path_gains_one() {
+        assert_eq!(
+            merge_guest_path("HOME=/root", "/opt/bin:relative:/system/bin", None),
+            "HOME=/root;PATH=/opt/bin"
+        );
+    }
 }
 
 #[cfg(target_os = "android")]
 pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    // Same env_root bridge + shebang fixup as `util::command::Command::new`;
-    // mirrored here so synchronous spawn sites get the rewrite too.
-    // See the helper fns above for the full rationale.
+    // Same env_root bridge as `util::command::Command::new`, mirrored here
+    // so synchronous spawn sites get the rewrite too.
     let program = program.as_ref();
     if let Some(program_path) = env_root_program_path(program) {
         let mut cmd = std::process::Command::new(ZD_EXEC_PROGRAM);
         cmd.arg(program_path);
         return cmd;
     }
-    match detect_env_shebang(program) {
-        Some((interp, script)) => {
-            let mut cmd = std::process::Command::new(interp);
-            cmd.arg(script);
-            cmd
-        }
-        None => std::process::Command::new(program),
-    }
+    std::process::Command::new(program)
 }
 
 #[cfg(target_os = "windows")]

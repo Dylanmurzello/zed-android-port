@@ -136,6 +136,10 @@ impl RootfsAdapter {
 
     /// Run a guest program to completion with a deadline, capturing its
     /// output. Used by the health check and the self-test.
+    // The adapter is the loader's spawner itself and is only called from
+    // background threads; the smol wrapper would route back through the
+    // spawn bridge.
+    #[allow(clippy::disallowed_methods)]
     pub fn run_captured(
         &self,
         program: &str,
@@ -288,6 +292,8 @@ impl RuntimeProvider for RootfsAdapter {
         super::rootfs_install::uninstall(self)
     }
 
+    // See `run_captured`.
+    #[allow(clippy::disallowed_methods)]
     fn spawn(&self, req: SpawnRequest) -> Result<Box<dyn SpawnHandle>> {
         let mut command = self.command(&req.program);
         command.args(&req.args);

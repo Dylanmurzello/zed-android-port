@@ -37,6 +37,22 @@ impl CodeLldbDebugAdapter {
         obj.entry("cwd")
             .or_insert(delegate.worktree_root_path().to_string_lossy().into());
 
+        if cfg!(target_os = "android") {
+            // Inside the rootfs engine every translated path syscall reaches the
+            // debuggee as a SIGSYS that its own handler services, and lldb's default
+            // disposition stops on SIGSYS. CodeLLDB creates its debugger without
+            // sourcing ~/.lldbinit, so the rule has to travel with the session.
+            let init_commands = obj
+                .entry("initCommands")
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(commands) = init_commands.as_array_mut() {
+                commands.insert(
+                    0,
+                    Value::String("process handle SIGSYS -n false -p true -s false".into()),
+                );
+            }
+        }
+
         let request = self.request_kind(&configuration).await?;
 
         Ok(dap::StartDebuggingRequestArguments {
@@ -61,7 +77,7 @@ impl CodeLldbDebugAdapter {
         };
         let platform = match std::env::consts::OS {
             "macos" => "darwin",
-            "linux" => "linux",
+            "linux" | "android" => "linux",
             "windows" => "win32",
             unsupported => {
                 anyhow::bail!("unsupported operating system {unsupported}");

@@ -28,7 +28,9 @@ feedback = { path = "../../../feedback" }
 file_finder = { path = "../../../file_finder" }
 fs = { path = "../../../fs" }
 futures = "0.3"
+dap_adapters = { path = "../../../dap_adapters" }
 debug_adapter_extension = { path = "../../../debug_adapter_extension" }
+debugger_ui = { path = "../../../debugger_ui" }
 extension = { path = "../../../extension" }
 extension_host = { path = "../../../extension_host" }
 extensions_ui = { path = "../../../extensions_ui" }

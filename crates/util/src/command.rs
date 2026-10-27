@@ -70,7 +70,7 @@ pub use gpui_util::new_std_command;
 #[cfg(target_os = "android")]
 pub use gpui_util::register_environment_root;
 #[cfg(target_os = "android")]
-use gpui_util::{ZD_EXEC_PROGRAM, detect_env_shebang, env_root_program_path};
+use gpui_util::{ZD_EXEC_PROGRAM, env_root_program_path};
 
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
@@ -99,39 +99,16 @@ impl Command {
         }
         #[cfg(target_os = "android")]
         {
-            // Two rewrites, in this order:
-            //
-            //   1. env-root bridge — if `program` is an absolute path
-            //      under the active adapter's `environment_root()`,
-            //      rewrite to `zd-exec <program>`. zd-exec dispatches
-            //      the spawn into the configured runtime (chroot /
-            //      bootstrap / external Termux), so glibc-linked
-            //      binaries from inside a chroot rootfs run where
-            //      their loader actually exists. See
-            //      `env_root_program_path` for the full rationale.
-            //
-            //   2. shebang rewrite for absolute-path script invocations
-            //      that need `/usr/bin/env`. See `detect_env_shebang`
-            //      for the full rationale; tl;dr the host has no
-            //      `/usr/bin/env`, so we replace the program with the
-            //      script's declared interpreter and let kernel PATH
-            //      lookup route through `zd-runtime/<interp>` into the
-            //      chroot/bootstrap that does have it.
-            //
-            // The env-root bridge wins when both could apply (e.g. a
-            // script that lives inside env_root): routing through
-            // zd-exec is the more general fix and the chroot adapter
-            // will resolve shebangs natively once the script is exec'd
-            // inside the rootfs.
+            // The env-root bridge: an absolute `program` under the active
+            // adapter's `environment_root()` is rewritten to `zd-exec
+            // <program>`, which is the engine loader, so Linux binaries
+            // from the rootfs run inside it. Scripts need nothing here:
+            // the loader handles `#!` lines itself, including
+            // `#!/usr/bin/env`. See `env_root_program_path`.
             let program_ref = program.as_ref();
             if let Some(program_path) = env_root_program_path(program_ref) {
                 let mut cmd = smol::process::Command::new(ZD_EXEC_PROGRAM);
                 cmd.arg(program_path);
-                return Self(cmd);
-            }
-            if let Some((interp, script)) = detect_env_shebang(program_ref) {
-                let mut cmd = smol::process::Command::new(interp);
-                cmd.arg(script);
                 return Self(cmd);
             }
             Self(smol::process::Command::new(program_ref))
@@ -159,6 +136,12 @@ impl Command {
     }
 
     pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
+        #[cfg(target_os = "android")]
+        if key.as_ref() == "PATH"
+            && let Some((guest_env_key, guest_env)) = gpui_util::guest_env_for_path(val.as_ref())
+        {
+            self.0.env(guest_env_key, guest_env);
+        }
         self.0.env(key, val);
         self
     }
@@ -169,7 +152,9 @@ impl Command {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        self.0.envs(vars);
+        for (key, val) in vars {
+            self.env(key, val);
+        }
         self
     }
 

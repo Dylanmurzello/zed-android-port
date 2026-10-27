@@ -3387,6 +3387,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dap_adapters"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "collections",
+ "dap",
+ "dotenvy",
+ "fs",
+ "futures",
+ "gpui",
+ "json_dotpath",
+ "language",
+ "log",
+ "paths",
+ "serde",
+ "serde_json",
+ "smol",
+ "task",
+ "util",
+]
+
+[[package]]
 name = "darling"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3539,6 +3562,75 @@ dependencies = [
  "serde_json",
  "task",
  "util",
+]
+
+[[package]]
+name = "debugger_tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dap",
+ "editor",
+ "futures",
+ "gpui",
+ "project",
+ "serde_json",
+ "settings",
+ "smol",
+ "util",
+ "workspace",
+]
+
+[[package]]
+name = "debugger_ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitflags 2.11.1",
+ "client",
+ "collections",
+ "command_palette_hooks",
+ "dap",
+ "db",
+ "debugger_tools",
+ "editor",
+ "feature_flags",
+ "file_icons",
+ "futures",
+ "fuzzy",
+ "gpui",
+ "hex",
+ "indoc",
+ "itertools 0.14.0",
+ "language",
+ "log",
+ "menu",
+ "notifications",
+ "parking_lot",
+ "parse_int",
+ "paths",
+ "picker",
+ "pretty_assertions",
+ "project",
+ "rpc",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_json_lenient",
+ "settings",
+ "sysinfo 0.37.2",
+ "task",
+ "tasks_ui",
+ "terminal",
+ "terminal_view",
+ "text",
+ "theme",
+ "theme_settings",
+ "ui",
+ "ui_input",
+ "util",
+ "workspace",
+ "zed_actions",
 ]
 
 [[package]]
@@ -3858,6 +3950,12 @@ dependencies = [
  "strum 0.27.2",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "downcast-rs"
@@ -5794,6 +5892,7 @@ dependencies = [
  "anyhow",
  "log",
  "which 6.0.3",
+ "zd_engine_core",
 ]
 
 [[package]]
@@ -6995,6 +7094,18 @@ dependencies = [
  "pest",
  "pest_derive",
  "serde",
+]
+
+[[package]]
+name = "json_dotpath"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbdcfef3cf5591f0cef62da413ae795e3d1f5a00936ccec0b2071499a32efd1a"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -9379,6 +9490,15 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "parse_int"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c464266693329dd5a8715098c7f86e6c5fd5d985018b8318f53d9c6c2b21a31"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -17308,8 +17428,10 @@ dependencies = [
  "client",
  "command_palette",
  "csv_preview",
+ "dap_adapters",
  "db",
  "debug_adapter_extension",
+ "debugger_ui",
  "diagnostics",
  "editor",
  "encoding_selector",

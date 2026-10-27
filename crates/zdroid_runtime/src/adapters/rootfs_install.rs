@@ -9,16 +9,20 @@
 //! tree is built next to the live one and swapped in with two renames.
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
+use zd_engine_core::LIST_SEPARATOR;
 use zd_engine_core::bindings::Bindings;
 use zd_engine_core::path::MAX_PATH;
 use zd_engine_core::translate::Translator;
@@ -44,6 +48,9 @@ const CHUNK: usize = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const USER_AGENT: &str = "zdroid-rootfs-installer";
+const ESSENTIALS_SCRIPT: &str =
+    "apt-get update && apt-get install -y --no-install-recommends ca-certificates git";
+const ESSENTIALS_HINT: &str = "run `apt-get install -y ca-certificates git` in the terminal";
 
 fn sibling(rootfs: &Path, suffix: &str) -> PathBuf {
     let mut name = rootfs
@@ -192,7 +199,12 @@ fn install_inner(
     extract(&tarball, staging, &translator, progress)?;
 
     progress.step("Seeding configuration");
-    seed(staging, nameservers)?;
+    let bind_guest_dirs = adapter
+        .bind_spec()
+        .split(LIST_SEPARATOR)
+        .map(|entry| entry.split_once(':').map_or(entry, |(guest, _host)| guest).to_string())
+        .collect::<Vec<_>>();
+    seed(staging, nameservers, &bind_guest_dirs)?;
     fs::write(
         staging.join(VERSION_FILE),
         format!("{}\n{actual}\n", config.image_name),
@@ -214,7 +226,93 @@ fn install_inner(
         config.image_name,
         rootfs.display()
     );
+
+    progress.step("Installing essentials (ca-certificates, git)");
+    if let Err(error) = install_essentials(adapter, progress) {
+        progress.warn(&format!(
+            "Essentials were not installed ({error:#}); {ESSENTIALS_HINT}."
+        ));
+    }
     Ok(())
+}
+
+/// `ubuntu-base` ships neither git nor CA certificates, so this runs
+/// apt through the loader right after activation. Non-fatal: the rootfs
+/// is complete without it, and the terminal hint covers the rest.
+// Synchronous on purpose: the installer already runs on its own thread
+// and the adapter spawns the loader directly (see `RootfsAdapter::spawn`).
+#[allow(clippy::disallowed_methods)]
+fn install_essentials(adapter: &RootfsAdapter, progress: &mut dyn ProgressSink) -> Result<()> {
+    let mut command = adapter.command("/bin/sh");
+    command
+        .args(["-c", ESSENTIALS_SCRIPT])
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().context("spawn apt-get through the loader")?;
+    let stdout = child.stdout.take().context("apt-get stdout")?;
+    let stderr = child.stderr.take().context("apt-get stderr")?;
+    let (sender, receiver) = mpsc::channel::<String>();
+    let output_reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let error_reader = thread::spawn(move || {
+        let mut text = String::new();
+        if let Err(error) = BufReader::new(stderr).read_to_string(&mut text) {
+            log::warn!("rootfs_install: reading apt-get stderr: {error}");
+        }
+        text
+    });
+    let mut last_line = String::new();
+    let mut cancelled = false;
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(500)) {
+            Ok(line) => {
+                let line = line.trim();
+                if !line.is_empty() {
+                    last_line = line.to_string();
+                    progress.step(&format!("Installing essentials: {}", shorten(line, 72)));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if progress.is_cancelled() {
+                    cancelled = true;
+                    child.kill().context("kill apt-get")?;
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let status = child.wait().context("wait for apt-get")?;
+    output_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("apt-get stdout reader panicked"))?;
+    let errors = error_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("apt-get stderr reader panicked"))?;
+    if cancelled {
+        bail!("cancelled");
+    }
+    if !status.success() {
+        let detail = errors
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or(last_line.as_str());
+        bail!("apt-get exited with {status}: {detail}");
+    }
+    Ok(())
+}
+
+fn shorten(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
 }
 
 fn fetch_expected_sha256(agent: &ureq::Agent, url: &str, image_name: &str) -> Result<String> {
@@ -330,7 +428,7 @@ fn extract(
     for entry in archive.entries().context("read archive")? {
         let mut entry = entry.context("read archive entry")?;
         count += 1;
-        if count % 200 == 0 {
+        if count.is_multiple_of(200) {
             progress.progress(count, 0);
             check_cancelled(progress)?;
         }
@@ -423,7 +521,7 @@ fn extract(
 /// Files the guest needs that the base image does not ship usable:
 /// resolvers (Android has no resolv.conf), a hostname, and debugger
 /// configs that keep SIGSYS traps from stopping gdb/lldb sessions.
-fn seed(root: &Path, nameservers: &[String]) -> Result<()> {
+fn seed(root: &Path, nameservers: &[String], bind_guest_dirs: &[String]) -> Result<()> {
     let write = |relative: &str, contents: String| -> Result<()> {
         let path = root.join(relative);
         ensure_parent(&path)?;
@@ -452,6 +550,16 @@ fn seed(root: &Path, nameservers: &[String]) -> Result<()> {
     )?;
     for dir in ["root/.cargo/bin", "root/.local/bin", "usr/local/bin", "tmp"] {
         let path = root.join(dir);
+        fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
+    }
+    // A binding's ancestors have to exist in the guest view, or realpath()
+    // on a project path fails at `/data` (cargo and rustup canonicalize).
+    for guest in bind_guest_dirs {
+        let relative = guest.trim_start_matches('/');
+        if relative.is_empty() {
+            continue;
+        }
+        let path = root.join(relative);
         fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
     }
     fs::set_permissions(root.join("tmp"), fs::Permissions::from_mode(0o1777))

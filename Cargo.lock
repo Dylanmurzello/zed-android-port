@@ -8114,6 +8114,7 @@ dependencies = [
  "anyhow",
  "log",
  "which 6.0.3",
+ "zd_engine_core",
 ]
 
 [[package]]

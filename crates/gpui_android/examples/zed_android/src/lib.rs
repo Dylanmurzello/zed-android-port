@@ -1028,6 +1028,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     AppState::set_global(app_state.clone(), cx);
     info!("zed_android: AppState assembled + set as global");
+    dap_adapters::init(cx);
     watch_rootfs_binaries(fs.clone(), data_path.to_path_buf(), cx);
 
     // Mirror production zed/src/main.rs:785 — without this every language's
@@ -1217,9 +1218,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // Modal pickers / panels — mirror production zed/src/main.rs init order.
     // Each registers its own actions + a SettingsStore observer if needed.
     // Skipped from production (non-portable on Android): audio/call/livekit
-    // (collab), agent_ui/copilot/language_models (AI), debugger_ui/repl
-    // (DAP/Jupyter), auto_update (we self-distribute), telemetry/crashes,
-    // extension_host (deferred to L3).
+    // (collab), agent_ui/copilot/language_models (AI), repl (Jupyter),
+    // auto_update (we self-distribute), telemetry/crashes, extension_host
+    // (deferred to L3).
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1228,6 +1229,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     project_panel::init(cx);
     outline_panel::init(cx);
     tasks_ui::init(cx);
+    // Debug adapters run inside the rootfs engine like any other guest
+    // binary (CodeLLDB's linux-arm64 build through the loader, with real
+    // ptrace). `Project::init` above already registered the DAP and
+    // breakpoint RPC handlers; registering them again panics.
+    debugger_ui::init(cx);
     snippet_provider::init(cx);
     snippets_ui::init(cx);
     image_viewer::init(cx);
@@ -1608,12 +1614,15 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                 terminal_view::terminal_panel::TerminalPanel::load(weak.clone(), cx.clone());
             let git_panel =
                 git_ui::git_panel::GitPanel::load(weak.clone(), cx.clone());
-            let (project_panel, outline_panel, terminal_panel, git_panel) =
-                futures::future::join4(
+            let debug_panel =
+                debugger_ui::debugger_panel::DebugPanel::load(weak.clone(), cx);
+            let (project_panel, outline_panel, terminal_panel, git_panel, debug_panel) =
+                futures::future::join5(
                     project_panel,
                     outline_panel,
                     terminal_panel,
                     git_panel,
+                    debug_panel,
                 )
                 .await;
             weak.update_in(cx, |workspace, window, cx| {
@@ -1627,6 +1636,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     workspace.add_panel(panel, window, cx);
                 }
                 if let Ok(panel) = git_panel {
+                    workspace.add_panel(panel, window, cx);
+                }
+                if let Ok(panel) = debug_panel {
                     workspace.add_panel(panel, window, cx);
                 }
             })?;

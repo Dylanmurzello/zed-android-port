@@ -686,7 +686,7 @@ impl ManagedNodeRuntime {
                 .context("error creating node containing dir")?;
 
             let archive_type = match consts::OS {
-                "macos" | "linux" => ArchiveType::TarGz,
+                "macos" | "linux" | "android" => ArchiveType::TarGz,
                 "windows" => ArchiveType::Zip,
                 other => bail!("Running on unsupported os: {other}"),
             };
