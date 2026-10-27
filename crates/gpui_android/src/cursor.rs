@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use android_activity::AndroidApp;
 use anyhow::Context as _;
 use gpui::CursorStyle;
-use jni::{JavaVM, objects::JObject, sys::jint};
+use jni::sys::jint;
+use util::ResultExt as _;
 
 /// Last-pushed Android `PointerIcon.TYPE_*` value. Process-wide
 /// atomic so the `nativeOnExtraActivityCreated` handler can read it
@@ -82,62 +83,70 @@ pub(crate) fn set_pointer_icon(android_app: &AndroidApp, style: CursorStyle) {
 
 fn set_pointer_icon_inner(android_app: &AndroidApp, style: CursorStyle) -> anyhow::Result<()> {
     let icon_type = pointer_icon_type(style);
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let window = env
+            .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?
+            .l()?;
+        let decor = env
+            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
+            .l()?;
+        let pointer_icon_class = env.find_class("android/view/PointerIcon")?;
+        let pointer_icon = env
+            .call_static_method(
+                &pointer_icon_class,
+                "getSystemIcon",
+                "(Landroid/content/Context;I)Landroid/view/PointerIcon;",
+                &[activity.into(), icon_type.into()],
+            )?
+            .l()?;
+        env.call_method(
+            &decor,
+            "setPointerIcon",
+            "(Landroid/view/PointerIcon;)V",
+            &[(&pointer_icon).into()],
+        )?;
 
-    let window = env
-        .call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])?
-        .l()?;
-    let decor = env
-        .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
-        .l()?;
-    let pointer_icon_class = env.find_class("android/view/PointerIcon")?;
-    let pointer_icon = env
-        .call_static_method(
-            &pointer_icon_class,
-            "getSystemIcon",
-            "(Landroid/content/Context;I)Landroid/view/PointerIcon;",
-            &[(&activity).into(), icon_type.into()],
-        )?
-        .l()?;
-    env.call_method(
-        &decor,
-        "setPointerIcon",
-        "(Landroid/view/PointerIcon;)V",
-        &[(&pointer_icon).into()],
-    )?;
-
-    // While the activity has pointer capture, the system PointerIcon
-    // we just set is hidden. Push the icon-type id to every live
-    // Activity so each one's SurfaceControl-based cursor overlay
-    // renders the matching sprite. Fanning out (instead of pushing
-    // only to MainActivity) means a focused ExtraWindowActivity
-    // also gets the IBeam / link / etc. style updates from gpui's
-    // `set_cursor_style` — without this, the settings/picker
-    // window's sprite stayed stuck at the default arrow because
-    // gpui calls set_cursor_style at the Platform layer (no per-
-    // window context) and we were only routing to the primary.
-    // Each Activity's Kotlin method no-ops when its overlay isn't
-    // live, so unfocused windows safely accept the push.
-    let _ = env.call_method(
-        &activity,
-        "setCapturedCursorStyle",
-        "(I)V",
-        &[icon_type.into()],
-    );
-    let extra_ids: Vec<u64> = crate::multi_window::extra_activity_ids();
-    for id in extra_ids {
-        if let Some(activity_ref) = crate::multi_window::extra_activity_for(id) {
-            let _ = env.call_method(
-                activity_ref.as_obj(),
+        // While the activity has pointer capture, the system PointerIcon
+        // we just set is hidden. Push the icon-type id to every live
+        // Activity so each one's SurfaceControl-based cursor overlay
+        // renders the matching sprite. Fanning out (instead of pushing
+        // only to MainActivity) means a focused ExtraWindowActivity
+        // also gets the IBeam / link / etc. style updates from gpui's
+        // `set_cursor_style` — without this, the settings/picker
+        // window's sprite stayed stuck at the default arrow because
+        // gpui calls set_cursor_style at the Platform layer (no per-
+        // window context) and we were only routing to the primary.
+        // Each Activity's Kotlin method no-ops when its overlay isn't
+        // live, so unfocused windows safely accept the push.
+        if env
+            .call_method(
+                activity,
                 "setCapturedCursorStyle",
                 "(I)V",
                 &[icon_type.into()],
-            );
+            )
+            .is_err()
+        {
+            env.exception_clear().log_err();
         }
-    }
-    Ok(())
+        let extra_ids: Vec<u64> = crate::multi_window::extra_activity_ids();
+        for id in extra_ids {
+            if let Some(activity_ref) = crate::multi_window::extra_activity_for(id) {
+                if env
+                    .call_method(
+                        activity_ref.as_obj(),
+                        "setCapturedCursorStyle",
+                        "(I)V",
+                        &[icon_type.into()],
+                    )
+                    .is_err()
+                {
+                    env.exception_clear().log_err();
+                }
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Move the SurfaceControl cursor overlay to a touch-trackpad cursor
@@ -164,38 +173,34 @@ fn move_trackpad_cursor_inner(
     x: f32,
     y: f32,
 ) -> anyhow::Result<()> {
-    let vm =
-        unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                // Extra activity already torn down — just drop the
-                // cursor update silently.
-                return Ok(());
-            };
-            env.call_method(
-                activity_ref.as_obj(),
-                "setTrackpadCursorPosition",
-                "(FF)V",
-                &[x.into(), y.into()],
-            )
-            .context("call ExtraWindowActivity.setTrackpadCursorPosition")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    // Extra activity already torn down — just drop the
+                    // cursor update silently.
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "setTrackpadCursorPosition",
+                    "(FF)V",
+                    &[x.into(), y.into()],
+                )
+                .context("call ExtraWindowActivity.setTrackpadCursorPosition")?;
+            }
+            None => {
+                env.call_method(
+                    activity,
+                    "setTrackpadCursorPosition",
+                    "(FF)V",
+                    &[x.into(), y.into()],
+                )
+                .context("call MainActivity.setTrackpadCursorPosition")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-            env.call_method(
-                &activity,
-                "setTrackpadCursorPosition",
-                "(FF)V",
-                &[x.into(), y.into()],
-            )
-            .context("call MainActivity.setTrackpadCursorPosition")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Tell Kotlin to show or hide the SurfaceControl cursor overlay
@@ -220,29 +225,25 @@ fn set_trackpad_mode_active_inner(
     extra_window_id: Option<u64>,
     active: bool,
 ) -> anyhow::Result<()> {
-    let vm =
-        unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(
-                activity_ref.as_obj(),
-                "setTrackpadModeActive",
-                "(Z)V",
-                &[active.into()],
-            )
-            .context("call ExtraWindowActivity.setTrackpadModeActive")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "setTrackpadModeActive",
+                    "(Z)V",
+                    &[active.into()],
+                )
+                .context("call ExtraWindowActivity.setTrackpadModeActive")?;
+            }
+            None => {
+                env.call_method(activity, "setTrackpadModeActive", "(Z)V", &[active.into()])
+                    .context("call MainActivity.setTrackpadModeActive")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-            env.call_method(&activity, "setTrackpadModeActive", "(Z)V", &[active.into()])
-                .context("call MainActivity.setTrackpadModeActive")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }

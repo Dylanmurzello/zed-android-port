@@ -27,7 +27,7 @@ use std::path::Path;
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result};
-use jni::{JavaVM, objects::JObject, objects::JString};
+use jni::objects::JString;
 
 const RESOLV_CONF_PATH: &str = "/sdcard/.zed/r";
 const FALLBACK_NAMESERVERS: &[&str] = &["1.1.1.1", "8.8.8.8"];
@@ -78,33 +78,25 @@ fn populate_inner(android_app: &AndroidApp) -> Result<usize> {
 }
 
 fn query_android_dns(android_app: &AndroidApp) -> Result<Vec<String>> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread for dns query")?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let result = env
-        .call_method(
-            &activity,
-            "getActiveDnsServers",
-            "()Ljava/lang/String;",
-            &[],
-        )
-        .context("MainActivity.getActiveDnsServers")?;
-    let result_obj = result
-        .l()
-        .context("getActiveDnsServers returned non-object")?;
-    if result_obj.is_null() {
-        return Ok(Vec::new());
-    }
-    let jstr: JString = result_obj.into();
-    let csv: String = env
-        .get_string(&jstr)
-        .context("decode getActiveDnsServers result")?
-        .into();
-    Ok(csv
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect())
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let result = env
+            .call_method(activity, "getActiveDnsServers", "()Ljava/lang/String;", &[])
+            .context("MainActivity.getActiveDnsServers")?;
+        let result_obj = result
+            .l()
+            .context("getActiveDnsServers returned non-object")?;
+        if result_obj.is_null() {
+            return Ok(Vec::new());
+        }
+        let jstr: JString = result_obj.into();
+        let csv: String = env
+            .get_string(&jstr)
+            .context("decode getActiveDnsServers result")?
+            .into();
+        Ok(csv
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect())
+    })
 }

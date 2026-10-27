@@ -24,7 +24,6 @@ use std::sync::OnceLock;
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result};
-use jni::{JavaVM, objects::JObject};
 
 static REQUESTED: OnceLock<()> = OnceLock::new();
 
@@ -58,16 +57,13 @@ pub fn request_once(android_app: &AndroidApp) {
 }
 
 fn request_inner(android_app: &AndroidApp) -> Result<i32> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread for storage permissions")?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let result = env
-        .call_method(&activity, "requestStoragePermissions", "()I", &[])
-        .context("MainActivity.requestStoragePermissions")?
-        .i()?;
-    Ok(result)
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let result = env
+            .call_method(activity, "requestStoragePermissions", "()I", &[])
+            .context("MainActivity.requestStoragePermissions")?
+            .i()?;
+        Ok(result)
+    })
 }
 
 /// Termux-style `~/storage/` curated symlinks into shared storage.

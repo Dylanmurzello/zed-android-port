@@ -384,24 +384,20 @@ fn appearance_from_config(android_app: &AndroidApp) -> WindowAppearance {
 /// ActivityNotFoundException.
 fn jni_open_url(android_app: &AndroidApp, url: &str) -> Result<()> {
     use anyhow::Context;
-    use jni::{JavaVM, objects::JObject};
 
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread for open_url")?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let url_jstring = env
-        .new_string(url)
-        .context("alloc JString for open_url argument")?;
-    env.call_method(
-        &activity,
-        "openUrl",
-        "(Ljava/lang/String;)V",
-        &[(&url_jstring).into()],
-    )
-    .context("MainActivity.openUrl")?;
-    Ok(())
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let url_jstring = env
+            .new_string(url)
+            .context("alloc JString for open_url argument")?;
+        env.call_method(
+            activity,
+            "openUrl",
+            "(Ljava/lang/String;)V",
+            &[(&url_jstring).into()],
+        )
+        .context("MainActivity.openUrl")?;
+        Ok(())
+    })
 }
 
 pub struct AndroidPlatform {
@@ -545,6 +541,12 @@ impl AndroidPlatform {
             let mut common = self.common.borrow_mut();
             common.extra_windows.insert(window_id, window.ptr());
             common.active_window = Some(handle);
+        }
+        if self.common.borrow().keep_screen_on
+            && let Err(error) =
+                call_activity_set_keep_screen_on(&self.android_app, Some(window_id), true)
+        {
+            log::warn!("set_keep_screen_on(w={window_id}, true): {error:#}");
         }
         // Fire the activation observers so the editor's
         // `cx.observe_window_activation` callback runs and enables cursor
@@ -1117,8 +1119,8 @@ impl AndroidPlatform {
         }
     }
 
-    /// Detect changes to `SOFT_KEYBOARD_VISIBLE` and force a window
-    /// redraw so the status bar keyboard button's `toggle_state` picks
+    /// Detect changes to `SOFT_KEYBOARD_VISIBLE` and force a redraw of the
+    /// windows so the status bar keyboard button's `toggle_state` picks
     /// up the new value on the next paint. Runs every main-loop
     /// tick INDEPENDENTLY of input-handler visibility — the button
     /// shows whether or not a text field is focused, so gating this on `currently_visible` like
@@ -1130,10 +1132,12 @@ impl AndroidPlatform {
             return;
         }
         self.common.borrow_mut().last_soft_keyboard_visible = current;
-        if let Some(window_ptr) = self.common.borrow().window.clone() {
+        // Every workspace window has a keyboard button.
+        let common = self.common.borrow();
+        for window_ptr in common.window.iter().chain(common.extra_windows.values()) {
             window_ptr.state.borrow_mut().force_render_after_recovery = true;
-            FRAME_PENDING.store(true, std::sync::atomic::Ordering::Release);
         }
+        FRAME_PENDING.store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// Pull every queued `InputEvent` off android-activity's iterator and
@@ -1341,8 +1345,17 @@ impl AndroidPlatform {
             return;
         }
         self.common.borrow_mut().keep_screen_on = wanted;
-        if let Err(error) = call_activity_set_keep_screen_on(&self.android_app, wanted) {
-            log::warn!("set_keep_screen_on({wanted}): {error:#}");
+        // `FLAG_KEEP_SCREEN_ON` only works while its own window is visible,
+        // so every window gets it.
+        let extra_window_ids = crate::multi_window::extra_activity_ids()
+            .into_iter()
+            .map(Some);
+        for extra_window_id in std::iter::once(None).chain(extra_window_ids) {
+            if let Err(error) =
+                call_activity_set_keep_screen_on(&self.android_app, extra_window_id, wanted)
+            {
+                log::warn!("set_keep_screen_on(w={extra_window_id:?}, {wanted}): {error:#}");
+            }
         }
     }
 
@@ -1824,61 +1837,66 @@ fn call_activity_set_extras_row(
     enabled: bool,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
-    use jni::{JavaVM, objects::JObject};
 
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let args = [enabled.into()];
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(
-                activity_ref.as_obj(),
-                "setProgrammingExtrasRowEnabled",
-                "(Z)V",
-                &args,
-            )
-            .context("call ExtraWindowActivity.setProgrammingExtrasRowEnabled")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let args = [enabled.into()];
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "setProgrammingExtrasRowEnabled",
+                    "(Z)V",
+                    &args,
+                )
+                .context("call ExtraWindowActivity.setProgrammingExtrasRowEnabled")?;
+            }
+            None => {
+                env.call_method(activity, "setProgrammingExtrasRowEnabled", "(Z)V", &args)
+                    .context("call MainActivity.setProgrammingExtrasRowEnabled")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, "setProgrammingExtrasRowEnabled", "(Z)V", &args)
-                .context("call MainActivity.setProgrammingExtrasRowEnabled")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
-/// Invoke `MainActivity.setKeepScreenOn(on)`.
-fn call_activity_set_keep_screen_on(android_app: &AndroidApp, on: bool) -> anyhow::Result<()> {
+/// Invoke `setKeepScreenOn(on)` on the primary or one extra Activity.
+fn call_activity_set_keep_screen_on(
+    android_app: &AndroidApp,
+    extra_window_id: Option<u64>,
+    on: bool,
+) -> anyhow::Result<()> {
     use anyhow::Context;
-    use jni::{JavaVM, objects::JObject};
 
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-    let result = env.call_method(&activity, "setKeepScreenOn", "(Z)V", &[on.into()]);
-    if result.is_err() {
-        env.exception_clear().ok();
-    }
-    result.context("call MainActivity.setKeepScreenOn")?;
-    Ok(())
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "setKeepScreenOn",
+                    "(Z)V",
+                    &[on.into()],
+                )
+                .context("call ExtraWindowActivity.setKeepScreenOn")?;
+            }
+            None => {
+                env.call_method(activity, "setKeepScreenOn", "(Z)V", &[on.into()])
+                    .context("call MainActivity.setKeepScreenOn")?;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Invoke `Activity.setSoftKeyboardEnabled(enabled)` on the primary
@@ -1897,36 +1915,30 @@ fn call_activity_set_soft_keyboard(
     enabled: bool,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
-    use jni::{JavaVM, objects::JObject};
 
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let args = [enabled.into()];
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(
-                activity_ref.as_obj(),
-                "setSoftKeyboardEnabled",
-                "(Z)V",
-                &args,
-            )
-            .context("call ExtraWindowActivity.setSoftKeyboardEnabled")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let args = [enabled.into()];
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "setSoftKeyboardEnabled",
+                    "(Z)V",
+                    &args,
+                )
+                .context("call ExtraWindowActivity.setSoftKeyboardEnabled")?;
+            }
+            None => {
+                env.call_method(activity, "setSoftKeyboardEnabled", "(Z)V", &args)
+                    .context("call MainActivity.setSoftKeyboardEnabled")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, "setSoftKeyboardEnabled", "(Z)V", &args)
-                .context("call MainActivity.setSoftKeyboardEnabled")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }

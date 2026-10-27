@@ -1388,7 +1388,10 @@ class MainActivity : GameActivity(), ImeHost {
     /// the process here guarantees the next launch starts fresh with
     /// zero stale static state.
     override fun onDestroy() {
-        Log.i(TAG, "onDestroy isFinishing=$isFinishing — exiting process for clean restart")
+        Log.i(
+            TAG,
+            "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations — exiting process for clean restart",
+        )
         splashHandler.removeCallbacksAndMessages(null)
         cursorOverlay?.release()
         cursorOverlay = null
