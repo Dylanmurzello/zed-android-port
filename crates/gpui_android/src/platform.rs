@@ -287,6 +287,8 @@ pub(crate) struct AndroidCommon {
     /// other event triggers a paint — the user-visible bug where
     /// the button needs two taps to "respond".
     pub(crate) last_soft_keyboard_visible: bool,
+    /// The `PHYSICAL_KEYBOARD_BLOCKS_IME` value last acted on.
+    pub(crate) last_physical_keyboard_blocks_ime: bool,
     /// Tracks the last-observed `TRACKPAD_MODE_ENABLED` value so we
     /// can JNI-push the show/hide of the SurfaceControl cursor
     /// overlay on the Kotlin side only when the mode actually flips.
@@ -357,6 +359,7 @@ impl AndroidCommon {
             captured_pointer_rx: Some(crate::captured_pointer::init_event_channel()),
             ime_event_rx: Some(crate::ime::init_event_channel()),
             last_soft_keyboard_visible: false,
+            last_physical_keyboard_blocks_ime: false,
             last_trackpad_mode_enabled: false,
             last_extras_row_enabled: None,
             last_soft_keyboard_setting: None,
@@ -1078,7 +1081,7 @@ impl AndroidPlatform {
     }
 
     /// Sample every window's text-input focus at frame boundary
-    /// and drive show / hide IME (per window) when it changes. The
+    /// and hide the IME (per window) when it's lost. The
     /// per-window state lives on `AndroidWindowState`, so each
     /// `ExtraWindowActivity` can drive its own IME independent of
     /// the primary surface — required for settings / picker windows
@@ -1118,20 +1121,11 @@ impl AndroidPlatform {
         if visibility_changed {
             window_ptr.state.borrow_mut().ime_currently_visible = currently_visible;
             if currently_visible {
-                // `android_input.on_screen_keyboard` user setting:
-                // when false, the user opted out of the soft IME
-                // (presumably uses a hardware keyboard). Skip the
-                // auto-show on text-input focus but keep the
-                // mirror seeded so if they later flip the setting
-                // on and tap the keyboard button, the IME has
-                // current state.
-                if crate::ime::on_screen_keyboard_enabled() {
-                    crate::ime::show_keyboard(&app, extra_window_id);
-                } else {
-                    log::debug!(
-                        "ime::reconcile auto-show suppressed by android_input.on_screen_keyboard=false"
-                    );
-                }
+                // Gaining focus doesn't show the keyboard: as gpui's
+                // `EntityInputHandler` docs ask, text fields request it
+                // from a tap (and single-line editors when they gain
+                // focus), as on Android. Seed the mirror so the IME has
+                // current state when it shows.
                 crate::ime::notify_text_state(window_ptr);
             } else {
                 // IME going hidden — clear cached selection on this
@@ -1349,7 +1343,36 @@ impl AndroidPlatform {
             return;
         }
         self.common.borrow_mut().last_soft_keyboard_visible = current;
-        // Every workspace window has a keyboard button.
+        self.redraw_keyboard_buttons();
+    }
+
+    /// When a physical keyboard starts or stops blocking the on-screen one,
+    /// redraw the windows so the status bar keyboard button, hidden while
+    /// it's blocked, follows, and hide an on-screen keyboard that's showing.
+    fn tick_physical_keyboard(&self) {
+        let blocks_ime = crate::ime::physical_keyboard_blocks_ime();
+        if self.common.borrow().last_physical_keyboard_blocks_ime == blocks_ime {
+            return;
+        }
+        self.common.borrow_mut().last_physical_keyboard_blocks_ime = blocks_ime;
+        log::info!("ime: physical keyboard blocks the on-screen one={blocks_ime}");
+        if blocks_ime && crate::ime::soft_keyboard_visible() {
+            let extra_window_ids: Vec<u64> =
+                self.common.borrow().extra_windows.keys().copied().collect();
+            // Each Activity's `hideIme` does nothing unless its keyboard
+            // is up.
+            for extra_window_id in
+                std::iter::once(None).chain(extra_window_ids.into_iter().map(Some))
+            {
+                crate::ime::hide_keyboard(&self.android_app, extra_window_id);
+            }
+        }
+        self.redraw_keyboard_buttons();
+    }
+
+    /// Forces a repaint of every window, each of which has a status bar
+    /// keyboard button reading state gpui doesn't track.
+    fn redraw_keyboard_buttons(&self) {
         let common = self.common.borrow();
         for window_ptr in common.window.iter().chain(common.extra_windows.values()) {
             window_ptr.state.borrow_mut().force_render_after_recovery = true;
@@ -1710,6 +1733,7 @@ impl Platform for AndroidPlatform {
             self.drain_ime_events();
 
             self.tick_soft_keyboard_visibility();
+            self.tick_physical_keyboard();
             self.tick_trackpad_mode_active();
             self.tick_extras_row_enabled();
             self.tick_soft_keyboard_setting();

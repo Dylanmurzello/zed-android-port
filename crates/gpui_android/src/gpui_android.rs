@@ -90,6 +90,14 @@ pub fn soft_keyboard_visible() -> bool {
     ime::soft_keyboard_visible()
 }
 
+/// Whether a connected physical keyboard blocks the on-screen one: mice
+/// that also report a keyboard don't count, and neither does any keyboard
+/// while Android's "show on-screen keyboard while a physical keyboard is
+/// connected" setting is on.
+pub fn physical_keyboard_blocks_ime() -> bool {
+    ime::physical_keyboard_blocks_ime()
+}
+
 use std::rc::Rc;
 
 /// Run a gpui application backed by Android's GameActivity event loop.

@@ -10,6 +10,9 @@ here so future sessions don't re-derive it from scratch. When a workaround
 is replaced by something cleaner, mark it Reverted and link to the
 replacement.
 
+Features Zdroid implements because upstream Zed doesn't yet, to check at each
+Zed sync, are listed in [ahead-of-upstream.md](../ahead-of-upstream.md).
+
 ## Reference hardware
 
 Zdroid is developed and tested on a Samsung Galaxy Tab S9 Ultra, the tablet

@@ -146,7 +146,12 @@ impl SoftKeyboardButton {
 
 impl Render for SoftKeyboardButton {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !AndroidInputSettings::get_global(cx).on_screen_keyboard {
+        // One UI's Samsung Keyboard doesn't show while a physical keyboard
+        // blocks it, so the button would do nothing. gpui_android redraws
+        // the window when that changes.
+        if !AndroidInputSettings::get_global(cx).on_screen_keyboard
+            || gpui_android::physical_keyboard_blocks_ime()
+        {
             return div().into_any_element();
         }
         // gpui_android redraws the window when the keyboard shows or hides.

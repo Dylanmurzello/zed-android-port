@@ -200,6 +200,12 @@ object NativeBridge {
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)
 
+    /// Posted by `MainActivity` at startup and whenever an input device or
+    /// Android's "show on-screen keyboard with a physical keyboard" setting
+    /// changes: [PhysicalKeyboard.blocksIme]. Read through
+    /// `gpui_android::physical_keyboard_blocks_ime()`.
+    external fun nativeSetPhysicalKeyboardBlocksIme(blocksIme: Boolean)
+
     /// Posted by [UpdateInstallReceiver] when an update session ends
     /// without installing: cancelled in Android's prompt or failed.
     external fun nativeOnUpdateInstallResult(status: Int, message: String?)

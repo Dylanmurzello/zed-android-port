@@ -199,12 +199,10 @@ pub(crate) struct AndroidWindowState {
     pub(crate) ime_composition_text: Option<String>,
     /// Per-window mirror of whether the input handler was present at
     /// the last frame-boundary IME reconcile. Compared against the
-    /// current `input_handler.is_some()` to detect show/hide
-    /// transitions. Per-window so that an `ExtraWindowActivity`
-    /// (settings, picker) can drive its own IME independent of the
-    /// primary surface — without this, focusing a text input in a
-    /// spawned window wouldn't trigger show_keyboard because the
-    /// global was already true for MainActivity.
+    /// current `input_handler.is_some()` to detect focus gain and
+    /// loss. Per-window so that an `ExtraWindowActivity` (settings,
+    /// picker) can drive its own IME independent of the primary
+    /// surface.
     pub(crate) ime_currently_visible: bool,
     /// Per-window cache of the last classified IME target kind
     /// (terminal vs editor). On change we issue restartInput on this
@@ -602,8 +600,17 @@ pub(crate) struct AndroidWindow {
 }
 
 impl AndroidWindow {
-    /// An explicit request to show or hide the soft keyboard.
+    /// An explicit request to show or hide the soft keyboard. A show does
+    /// nothing with `android_input.on_screen_keyboard` off or a physical
+    /// keyboard blocking the on-screen one, when the status bar hides its
+    /// keyboard button: One UI's Samsung Keyboard doesn't show then anyway.
     fn request_soft_keyboard(&self, show: bool) {
+        if show
+            && (!crate::ime::on_screen_keyboard_enabled()
+                || crate::ime::physical_keyboard_blocks_ime())
+        {
+            return;
+        }
         let (android_app, extra_window_id) = {
             let state = self.ptr.state.borrow();
             (state.android_app.clone(), state.extra_window_id)
@@ -765,11 +772,12 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
-        // No show_keyboard call here — gpui's paint cycle calls
+        // No keyboard call here — gpui's paint cycle calls
         // take_input_handler/set_input_handler every frame for state
         // shuffling (window.rs line 2497-2509), which would oscillate
-        // the IME visibly. Show/hide is driven by a frame-boundary
-        // diff in `AndroidPlatform::reconcile_ime_visibility` instead.
+        // the IME visibly. Hiding on focus loss is driven by a
+        // frame-boundary diff in `AndroidPlatform::reconcile_ime_visibility`
+        // instead.
         self.ptr.state.borrow_mut().input_handler = Some(input_handler);
     }
 
