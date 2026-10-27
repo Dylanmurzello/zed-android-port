@@ -3,7 +3,7 @@ use std::{
     ffi::{OsString, c_void},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
@@ -13,7 +13,8 @@ use ndk::configuration::UiModeNight;
 use anyhow::Result;
 use futures::channel::oneshot;
 use gpui::{
-    Action, AnyWindowHandle, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
+    Action, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds, ClipboardItem,
+    CursorStyle,
     DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Pixels,
     ActivityGuard, Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper,
     PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, RunnableVariant, Task, ThermalState,
@@ -131,6 +132,9 @@ static FRAME_PENDING: AtomicBool = AtomicBool::new(false);
 /// Whether a Choreographer callback is posted and hasn't fired yet.
 static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
 
+/// Live guards from `prevent_idle_sleep`.
+static IDLE_SLEEP_GUARDS: AtomicUsize = AtomicUsize::new(0);
+
 /// Wakes the run loop from Java threads. JNI callbacks queue input and
 /// window events, or set flags, that the loop only reads on its next tick,
 /// and an idle loop otherwise sleeps until something wakes it.
@@ -227,6 +231,8 @@ pub(crate) struct PlatformHandlers {
     pub(crate) will_open_app_menu: Option<Box<dyn FnMut()>>,
     pub(crate) validate_app_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
     pub(crate) keyboard_layout_change: Option<Box<dyn FnMut()>>,
+    pub(crate) app_lifecycle: Option<Box<dyn FnMut(AppLifecyclePhase)>>,
+    pub(crate) memory_warning: Option<Box<dyn FnMut()>>,
 }
 
 pub(crate) struct AndroidCommon {
@@ -300,6 +306,10 @@ pub(crate) struct AndroidCommon {
     /// for the run loop to apply: gpui can't take callbacks then.
     pub(crate) deferred_primary_resync: bool,
     pub(crate) deferred_primary_focus: Option<bool>,
+    pub(crate) deferred_lifecycle: Vec<AppLifecyclePhase>,
+    pub(crate) deferred_memory_warning: bool,
+    /// Whether the main Activity keeps the screen on; see `prevent_idle_sleep`.
+    pub(crate) keep_screen_on: bool,
     pub(crate) running: bool,
     /// Set by `quit()` so `run()` exits the process once the event loop ends.
     pub(crate) exit_requested: bool,
@@ -346,6 +356,9 @@ impl AndroidCommon {
             last_soft_keyboard_setting: None,
             deferred_primary_resync: false,
             deferred_primary_focus: None,
+            deferred_lifecycle: Vec::new(),
+            deferred_memory_warning: false,
+            keep_screen_on: false,
             running: true,
             exit_requested: false,
         }
@@ -1239,10 +1252,32 @@ impl AndroidPlatform {
                     self.window_focus_changed(&window_ptr, focused);
                 }
             }
+            MainEvent::Start => self.notify_app_lifecycle(AppLifecyclePhase::Foreground),
+            MainEvent::Resume { .. } => self.notify_app_lifecycle(AppLifecyclePhase::Active),
+            MainEvent::Pause => self.notify_app_lifecycle(AppLifecyclePhase::Inactive),
+            MainEvent::Stop => self.notify_app_lifecycle(AppLifecyclePhase::Background),
+            MainEvent::LowMemory => self.notify_memory_warning(),
             MainEvent::Destroy => {
+                self.notify_app_lifecycle(AppLifecyclePhase::Disconnected);
                 self.common.borrow_mut().running = false;
             }
             _ => {}
+        }
+    }
+
+    fn notify_app_lifecycle(&self, phase: AppLifecyclePhase) {
+        let callback = self.common.borrow_mut().callbacks.app_lifecycle.take();
+        if let Some(mut callback) = callback {
+            callback(phase);
+            self.common.borrow_mut().callbacks.app_lifecycle = Some(callback);
+        }
+    }
+
+    fn notify_memory_warning(&self) {
+        let callback = self.common.borrow_mut().callbacks.memory_warning.take();
+        if let Some(mut callback) = callback {
+            callback();
+            self.common.borrow_mut().callbacks.memory_warning = Some(callback);
         }
     }
 
@@ -1284,9 +1319,13 @@ impl AndroidPlatform {
     fn handle_main_event_while_opening_window(&self, event: android_activity::MainEvent<'_>) {
         use android_activity::MainEvent;
         match event {
-            MainEvent::InitWindow { .. }
-            | MainEvent::TerminateWindow { .. }
-            | MainEvent::Destroy => self.handle_main_event(event),
+            MainEvent::InitWindow { .. } | MainEvent::TerminateWindow { .. } => {
+                self.handle_main_event(event)
+            }
+            MainEvent::Destroy => {
+                self.defer_app_lifecycle(AppLifecyclePhase::Disconnected);
+                self.common.borrow_mut().running = false;
+            }
             MainEvent::WindowResized { .. }
             | MainEvent::ConfigChanged { .. }
             | MainEvent::RedrawNeeded { .. } => {
@@ -1296,18 +1335,64 @@ impl AndroidPlatform {
                 self.common.borrow_mut().deferred_primary_focus =
                     Some(matches!(event, MainEvent::GainedFocus));
             }
+            MainEvent::Start => self.defer_app_lifecycle(AppLifecyclePhase::Foreground),
+            MainEvent::Resume { .. } => self.defer_app_lifecycle(AppLifecyclePhase::Active),
+            MainEvent::Pause => self.defer_app_lifecycle(AppLifecyclePhase::Inactive),
+            MainEvent::Stop => self.defer_app_lifecycle(AppLifecyclePhase::Background),
+            MainEvent::LowMemory => self.common.borrow_mut().deferred_memory_warning = true,
             _ => {}
         }
     }
 
+    fn defer_app_lifecycle(&self, phase: AppLifecyclePhase) {
+        self.common.borrow_mut().deferred_lifecycle.push(phase);
+    }
+
+    /// Applies the `prevent_idle_sleep` guards. Here rather than in the guards
+    /// themselves, which can be created or dropped on any thread, including
+    /// inside android-activity's event callbacks.
+    fn apply_keep_screen_on(&self) {
+        let wanted = IDLE_SLEEP_GUARDS.load(Ordering::Acquire) > 0;
+        if self.common.borrow().keep_screen_on == wanted {
+            return;
+        }
+        self.common.borrow_mut().keep_screen_on = wanted;
+        if let Err(error) = call_activity_set_keep_screen_on(&self.android_app, wanted) {
+            log::warn!("set_keep_screen_on({wanted}): {error:#}");
+        }
+    }
+
+    fn sync_window_visibility(&self) {
+        let windows: Vec<crate::window::AndroidWindowStatePtr> = {
+            let common = self.common.borrow();
+            common
+                .window
+                .iter()
+                .chain(common.extra_windows.values())
+                .cloned()
+                .collect()
+        };
+        for window_ptr in windows {
+            window_ptr.sync_visibility();
+        }
+    }
+
     fn apply_deferred_main_events(&self) {
-        let (resync, focus) = {
+        let (resync, focus, lifecycle, memory_warning) = {
             let mut common = self.common.borrow_mut();
             (
                 std::mem::take(&mut common.deferred_primary_resync),
                 common.deferred_primary_focus.take(),
+                std::mem::take(&mut common.deferred_lifecycle),
+                std::mem::take(&mut common.deferred_memory_warning),
             )
         };
+        for phase in lifecycle {
+            self.notify_app_lifecycle(phase);
+        }
+        if memory_warning {
+            self.notify_memory_warning();
+        }
         if resync {
             self.resync_primary_window();
         }
@@ -1407,6 +1492,9 @@ impl Platform for AndroidPlatform {
             self.tick_extras_row_enabled();
             self.tick_soft_keyboard_setting();
 
+            self.sync_window_visibility();
+            self.apply_keep_screen_on();
+
             // Refresh on vsync (FRAME_PENDING set by Choreographer
             // callback) or after main-thread events that may have
             // changed state. gpui's window.refresh() short-circuits
@@ -1435,11 +1523,12 @@ impl Platform for AndroidPlatform {
                 }
                 IN_FRAME.set(true);
                 crate::frame_timing::paint_started();
-                if let Some(window_ptr) = primary {
-                    window_ptr.refresh();
-                }
-                for window_ptr in extras {
-                    window_ptr.refresh();
+                // Hidden windows have no surface to present to; gpui's
+                // contract is that the platform doesn't request their frames.
+                for window_ptr in primary.into_iter().chain(extras) {
+                    if window_ptr.is_visible() {
+                        window_ptr.refresh();
+                    }
                 }
                 crate::frame_timing::paint_finished();
                 IN_FRAME.set(false);
@@ -1462,6 +1551,8 @@ impl Platform for AndroidPlatform {
         }
 
         log::info!("AndroidPlatform::run: exiting event loop");
+        // A Destroy that arrived while a window was opening.
+        self.apply_deferred_main_events();
         let quit = self.common.borrow_mut().callbacks.quit.take();
         if let Some(mut fun) = quit {
             if !fun() {
@@ -1542,7 +1633,7 @@ impl Platform for AndroidPlatform {
                 |event| {
                     if let android_activity::PollEvent::Main(main_event) = event {
                         log::trace!("MainEvent during open_window block: {main_event:?}");
-                        self.handle_main_event(main_event);
+                        self.handle_main_event_while_opening_window(main_event);
                     }
                 },
             );
@@ -1624,6 +1715,12 @@ impl Platform for AndroidPlatform {
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.common.borrow_mut().callbacks.quit = Some(callback);
     }
+    fn on_app_lifecycle(&self, callback: Box<dyn FnMut(AppLifecyclePhase)>) {
+        self.common.borrow_mut().callbacks.app_lifecycle = Some(callback);
+    }
+    fn on_memory_warning(&self, callback: Box<dyn FnMut()>) {
+        self.common.borrow_mut().callbacks.memory_warning = Some(callback);
+    }
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.reopen = Some(callback);
     }
@@ -1651,10 +1748,17 @@ impl Platform for AndroidPlatform {
         ThermalState::Nominal
     }
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
+    /// Keeps the screen on while the app is in front, Android's equivalent:
+    /// Zed asks for this while an agent works. Counted, so overlapping
+    /// requests don't release it early; the run loop applies the result.
     fn prevent_idle_sleep(&self, reason: &str) -> Task<Result<ActivityGuard>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "idle sleep prevention for {reason:?} is not yet implemented on Android"
-        )))
+        log::debug!("keeping the screen on: {reason}");
+        IDLE_SLEEP_GUARDS.fetch_add(1, Ordering::AcqRel);
+        wake_run_loop();
+        Task::ready(Ok(ActivityGuard::new(|| {
+            IDLE_SLEEP_GUARDS.fetch_sub(1, Ordering::AcqRel);
+            wake_run_loop();
+        })))
     }
 
     fn compositor_name(&self) -> &'static str {
@@ -1765,6 +1869,27 @@ fn call_activity_set_extras_row(
             .context("call MainActivity.setProgrammingExtrasRowEnabled")?;
         }
     }
+    Ok(())
+}
+
+/// Invoke `MainActivity.setKeepScreenOn(on)`.
+fn call_activity_set_keep_screen_on(android_app: &AndroidApp, on: bool) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use jni::{JavaVM, objects::JObject};
+
+    let vm_ptr = android_app.vm_as_ptr();
+    let activity_ptr = android_app.activity_as_ptr();
+    if vm_ptr.is_null() || activity_ptr.is_null() {
+        anyhow::bail!("AndroidApp vm/activity pointer is null");
+    }
+    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
+    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let activity = unsafe { JObject::from_raw(activity_ptr as _) };
+    let result = env.call_method(&activity, "setKeepScreenOn", "(Z)V", &[on.into()]);
+    if result.is_err() {
+        env.exception_clear().ok();
+    }
+    result.context("call MainActivity.setKeepScreenOn")?;
     Ok(())
 }
 

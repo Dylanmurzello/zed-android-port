@@ -67,6 +67,7 @@ pub(crate) struct Callbacks {
     pub(crate) should_close: Option<Box<dyn FnMut() -> bool>>,
     pub(crate) close: Option<Box<dyn FnOnce()>>,
     pub(crate) appearance_changed: Option<Box<dyn FnMut()>>,
+    pub(crate) visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
 }
 
 pub(crate) struct AndroidWindowState {
@@ -108,6 +109,13 @@ pub(crate) struct AndroidWindowState {
     /// Set when gpui closes an extra window and drops its `AndroidWindow`.
     /// The platform run loop then drops the window from `extra_windows`.
     pub(crate) closed: bool,
+    /// Hidden while the window has no surface (the app or this Activity is
+    /// in the background, or the screen is off): gpui would lay out and
+    /// paint frames that can't be presented.
+    pub(crate) visibility: WindowVisibility,
+    /// The visibility last reported to gpui, which can't be called back
+    /// while it opens a window; see [`AndroidWindowStatePtr::sync_visibility`].
+    pub(crate) reported_visibility: WindowVisibility,
     /// Whether the window's Activity has input focus. Starts true because
     /// each window opens in front. Zed closes the active window for
     /// `workspace::CloseWindow`, so with every window reporting active,
@@ -341,6 +349,7 @@ impl AndroidWindowStatePtr {
         // Replace the previous wrapper (if any). The drop releases the prior
         // ANativeWindow refcount; Vulkan's VkSurfaceKHR holds its own ref.
         state.native_window = Some(native_window);
+        state.visibility = WindowVisibility::Visible;
 
         // Force a paint on the next refresh tick. After a fresh `replace_surface`
         // the swapchain is uninitialized (presents black), and gpui's
@@ -351,6 +360,30 @@ impl AndroidWindowStatePtr {
         state.force_render_after_recovery = true;
         request_frame_callback();
         Ok(())
+    }
+
+    /// Whether frames drawn now can be presented.
+    pub(crate) fn is_visible(&self) -> bool {
+        self.state.borrow().visibility.is_visible()
+    }
+
+    /// Reports a visibility change to gpui. The run loop calls this rather
+    /// than `attach_surface`/`detach_surface`, which also run while gpui is
+    /// opening a window and can't take callbacks.
+    pub(crate) fn sync_visibility(&self) {
+        let visibility = {
+            let mut state = self.state.borrow_mut();
+            if state.visibility == state.reported_visibility {
+                return;
+            }
+            state.reported_visibility = state.visibility;
+            state.visibility
+        };
+        let callback = self.callbacks.borrow_mut().visibility_change.take();
+        if let Some(mut callback) = callback {
+            callback(visibility);
+            self.callbacks.borrow_mut().visibility_change = Some(callback);
+        }
     }
 
     /// Called from the platform run loop on `MainEvent::TerminateWindow`. The
@@ -373,6 +406,7 @@ impl AndroidWindowStatePtr {
             native_window: std::ptr::null_mut(),
         };
         state.native_window = None;
+        state.visibility = WindowVisibility::Hidden;
         log::info!("AndroidWindow::detach_surface: surface unconfigured");
     }
 
@@ -591,6 +625,8 @@ impl AndroidWindow {
             last_present_failed: false,
             os_closed: AtomicBool::new(false),
             closed: false,
+            visibility: WindowVisibility::Visible,
+            reported_visibility: WindowVisibility::Visible,
             active: true,
             mouse_position: Point::default(),
             modifiers: Modifiers::default(),
@@ -746,9 +782,7 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn visibility(&self) -> WindowVisibility {
-        // Backgrounding tears down the Surface, which already stops
-        // painting, so gpui never needs to see a Hidden window.
-        WindowVisibility::Visible
+        self.ptr.state.borrow().reported_visibility
     }
 
     fn is_hovered(&self) -> bool {
@@ -798,7 +832,9 @@ impl PlatformWindow for AndroidWindow {
         self.ptr.callbacks.borrow_mut().active_status_change = Some(callback);
     }
 
-    fn on_visibility_change(&self, _callback: Box<dyn FnMut(WindowVisibility)>) {}
+    fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>) {
+        self.ptr.callbacks.borrow_mut().visibility_change = Some(callback);
+    }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.ptr.callbacks.borrow_mut().hovered_status_change = Some(callback);
