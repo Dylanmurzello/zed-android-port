@@ -849,12 +849,8 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
     ) {
         self.set_thumb_state(ThumbState::Dragging(axis, drag_offset), window, cx);
         self.scroll_handle().drag_started();
-        // Tell the platform we're driving a direct-manipulation drag.
-        // On touch backends this disables the gesture-recognizer's
-        // auto-conversion of finger drag to `ScrollWheel`, so the
-        // thumb actually tracks the finger via `MouseMove(Left held)`
-        // instead of having the drag clobbered at the threshold-cross
-        // cancel. Cleared in the dispatcher's `MouseUp` handler.
+        // Keeps Android's touch handling from turning the drag into
+        // scrolling.
         window.set_drag_active(true);
     }
 
@@ -1644,48 +1640,35 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                             return;
                         };
 
-                        // Always enter Dragging state on any MouseDown
-                        // inside the scrollbar layout. If the click
-                        // landed on the thumb, the drag offset is the
-                        // relative position within the thumb. If it
-                        // landed on the track, jump the thumb to
-                        // center-under-cursor first, then enter drag
-                        // mode with offset = thumb half-size so the
-                        // thumb stays centered on the cursor through
-                        // the drag. Touch fingers cover ~50px and
-                        // rarely land precisely on a ~4-12px thumb, so
-                        // treating the whole scrollbar column as
-                        // graspable is required for touch usability;
-                        // for mouse it turns track-click-and-hold into
-                        // a track-drag, which is a natural extension.
-                        //
-                        // Pre-compute everything that borrows
-                        // `scrollbar_layout` / `state` immutably up
-                        // front so the subsequent `state.set_offset` +
-                        // `state.set_dragging` mutable borrows are
-                        // unblocked.
-                        let axis = scrollbar_layout.axis;
-                        let thumb_bounds = scrollbar_layout.thumb_bounds;
-                        let (max_offset, current_offset) = {
-                            let scroll_handle = state.scroll_handle();
-                            (scroll_handle.max_offset(), scroll_handle.offset())
-                        };
-                        let track_click_offset = scrollbar_layout.compute_click_offset(
-                            event.position,
-                            max_offset,
-                            ScrollbarMouseEvent::TrackClick,
-                        );
+                        let ScrollbarLayout {
+                            thumb_bounds, axis, ..
+                        } = scrollbar_layout;
 
-                        let drag_offset = if thumb_bounds.contains(&event.position) {
-                            event.position.along(axis) - thumb_bounds.origin.along(axis)
+                        if thumb_bounds.contains(&event.position) {
+                            let offset =
+                                event.position.along(*axis) - thumb_bounds.origin.along(*axis);
+                            state.set_dragging(*axis, offset, window, cx);
                         } else {
+                            let scroll_handle = state.scroll_handle();
+                            let click_offset = scrollbar_layout.compute_click_offset(
+                                event.position,
+                                scroll_handle.max_offset(),
+                                ScrollbarMouseEvent::TrackClick,
+                            );
+                            // A finger rarely lands on the thin thumb, so a
+                            // touch on the track also grabs the thumb, by its
+                            // center, after the jump.
+                            let touch_drag = window
+                                .last_platform_input_was_touch()
+                                .then(|| (*axis, thumb_bounds.size.along(*axis) / 2.));
                             state.set_offset(
-                                current_offset.apply_along(axis, |_| track_click_offset),
+                                scroll_handle.offset().apply_along(*axis, |_| click_offset),
                                 cx,
                             );
-                            thumb_bounds.size.along(axis) / 2.
+                            if let Some((axis, drag_offset)) = touch_drag {
+                                state.set_dragging(axis, drag_offset, window, cx);
+                            }
                         };
-                        state.set_dragging(axis, drag_offset, window, cx);
 
                         cx.stop_propagation();
                     });
@@ -1771,12 +1754,6 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
 
                         state.update_hovered_thumb(&event.position, window, cx);
                     });
-                    // Clear the platform drag-active flag set in
-                    // `set_dragging`. Unconditional: a stray `MouseUp`
-                    // when nothing was dragging just clears an already-
-                    // false flag (no-op), which is safer than leaking a
-                    // set flag if the dispatch order ever skips the
-                    // drag-end path.
                     window.set_drag_active(false);
                 }
             });

@@ -871,16 +871,12 @@ fn open_settings_editor_with(
     }
 
     // We have to defer this to get the workspace off the stack.
-    // Re-check for an existing window inside the defer too: rapid
-    // back-to-back OpenSettings dispatches (e.g. tapping the menu twice,
-    // or two action handlers firing for the same dispatch) can both pass
-    // the immediate check above before either defer runs, spawning two
-    // Settings windows on the next tick — which on Android shows up as
-    // two ExtraWindowActivity instances stacked in Recents. The
-    // inside-defer check catches the race because cx.open_window
-    // registers the window synchronously, so by the time the second
-    // defer fires the first defer's window is already in cx.windows().
     cx.defer(move |cx| {
+        // Two OpenSettings dispatches in a row (a double tap on the menu)
+        // both pass the check above before either defer runs. On Android
+        // each window is an Activity, so the second one stacked a duplicate
+        // Settings window in Recents.
+        #[cfg(target_os = "android")]
         if let Some(existing_window) = cx
             .windows()
             .into_iter()
@@ -3045,14 +3041,6 @@ impl SettingsWindow {
         let (a11y_value, a11y_text_runs) =
             text_field_a11y_state("settings-ui-search", &self.search_bar, window, cx);
 
-        // Tap-to-focus the search Editor. Desktop relies on the
-        // `FocusSearch` keybinding (cmd-F / ctrl-F) to focus the bar,
-        // but mobile/touch platforms (Android) have no keyboard
-        // shortcut, and taps landing on the container padding (outside
-        // the Editor's own hitbox) don't focus it on their own. The
-        // on_click below forwards those taps to the editor's focus
-        // handle; without it, tapping the bar on Android does nothing
-        // and the soft keyboard never opens.
         let search_focus = self.search_bar.focus_handle(cx);
         h_flex()
             .id("settings-ui-search")
@@ -3071,17 +3059,15 @@ impl SettingsWindow {
             .bg(cx.theme().colors().editor_background)
             .border_1()
             .border_color(cx.theme().colors().border)
-            .on_click(move |_, window, cx| {
-                // Stop the click from bubbling up to the SettingsWindow
-                // root. That root has `track_focus(&self.focus_handle)`,
-                // so a click that reaches it resets window focus to the
-                // SettingsWindow's own focus_handle — immediately
-                // blurring whatever we just focused here. Observed
-                // symptom on Android: search bar emitted `Blurred`
-                // without ever emitting `Focused`. With propagation
-                // stopped, the focus we set stays put.
-                search_focus.focus(window, cx);
-                cx.stop_propagation();
+            // A tap on the bar's padding, outside the editor, focuses the
+            // search editor so the on-screen keyboard opens. Propagation
+            // stops because the window root's `track_focus` would take the
+            // focus straight back.
+            .when(cfg!(target_os = "android"), |this| {
+                this.on_click(move |_, window, cx| {
+                    search_focus.focus(window, cx);
+                    cx.stop_propagation();
+                })
             })
             .child(Icon::new(IconName::MagnifyingGlass).color(Color::Muted))
             .child(self.search_bar.clone())

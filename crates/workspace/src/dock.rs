@@ -55,13 +55,8 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
         PanelSizeState::default()
     }
     fn size_state_changed(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
-    /// Snap an incoming size to a panel-specific grid before it gets
-    /// stored. Default is no-op. The terminal panel overrides this to
-    /// round to the nearest multiple of `line_height` so the dock can
-    /// never sit at a fractional-row height, which would otherwise
-    /// produce a visible padding gap that grows and snaps during
-    /// interactive drag (because rendered content is row-quantized but
-    /// the dock allotment is continuous in logical pixels).
+    /// The size a dock drag settles at when it ends, on Android. The
+    /// terminal panel rounds it to whole rows.
     fn snap_size(&self, size: Pixels, _window: &Window, _cx: &App) -> Pixels {
         size
     }
@@ -423,30 +418,10 @@ fn resize_panel_entry(
     entry: &mut PanelEntry,
     size: Option<Pixels>,
     flex: Option<f32>,
-    during_drag: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> (&'static str, PanelSizeState) {
-    let size = size.map(|size| {
-        // Apply the panel's own snap policy before rounding to integer
-        // logical pixels. Panels with row-quantized content (terminal)
-        // override `snap_size` to round to a multiple of their row
-        // height so the dock can't be left at a fractional-row size,
-        // which avoids the visible padding gap during interactive drag.
-        //
-        // Skipped during the drag itself so the user feels pixel-smooth
-        // motion while moving the handle, and the snap is applied once
-        // on drag end (mouse-up finalize) so the dock settles to a
-        // row-multiple at rest. Without this two-phase pattern the
-        // dock height ticks by `line_height` per drag event, which
-        // reads as visible stutter.
-        let clamped = size.max(RESIZE_HANDLE_SIZE);
-        if during_drag {
-            clamped.round()
-        } else {
-            entry.panel.snap_size(clamped, window, cx).round()
-        }
-    });
+    let size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
     let uses_flexible_width = panel_uses_flexible_width(position, entry.panel.as_ref(), window, cx);
     if uses_flexible_width {
         entry.size_state.flex = flex;
@@ -1130,14 +1105,13 @@ impl Dock {
         &mut self,
         size: Option<Pixels>,
         flex: Option<f32>,
-        during_drag: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let position = self.position;
         if let Some(entry) = self.active_panel_entry_mut() {
             let (panel_key, size_state) =
-                resize_panel_entry(position, entry, size, flex, during_drag, window, cx);
+                resize_panel_entry(position, entry, size, flex, window, cx);
 
             let workspace = self.workspace.clone();
             cx.defer(move |cx| {
@@ -1151,20 +1125,30 @@ impl Dock {
         }
     }
 
+    fn snap_active_panel_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.active_panel_entry() else {
+            return;
+        };
+        let size_state = entry.size_state;
+        let size = size_state
+            .size
+            .map(|size| entry.panel.snap_size(size, window, cx));
+        self.resize_active_panel(size, size_state.flex, window, cx);
+    }
+
     /// Resizes the active panel and, when this dock is included in
     /// `resize_all_panels_in_dock`, all panels using the same sizing mode.
     pub fn resize_panel_sizes(
         &mut self,
         size: Option<Pixels>,
         flex: Option<f32>,
-        during_drag: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.should_resize_all_panels(cx) {
-            self.resize_all_panels(size, flex, during_drag, window, cx);
+            self.resize_all_panels(size, flex, window, cx);
         } else {
-            self.resize_active_panel(size, flex, during_drag, window, cx);
+            self.resize_active_panel(size, flex, window, cx);
         }
     }
 
@@ -1180,7 +1164,7 @@ impl Dock {
 
     fn reset_active_panel_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = PanelSizeState::default();
-        self.resize_active_panel(state.size, state.flex, false, window, cx);
+        self.resize_active_panel(state.size, state.flex, window, cx);
     }
 
     fn reset_all_panel_sizes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1190,7 +1174,7 @@ impl Dock {
         let size =
             (!panel_uses_flexible_width(self.position, active_entry.panel.as_ref(), window, cx))
                 .then(|| active_entry.panel.default_size(window, cx));
-        self.resize_all_panels(size, None, false, window, cx);
+        self.resize_all_panels(size, None, window, cx);
     }
 
     fn should_resize_all_panels(&self, cx: &App) -> bool {
@@ -1203,7 +1187,6 @@ impl Dock {
         &mut self,
         size: Option<Pixels>,
         flex: Option<f32>,
-        during_drag: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1227,7 +1210,6 @@ impl Dock {
                     entry,
                     size,
                     flex,
-                    during_drag,
                     window,
                     cx,
                 ));
@@ -1311,31 +1293,26 @@ impl Render for Dock {
         let dispatch_context = Self::dispatch_context();
         if let Some(entry) = self.visible_entry() {
             let position = self.position;
-            // Touch-mode widens the resize-handle hit zone and shows
-            // a visible pill in the middle so fingers can find +
-            // grab the edge. Mouse mode stays at the precise 6px
-            // hitbox to avoid intercepting clicks near panel content.
-            let touch_mode = window.last_platform_input_was_touch();
-            let handle_size = if touch_mode { px(20.) } else { RESIZE_HANDLE_SIZE };
+            // Android widens the handle for fingers and draws a grabber
+            // pill on it, lit while this dock is being resized.
+            let handle_size = if window.last_platform_input_was_touch() {
+                px(20.)
+            } else {
+                RESIZE_HANDLE_SIZE
+            };
+            let show_grabber = cfg!(target_os = "android");
             let pill_thickness = px(4.);
             let pill_length = px(32.);
-            // Only THIS dock's resize lights up. We type-check the
-            // active drag and require its position to match self — any
-            // other drag (a tab, a different dock, a scrollbar) leaves
-            // this pill in its rest color.
-            let is_this_dragging = cx
-                .active_drag_value::<DraggedDock>()
-                .is_some_and(|d| d.0 == position);
+            let is_this_dragging = show_grabber
+                && cx
+                    .active_drag_value::<DraggedDock>()
+                    .is_some_and(|dragged_dock| dragged_dock.0 == position);
             let pill_color = if is_this_dragging {
                 cx.theme().colors().border_focused
             } else {
                 cx.theme().colors().border_variant
             };
             let create_resize_handle = || {
-                // Visible affordance pill at the center of the
-                // handle, perpendicular to the resize axis (Material 3
-                // pattern). Pill stays visible at all sizes so mouse
-                // users get the same affordance as touch.
                 let pill = match position {
                     DockPosition::Bottom => div().w(pill_length).h(pill_thickness),
                     _ => div().w(pill_thickness).h(pill_length),
@@ -1343,10 +1320,9 @@ impl Render for Dock {
                 let pill = pill.bg(pill_color).rounded_full();
                 let handle = div()
                     .id("resize-handle")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(pill)
+                    .when(show_grabber, |handle| {
+                        handle.flex().items_center().justify_center().child(pill)
+                    })
                     .on_drag(DraggedDock(position), |dock, _, _, cx| {
                         cx.stop_propagation();
                         cx.new(|_| dock.clone())
@@ -1354,11 +1330,8 @@ impl Render for Dock {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, window, cx| {
-                            // Direct-manipulation drag claim. On touch
-                            // this gates the gesture-recognizer's
-                            // scroll-synthesis so gpui's on_drag system
-                            // actually receives the MouseMove(Left held)
-                            // events it needs to detect the drag.
+                            // Keeps Android's touch handling from turning
+                            // this drag into scrolling.
                             window.set_drag_active(true);
                             cx.stop_propagation();
                         }),
@@ -1375,28 +1348,8 @@ impl Render for Dock {
                                     })
                                     .ok();
                                 cx.stop_propagation();
-                            } else {
-                                // Drag-end finalize: re-apply the size
-                                // with the panel's snap policy so the
-                                // dock settles to its allowed grid
-                                // (row multiples for the terminal
-                                // panel). During the drag itself
-                                // `resize_panel_entry` skipped the
-                                // snap so the user felt pixel-smooth
-                                // motion; without this re-apply on
-                                // mouse-up the dock would stay at a
-                                // non-snapped size and the fractional-
-                                // row padding gap that motivated the
-                                // snap would be back.
-                                if let Some(size_state) = dock.active_panel_size() {
-                                    dock.resize_active_panel(
-                                        size_state.size,
-                                        size_state.flex,
-                                        false,
-                                        window,
-                                        cx,
-                                    );
-                                }
+                            } else if cfg!(target_os = "android") {
+                                dock.snap_active_panel_size(window, cx);
                             }
                         }),
                     )
@@ -1432,9 +1385,6 @@ impl Render for Dock {
                 }
             };
 
-            // Border between dock and adjacent content. Brighten only
-            // when *this* dock is being dragged so a terminal resize
-            // doesn't make the project-panel border light up too.
             let dock_border_color = if is_this_dragging {
                 cx.theme().colors().border_focused
             } else {

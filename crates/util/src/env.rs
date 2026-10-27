@@ -41,9 +41,7 @@ static TERMINAL_ENV_OVERLAY: OnceLock<Vec<(String, EnvOp)>> = OnceLock::new();
 /// Vec when they have no overlay to contribute.
 pub fn register_terminal_env_overlay(ops: Vec<(String, EnvOp)>) {
     if TERMINAL_ENV_OVERLAY.set(ops).is_err() {
-        log::warn!(
-            "util::env: terminal env overlay already registered; ignoring re-register"
-        );
+        log::warn!("util::env: terminal env overlay already registered; ignoring re-register");
     }
 }
 
@@ -65,9 +63,7 @@ static WORKSPACE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn register_workspace_root(path: Option<PathBuf>) {
     if WORKSPACE_ROOT.set(path).is_err() {
-        log::warn!(
-            "util::env: workspace_root already registered; ignoring re-register"
-        );
+        log::warn!("util::env: workspace_root already registered; ignoring re-register");
     }
 }
 
@@ -87,9 +83,7 @@ static NPM_LIBTERMUX_EXEC_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn register_npm_libtermux_exec_path(path: Option<PathBuf>) {
     if NPM_LIBTERMUX_EXEC_PATH.set(path).is_err() {
-        log::warn!(
-            "util::env: npm_libtermux_exec_path already registered; ignoring re-register"
-        );
+        log::warn!("util::env: npm_libtermux_exec_path already registered; ignoring re-register");
     }
 }
 

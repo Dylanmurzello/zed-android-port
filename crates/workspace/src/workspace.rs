@@ -5973,9 +5973,9 @@ impl Workspace {
                 return;
             };
             match dock.position() {
-                DockPosition::Left => self.resize_left_dock(panel_size + amount, false, window, cx),
-                DockPosition::Bottom => self.resize_bottom_dock(panel_size + amount, false, window, cx),
-                DockPosition::Right => self.resize_right_dock(panel_size + amount, false, window, cx),
+                DockPosition::Left => self.resize_left_dock(panel_size + amount, window, cx),
+                DockPosition::Bottom => self.resize_bottom_dock(panel_size + amount, window, cx),
+                DockPosition::Right => self.resize_right_dock(panel_size + amount, window, cx),
             }
         } else {
             self.center
@@ -8977,19 +8977,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match dock_pos {
-            DockPosition::Left => self.resize_left_dock(new_size, false, window, cx),
-            DockPosition::Right => self.resize_right_dock(new_size, false, window, cx),
-            DockPosition::Bottom => self.resize_bottom_dock(new_size, false, window, cx),
+            DockPosition::Left => self.resize_left_dock(new_size, window, cx),
+            DockPosition::Right => self.resize_right_dock(new_size, window, cx),
+            DockPosition::Bottom => self.resize_bottom_dock(new_size, window, cx),
         }
     }
 
-    fn resize_left_dock(
-        &mut self,
-        new_size: Pixels,
-        during_drag: bool,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn resize_left_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let workspace_width = self.bounds.size.width;
         let mut size = new_size.min(workspace_width - RESIZE_HANDLE_SIZE);
 
@@ -9004,17 +8998,11 @@ impl Workspace {
 
         let flex_grow = self.dock_flex_for_size(DockPosition::Left, size, window, cx);
         self.left_dock.update(cx, |left_dock, cx| {
-            left_dock.resize_panel_sizes(Some(size), flex_grow, during_drag, window, cx);
+            left_dock.resize_panel_sizes(Some(size), flex_grow, window, cx);
         });
     }
 
-    fn resize_right_dock(
-        &mut self,
-        new_size: Pixels,
-        during_drag: bool,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn resize_right_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let workspace_width = self.bounds.size.width;
         let mut size = new_size.min(workspace_width - RESIZE_HANDLE_SIZE);
         self.left_dock.read_with(cx, |left_dock, cx| {
@@ -9027,20 +9015,14 @@ impl Workspace {
         });
         let flex_grow = self.dock_flex_for_size(DockPosition::Right, size, window, cx);
         self.right_dock.update(cx, |right_dock, cx| {
-            right_dock.resize_panel_sizes(Some(size), flex_grow, during_drag, window, cx);
+            right_dock.resize_panel_sizes(Some(size), flex_grow, window, cx);
         });
     }
 
-    fn resize_bottom_dock(
-        &mut self,
-        new_size: Pixels,
-        during_drag: bool,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn resize_bottom_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let size = new_size.min(self.bounds.bottom() - RESIZE_HANDLE_SIZE - self.bounds.top());
         self.bottom_dock.update(cx, |bottom_dock, cx| {
-            bottom_dock.resize_panel_sizes(Some(size), None, during_drag, window, cx);
+            bottom_dock.resize_panel_sizes(Some(size), None, window, cx);
         });
     }
 
@@ -9771,7 +9753,6 @@ impl Render for Workspace {
                                                     workspace.resize_left_dock(
                                                         e.event.position.x
                                                             - workspace.bounds.left(),
-                                                        true,
                                                         window,
                                                         cx,
                                                     );
@@ -9780,7 +9761,6 @@ impl Render for Workspace {
                                                     workspace.resize_right_dock(
                                                         workspace.bounds.right()
                                                             - e.event.position.x,
-                                                        true,
                                                         window,
                                                         cx,
                                                     );
@@ -9789,7 +9769,6 @@ impl Render for Workspace {
                                                     workspace.resize_bottom_dock(
                                                         workspace.bounds.bottom()
                                                             - e.event.position.y,
-                                                        true,
                                                         window,
                                                         cx,
                                                     );
@@ -15992,7 +15971,7 @@ mod tests {
             });
 
             workspace.update_in(cx, |workspace, window, cx| {
-                workspace.resize_left_dock(px(350.), false, window, cx);
+                workspace.resize_left_dock(px(350.), window, cx);
             });
 
             cx.run_until_parked();
@@ -16053,7 +16032,7 @@ mod tests {
             });
 
             workspace.update_in(cx, |workspace, window, cx| {
-                workspace.resize_right_dock(px(300.), false, window, cx);
+                workspace.resize_right_dock(px(300.), window, cx);
             });
 
             cx.run_until_parked();
@@ -16119,7 +16098,7 @@ mod tests {
         });
 
         workspace.update_in(cx, |workspace, window, cx| {
-            workspace.resize_left_dock(px(350.), false, window, cx);
+            workspace.resize_left_dock(px(350.), window, cx);
         });
 
         cx.run_until_parked();
@@ -16199,7 +16178,7 @@ mod tests {
                 dock.activate_panel(0, window, cx);
                 dock.set_open(true, window, cx);
             });
-            workspace.resize_left_dock(px(400.), false, window, cx);
+            workspace.resize_left_dock(px(400.), window, cx);
             (first_panel, second_panel)
         });
 
@@ -16218,7 +16197,7 @@ mod tests {
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.activate_panel(1, window, cx);
             });
-            workspace.resize_left_dock(px(450.), false, window, cx);
+            workspace.resize_left_dock(px(450.), window, cx);
         });
         cx.dispatch_action(ResetOpenDocksSize);
 
@@ -16234,7 +16213,7 @@ mod tests {
         first_panel.update(cx, |panel, _| panel.flexible = true);
         second_panel.update(cx, |panel, _| panel.flexible = true);
         workspace.update_in(cx, |workspace, window, cx| {
-            workspace.resize_left_dock(px(350.), false, window, cx);
+            workspace.resize_left_dock(px(350.), window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.reset_panel_sizes(window, cx);
             });
@@ -16265,7 +16244,7 @@ mod tests {
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.activate_panel(0, window, cx);
             });
-            workspace.resize_left_dock(px(400.), false, window, cx);
+            workspace.resize_left_dock(px(400.), window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.reset_panel_sizes(window, cx);
             });
@@ -16342,7 +16321,7 @@ mod tests {
                 dock.set_open(true, window, cx);
             });
 
-            workspace.resize_left_dock(px(450.0), false, window, cx);
+            workspace.resize_left_dock(px(450.0), window, cx);
 
             let dock = workspace.left_dock().read(cx);
             let fixed_panel_a_size = dock.stored_panel_size(&fixed_panel_a, window, cx);
@@ -16388,7 +16367,7 @@ mod tests {
                 dock.activate_panel(0, window, cx);
             });
 
-            workspace.resize_left_dock(px(450.), false, window, cx);
+            workspace.resize_left_dock(px(450.), window, cx);
         });
 
         cx.dispatch_action(ResetOpenDocksSize);
@@ -16830,7 +16809,7 @@ mod tests {
                 Some(px(300.))
             );
 
-            workspace.resize_left_dock(px(1337.), false, window, cx);
+            workspace.resize_left_dock(px(1337.), window, cx);
             assert_eq!(
                 workspace
                     .right_dock()

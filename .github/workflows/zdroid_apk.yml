@@ -84,10 +84,12 @@ jobs:
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
 
-      - name: Check formatting of the fork's crates
-        # The Android app and the askpass helper are separate workspaces.
+      - name: Check formatting
+        # The whole workspace, so the fork's edits to Zed's crates are
+        # checked too. The Android app and the askpass helper are separate
+        # workspaces.
         run: |
-          cargo fmt -p gpui_android -p zdroid_runtime -- --check
+          cargo fmt --all -- --check
           cargo fmt --manifest-path "$APP_DIR/Cargo.toml" -- --check
           cargo fmt --manifest-path "$APP_DIR/askpass-helper/Cargo.toml" -- --check
 

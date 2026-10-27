@@ -14,8 +14,10 @@ use settings::{
 };
 use theme::{Appearance, SystemAppearance, ThemeRegistry};
 use theme_settings::{ThemeAppearanceMode, ThemeName, ThemeSelection, ThemeSettings};
+#[cfg(target_os = "android")]
+use ui::Switch;
 use ui::{
-    AgentSetupButton, Divider, StatefulInteractiveElement, Switch, SwitchField, TintColor,
+    AgentSetupButton, Divider, StatefulInteractiveElement, SwitchField, TintColor,
     ToggleButtonGroup, ToggleButtonGroupSize, ToggleButtonSimple, ToggleButtonWithIcon, Tooltip,
     prelude::*,
 };
@@ -705,7 +707,11 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
     let on_screen_keyboard_row = h_flex()
         .gap_3()
         .items_center()
-        .child(Icon::new(IconName::Keyboard).size(IconSize::Small).color(Color::Muted))
+        .child(
+            Icon::new(IconName::Keyboard)
+                .size(IconSize::Small)
+                .color(Color::Muted),
+        )
         .child(Label::new("Soft Keyboard"))
         .child(div().flex_grow(1.))
         .child(
@@ -726,7 +732,10 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
                 };
                 let fs = <dyn Fs>::global(cx);
                 update_settings_file(fs, cx, move |setting, _| {
-                    setting.android_input.get_or_insert_default().on_screen_keyboard = Some(value);
+                    setting
+                        .android_input
+                        .get_or_insert_default()
+                        .on_screen_keyboard = Some(value);
                 });
             }),
         );
@@ -734,7 +743,11 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
     let programming_extras_row_row = h_flex()
         .gap_3()
         .items_center()
-        .child(Icon::new(IconName::Code).size(IconSize::Small).color(Color::Muted))
+        .child(
+            Icon::new(IconName::Code)
+                .size(IconSize::Small)
+                .color(Color::Muted),
+        )
         .child(Label::new("Programming Keys Row"))
         .child(div().flex_grow(1.))
         .child(
@@ -766,7 +779,11 @@ fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl Int
     let trackpad_mode_row = h_flex()
         .gap_3()
         .items_center()
-        .child(Icon::new(IconName::Crosshair).size(IconSize::Small).color(Color::Muted))
+        .child(
+            Icon::new(IconName::Crosshair)
+                .size(IconSize::Small)
+                .color(Color::Muted),
+        )
         .child(Label::new("Virtual Trackpad"))
         .child(div().flex_grow(1.))
         .child(

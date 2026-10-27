@@ -13,7 +13,7 @@ use futures::{channel::oneshot, future::join_all};
 use gpui::{
     Action, Anchor, App, AsyncApp, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, Pixels, Render, Styled, Task, TaskExt, WeakEntity,
-    Window, actions, px,
+    Window, actions,
 };
 use itertools::Itertools;
 use project::{Fs, Project};
@@ -21,7 +21,6 @@ use project::{Fs, Project};
 use settings::{Settings, TerminalDockPosition};
 use task::{RevealStrategy, RevealTarget, Shell, ShellBuilder, SpawnInTerminal, TaskId};
 use terminal::{Terminal, terminal_settings::TerminalSettings};
-use theme_settings::{self, ThemeSettings};
 use ui::{
     ButtonLike, Clickable, CommonAnimationExt, ContextMenu, FluentBuilder, PopoverMenu,
     SplitButton, Toggleable, Tooltip, prelude::*,
@@ -1716,37 +1715,27 @@ impl Panel for TerminalPanel {
         }
     }
 
+    // The terminal draws whole rows, so a bottom dock between two row
+    // heights leaves a gap under the last row. Android snaps the dock to
+    // a row multiple when a drag ends; left and right docks aren't snapped.
+    #[cfg(target_os = "android")]
     fn snap_size(&self, size: Pixels, window: &Window, cx: &App) -> Pixels {
-        // The terminal renders content in whole rows of `line_height`
-        // logical pixels. If the dock's height isn't a multiple of
-        // `line_height` the renderer has to either pad the gap (visible
-        // catch-up during drag) or clip a partial row (text too close
-        // to the edge). Snapping the dock to a row multiple here makes
-        // the geometric mismatch impossible: the dock can't sit between
-        // rows. The drag becomes stair-stepped in row increments, which
-        // matches what every standalone terminal emulator does. Only
-        // applied when the panel is the bottom dock — at left / right
-        // the relevant quantum would be `cell_width`, but the visual
-        // cost of fractional width is less obvious and we don't bother
-        // for now.
         if self.position(window, cx) != DockPosition::Bottom {
             return size;
         }
-        let theme_settings = ThemeSettings::get_global(cx);
+        let theme_settings = theme_settings::ThemeSettings::get_global(cx);
         let terminal_settings = TerminalSettings::get_global(cx);
-        let _ = window; // rem_size not needed because the font helpers already return Pixels
-        let buffer_font_size = theme_settings.buffer_font_size(cx);
         let font_size = terminal_settings
             .font_size
-            .map_or(buffer_font_size, |s| {
-                theme_settings::adjusted_font_size(s, cx)
+            .map_or(theme_settings.buffer_font_size(cx), |font_size| {
+                theme_settings::adjusted_font_size(font_size, cx)
             });
-        let line_height_logical = f32::from(font_size) * terminal_settings.line_height.value();
-        if line_height_logical <= 0.0 {
+        let line_height = f32::from(font_size) * terminal_settings.line_height.value();
+        if line_height <= 0.0 {
             return size;
         }
-        let n = (f32::from(size) / line_height_logical).round().max(1.0);
-        px(n * line_height_logical)
+        let rows = (f32::from(size) / line_height).round().max(1.0);
+        gpui::px(rows * line_height)
     }
 
     fn supports_flexible_size(&self) -> bool {

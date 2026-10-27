@@ -42,13 +42,9 @@ unsafe {
 }
 ```
 
-In `terminal.rs::insert_zed_terminal_env` (Android cfg branch):
-
-```rust
-if let Ok(termux_home) = std::env::var("TERMUX__HOME") {
-    env.insert("HOME".to_string(), termux_home);
-}
-```
+In `terminal.rs::insert_android_terminal_env`, the bootstrap runtime's
+terminal overlay (registered through `util::env`) sets the terminal's
+`HOME` to `TERMUX__HOME`.
 
 The terminal-subprocess env override sets HOME to TERMUX__HOME just for
 that subprocess (and its descendants). The Rust globals stay untouched. LSP
