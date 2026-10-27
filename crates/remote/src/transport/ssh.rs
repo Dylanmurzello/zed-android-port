@@ -897,24 +897,20 @@ impl SshRemoteConnection {
                 return Err(e.context("Failed to connect to host"));
             }
 
-            if let Some(status) = master_process.as_mut().try_status()? {
-                // With -f on Android (and any caller that forks the
-                // master into background after auth), the parent ssh
-                // exits with success once the daemonized child has the
-                // master socket up. That's the happy path, not a
-                // failure — fall through to SshSocket::new. Only bail
-                // on non-zero exit.
-                if !status.success() {
-                    let mut output = Vec::new();
-                    if let Some(mut stderr) = master_process.as_mut().stderr.take() {
-                        stderr.read_to_end(&mut output).await?;
-                    }
-                    let error_message = format!(
-                        "failed to connect: {}",
-                        String::from_utf8_lossy(&output).trim()
-                    );
-                    anyhow::bail!(error_message);
-                }
+            // With -f (Android), the parent ssh exits with success once the
+            // master socket is up.
+            if let Some(status) = master_process.as_mut().try_status()?
+                && !(cfg!(target_os = "android") && status.success())
+            {
+                let mut output = Vec::new();
+                let mut stderr = master_process.as_mut().stderr.take().unwrap();
+                stderr.read_to_end(&mut output).await?;
+
+                let error_message = format!(
+                    "failed to connect: {}",
+                    String::from_utf8_lossy(&output).trim()
+                );
+                anyhow::bail!(error_message);
             }
 
             let socket = SshSocket::new(connection_options, socket_path).await?;
@@ -965,24 +961,20 @@ impl SshRemoteConnection {
                 return Err(e.context("Failed to connect to host"));
             }
 
-            if let Some(status) = master_process.as_mut().try_status()? {
-                // With -f on Android (and any caller that forks the
-                // master into background after auth), the parent ssh
-                // exits with success once the daemonized child has the
-                // master socket up. That's the happy path, not a
-                // failure — fall through to SshSocket::new. Only bail
-                // on non-zero exit.
-                if !status.success() {
-                    let mut output = Vec::new();
-                    if let Some(mut stderr) = master_process.as_mut().stderr.take() {
-                        stderr.read_to_end(&mut output).await?;
-                    }
-                    let error_message = format!(
-                        "failed to connect: {}",
-                        String::from_utf8_lossy(&output).trim()
-                    );
-                    anyhow::bail!(error_message);
-                }
+            // With -f (Android), the parent ssh exits with success once the
+            // master socket is up.
+            if let Some(status) = master_process.as_mut().try_status()?
+                && !(cfg!(target_os = "android") && status.success())
+            {
+                let mut output = Vec::new();
+                let mut stderr = master_process.as_mut().stderr.take().unwrap();
+                stderr.read_to_end(&mut output).await?;
+
+                let error_message = format!(
+                    "failed to connect: {}",
+                    String::from_utf8_lossy(&output).trim()
+                );
+                anyhow::bail!(error_message);
             }
 
             let socket = SshSocket::new(
