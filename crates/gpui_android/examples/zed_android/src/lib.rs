@@ -1329,6 +1329,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // with no model providers registered, Zed's built-in agent and the inline
     // assistant have no model, and only ACP agents can run.
     let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
+    // Zed counts an install as new when it creates the installation ID; the
+    // app has none, and onboarding hasn't run yet on a new install.
+    let is_new_install = matches!(KeyValueStore::global(cx).read_kvp(FIRST_OPEN), Ok(None));
     project::AgentRegistryStore::init_global(
         cx,
         app_state.fs.clone(),
@@ -1338,7 +1341,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         app_state.fs.clone(),
         prompt_builder,
         app_state.languages.clone(),
-        false,
+        is_new_install,
         false,
         cx,
     );
