@@ -143,38 +143,14 @@ pub(crate) struct AndroidWindowState {
     /// tap-tap-drag pending flags, etc. all live here so a gesture in
     /// one window doesn't leak into another's.
     pub(crate) captured: crate::captured_pointer::CapturedPointerState,
-    /// Per-window native-touch SM state. See `crate::touch`. Per-pointer-
-    /// ID tracking, multi-finger gesture classification, tap vs scroll
-    /// discrimination. Each window's touchscreen events are isolated.
-    pub(crate) touch: crate::touch::TouchState,
-    /// Trackpad-mode counterpart to `touch`. Receives the same
+    /// Trackpad-mode counterpart to `touch_feed`. Receives the same
     /// `TouchEvent` stream when `android_input.trackpad_mode` is on
     /// (the dispatcher branches via the
     /// `ime::TRACKPAD_MODE_ENABLED` atomic).
     pub(crate) trackpad_touch: crate::touch::TrackpadTouchState,
-    /// The recognizer the current finger gesture goes to, `touch` or
-    /// `touch_feed`; see [`crate::touch::FingerRoute`].
-    pub(crate) finger_route: crate::touch::FingerRoute,
-    /// Feeds finger gestures to gpui's own touch gesture recognizer when
-    /// `android_input.legacy_touch` is off.
+    /// Feeds finger gestures to gpui's own touch gesture recognizer. Each
+    /// window's touchscreen events are isolated.
     pub(crate) touch_feed: crate::touch::TouchFeed,
-    /// Set by elements (scrollbar thumb, splitter, resize handle) while
-    /// they're actively driving a direct-manipulation drag. Flips via
-    /// `PlatformWindow::set_drag_active` on this window's
-    /// `AndroidWindow`. The touch SM checks this in its `Move` handler:
-    /// while set, single-finger drag emits `MouseMove(Left held)` so
-    /// the dragging element receives motion instead of having the SM
-    /// auto-convert to `Scroll`. Without this gate, a touch-drag
-    /// on a scrollbar thumb gets clobbered by the threshold-cross
-    /// `MouseUp(0)` cancel.
-    pub(crate) drag_active: AtomicBool,
-    /// True when the most recent pointer event on this window was
-    /// touch (Finger). Set in `events.rs` and `touch.rs` for Finger
-    /// dispatch; cleared for mouse / stylus / captured-trackpad. UI
-    /// components query via `Window::last_input_was_touch` and use it
-    /// to widen hit zones for touch without affecting mouse
-    /// precision (e.g. the pane splitter MouseDown handler).
-    pub(crate) last_input_was_touch: AtomicBool,
     /// Mirror of [`AndroidWindow::extra_window_id`] — set by
     /// `cx.open_window` after the wrapping `AndroidWindow` is
     /// built. None for the primary surface, `Some(id)` for
@@ -664,12 +640,8 @@ impl AndroidWindow {
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
             captured: crate::captured_pointer::CapturedPointerState::default(),
-            touch: crate::touch::TouchState::default(),
             trackpad_touch: crate::touch::TrackpadTouchState::default(),
-            finger_route: crate::touch::FingerRoute::default(),
             touch_feed: crate::touch::TouchFeed::new(touch_slop),
-            drag_active: AtomicBool::new(false),
-            last_input_was_touch: AtomicBool::new(false),
             extra_window_id: None,
             ime_composition_start: None,
             ime_composition_text: None,
@@ -896,22 +868,6 @@ impl PlatformWindow for AndroidWindow {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>) {
         self.ptr.callbacks.borrow_mut().appearance_changed = Some(callback);
-    }
-
-    fn set_drag_active(&self, active: bool) {
-        self.ptr
-            .state
-            .borrow()
-            .drag_active
-            .store(active, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn last_input_was_touch(&self) -> bool {
-        self.ptr
-            .state
-            .borrow()
-            .last_input_was_touch
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn show_soft_keyboard(&self) {

@@ -1046,12 +1046,8 @@ impl TerminalElement {
 
                 // gpui's `EntityInputHandler` docs: a click on the field
                 // requests the keyboard, which reopens it after a dismissal.
-                // Not for gpui_android's legacy finger input, which sends a
-                // mouse down as every scroll starts; its taps ask on the lift.
                 #[cfg(target_os = "android")]
-                if !(window.last_platform_input_was_touch() && !window.last_input_was_touch())
-                    && !terminal_view.read(cx).is_read_only()
-                {
+                if !terminal_view.read(cx).is_read_only() {
                     window.request_virtual_keyboard();
                 }
             }
@@ -1089,8 +1085,6 @@ impl TerminalElement {
             self.interactivity.on_mouse_up(button, {
                 let terminal = terminal.clone();
                 let focus = focus.clone();
-                #[cfg(target_os = "android")]
-                let terminal_view = self.terminal_view.clone();
                 move |event, window, cx| {
                     if !focus.is_focused(window) {
                         return;
@@ -1109,31 +1103,6 @@ impl TerminalElement {
                         terminal.mouse_up(event, mouse_input_mode, cx);
                         cx.notify();
                     });
-                    // gpui_android's original touch handling ends a tap with a
-                    // click count of 1, a scroll or cancel with 0, and reports
-                    // a long press as a double click, optionally followed by a
-                    // drag. With gpui's touch gestures this is a real double
-                    // tap, and the long press is handled below.
-                    #[cfg(target_os = "android")]
-                    if button == MouseButton::Left
-                        && window.last_platform_input_was_touch()
-                        && !window.last_input_was_touch()
-                    {
-                        if event.click_count >= 1 && !terminal_view.read(cx).is_read_only() {
-                            window.request_virtual_keyboard();
-                        }
-                        if event.click_count == 2 {
-                            Self::deploy_long_press_context_menu(
-                                &terminal,
-                                &terminal_view,
-                                event.position,
-                                event.modifiers.shift,
-                                mouse_input_mode,
-                                window,
-                                cx,
-                            );
-                        }
-                    }
                 }
             });
         }

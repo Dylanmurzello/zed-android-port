@@ -4150,35 +4150,6 @@ impl Window {
         });
     }
 
-    /// Tell the platform that an element is actively driving a direct-
-    /// manipulation drag (e.g. a scrollbar thumb being dragged). On
-    /// touch platforms this flag gates the gesture-recognizer's
-    /// auto-conversion of a single-finger drag into `ScrollWheel`
-    /// events: while `drag_active` is set, the touch SM emits
-    /// `MouseMove(Left held)` so the dragging element receives the
-    /// motion. Mouse / desktop platforms ignore the flag (default
-    /// empty impl).
-    ///
-    /// Callers must clear the flag (`set_drag_active(false)`) when the
-    /// drag ends, otherwise touch scrolling stays globally disabled.
-    pub fn set_drag_active(&self, active: bool) {
-        self.platform_window.set_drag_active(active);
-    }
-
-    /// Returns true when the most recent pointer input on this window
-    /// came from touch (finger). UI components can use this to widen
-    /// hit zones / show grabber affordances when touch is the active
-    /// input mode, without affecting mouse precision. Default impl
-    /// (non-Android platforms) returns false.
-    ///
-    /// Distinct from `last_input_was_touch`, which tracks gpui's own
-    /// `PlatformInput::Touch` events and gates hover styles. Android
-    /// delivers touches as synthesized mouse events, so only the
-    /// platform window knows they came from a finger.
-    pub fn last_platform_input_was_touch(&self) -> bool {
-        self.platform_window.last_input_was_touch()
-    }
-
     /// Updates the cursor style for the entire window at the platform level. A cursor
     /// style using this method will have precedence over any cursor style set using
     /// `set_cursor_style`. This method should only be called during the paint

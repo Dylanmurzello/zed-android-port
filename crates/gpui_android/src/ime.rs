@@ -96,16 +96,6 @@ pub(crate) fn invert_scroll_enabled() -> bool {
     INVERT_SCROLL.load(Ordering::Acquire)
 }
 
-/// Mirrors `android_input.legacy_touch`. Written by the SettingsStore
-/// observer in `zed_android::lib::main`. Read by the touch dispatcher
-/// (`crate::touch`) when a finger gesture starts: set, fingers go to
-/// Zdroid's finger state machine; clear, to gpui's gesture recognizer.
-pub(crate) static LEGACY_TOUCH: AtomicBool = AtomicBool::new(true);
-
-pub(crate) fn legacy_touch_enabled() -> bool {
-    LEGACY_TOUCH.load(Ordering::Acquire)
-}
-
 /// IME window ids (0 for the main window) whose focused text field accepts
 /// typed text, as gpui reports through `text_input_state_changed`. A focused
 /// field that doesn't, such as an editor in vim's normal or visual mode,

@@ -8,8 +8,9 @@
 //!   by `ExtraWindowActivity.forwardTouchEvent`.
 //!
 //! Source-based routing: Finger input (multi-touch, tap, drag) goes to
-//! [`crate::touch`]'s first-class SM. Mouse / stylus / captured-trackpad
-//! continue through these dispatchers. Per-modality submodules:
+//! [`crate::touch`], which feeds gpui's gesture recognizer or the virtual
+//! trackpad. Mouse / stylus / captured-trackpad continue through these
+//! dispatchers. Per-modality submodules:
 //! - [`mouse`] for mouse buttons + wheel + drag (button mapping + scroll
 //!   synthesis).
 //! - [`click_track`] for shared click-count + non-primary held-button
@@ -70,8 +71,7 @@ pub(crate) const JAVA_ACTION_HOVER_MOVE: i32 = 7;
 pub(crate) const JAVA_ACTION_SCROLL: i32 = 8;
 pub(crate) const JAVA_ACTION_HOVER_ENTER: i32 = 9;
 
-/// Java `MotionEvent.TOOL_TYPE_*` constants, for the same reason.
-pub(crate) const JAVA_TOOL_TYPE_FINGER: i32 = 1;
+/// Java `MotionEvent.TOOL_TYPE_PALM`, for the same reason.
 pub(crate) const JAVA_TOOL_TYPE_PALM: i32 = 5;
 
 /// Java `MotionEvent.FLAG_CANCELED`: the pointer going up was cancelled,
@@ -106,22 +106,9 @@ pub(crate) fn translate_motion_event(
     let pressed_mouse_button = mouse::button_from_state(button_state);
     let input_source = source::classify(event);
 
-    // Track the most recent input modality so UI components can widen
-    // hit zones for touch without affecting mouse precision. In
-    // trackpad mode, finger input is synthesized into mouse events
-    // and the user controls a precise virtual cursor — touch-friendly
-    // widening would actively hurt (splitters / scrollbars capture
-    // clicks meant for adjacent buttons like tab-close). Treat
-    // finger-driven trackpad mode as mouse for hit-test purposes.
-    let is_touch_input =
-        input_source == source::InputSource::Finger && !crate::ime::trackpad_mode_enabled();
-    state
-        .last_input_was_touch
-        .store(is_touch_input, std::sync::atomic::Ordering::Relaxed);
-
-    // Finger input routes through the first-class touch state machine.
-    // Mouse / stylus / captured-trackpad continue through the match
-    // arms below.
+    // Finger input goes to gpui's touch gestures (or the virtual trackpad)
+    // through `crate::touch`. Mouse / stylus / captured-trackpad continue
+    // through the match arms below.
     if input_source == source::InputSource::Finger {
         return crate::touch::dispatch_primary(state, event, scale_factor);
     }
@@ -228,9 +215,9 @@ pub(crate) fn translate_motion_event(
 ///
 /// Source classification isn't plumbed across the JNI bridge, so we
 /// route touch-like actions (Down/Up/Move/Cancel/PointerDown/PointerUp)
-/// through the touch SM unconditionally and reserve the mouse-only
-/// actions (HOVER_*, SCROLL) for the mouse path below. Only the tool
-/// types decide whether a gesture can go to gpui's touch recognizer.
+/// through `crate::touch` unconditionally, where a mouse or stylus acts
+/// as a finger, and reserve the mouse-only actions (HOVER_*, SCROLL) for
+/// the mouse path below. The tool types only tell palms apart.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn translate_extra_motion_event(
     window_id: u64,
@@ -250,10 +237,10 @@ pub(crate) fn translate_extra_motion_event(
         return Vec::new();
     }
 
-    // Touch-actions go through the touch SM (per-window keyed). Mouse-
-    // only actions (HOVER_ENTER/MOVE, SCROLL) fall through to the legacy
-    // mouse path so a USB mouse plugged in while Settings is open still
-    // hovers + scrolls correctly.
+    // Touch actions go through `crate::touch` (per-window keyed). Mouse-
+    // only actions (HOVER_ENTER/MOVE, SCROLL) fall through to the mouse
+    // path so a USB mouse plugged in while Settings is open still hovers
+    // + scrolls correctly.
     let is_touch_action = matches!(
         action_masked,
         JAVA_ACTION_DOWN
@@ -262,13 +249,6 @@ pub(crate) fn translate_extra_motion_event(
             | JAVA_ACTION_CANCEL
             | JAVA_ACTION_POINTER_DOWN
             | JAVA_ACTION_POINTER_UP
-    );
-    // Same trackpad-mode override as the primary surface path:
-    // virtual trackpad treats finger as mouse, no touch-friendly
-    // hit-zone widening.
-    state.last_input_was_touch.store(
-        is_touch_action && !crate::ime::trackpad_mode_enabled(),
-        std::sync::atomic::Ordering::Relaxed,
     );
     if is_touch_action {
         return crate::touch::dispatch_extra(

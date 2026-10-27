@@ -2,7 +2,7 @@
 
 Zdroid implements these because upstream Zed doesn't yet; at each Zed sync, check whether upstream now covers one, and if so take upstream's and delete ours.
 
-Everything outside `crates/gpui_android` and the app is gated with `cfg(target_os = "android")`. Items (a) to (d) apply with `android_input.legacy_touch` off, the default, when finger input goes to gpui's touch gesture recognizer (`crates/gpui/src/gestures.rs`).
+Everything outside `crates/gpui_android` and the app is gated with `cfg(target_os = "android")`. Items (a) to (d) build on gpui's touch gesture recognizer (`crates/gpui/src/gestures.rs`), which gets all finger input.
 
 ## (a) Two-finger tap and two-finger pan
 
@@ -40,7 +40,7 @@ Taps carry the modifier keys held on a keyboard cover, so Ctrl+tap on a link ope
 
 The on-screen keyboard shows when the user clicks or taps a text field, including after the user hid it, and when a single-line editor (a picker, a search bar) gains focus. Focus moving any other way doesn't show it, as on Android.
 
-- Ours: the left mouse down (the left mouse up, for legacy finger input) in `crates/editor/src/element/mouse.rs` (`paint_mouse_listeners`) and `crates/terminal_view/src/terminal_element.rs` (`register_mouse_listeners`), and `Editor::handle_focus` with `handle_blur` in `crates/editor/src/editor.rs` for single-line editors. On the platform side, `AndroidWindow::request_soft_keyboard` in `crates/gpui_android/src/window.rs`, and `reconcile_ime_for_window` in `crates/gpui_android/src/platform.rs`, which only hides the keyboard when focus leaves a text field.
+- Ours: the left mouse down in `crates/editor/src/element/mouse.rs` (`paint_mouse_listeners`) and `crates/terminal_view/src/terminal_element.rs` (`register_mouse_listeners`), and `Editor::handle_focus` with `handle_blur` in `crates/editor/src/editor.rs` for single-line editors. On the platform side, `AndroidWindow::request_soft_keyboard` in `crates/gpui_android/src/window.rs`, and `reconcile_ime_for_window` in `crates/gpui_android/src/platform.rs`, which only hides the keyboard when focus leaves a text field.
 - Builds on: `Window::request_virtual_keyboard`, as `EntityInputHandler`'s docs in `crates/gpui/src/input.rs` ask of text fields.
 - Landed upstream when: `grep -rn request_virtual_keyboard crates/editor crates/terminal_view` finds ungated calls.
 
@@ -51,12 +51,3 @@ Zed shows a tab's close button on hover, which a finger can't do, so the app's d
 - Ours: `set_default_settings` in `crates/gpui_android/examples/zed_android/src/android_input.rs`.
 - Builds on: the `tabs.show_close_button` setting (`ShowCloseButton`).
 - Landed upstream when: `crates/workspace/src/pane.rs` shows the close button for touch input, for example by checking `Window::last_input_was_touch`.
-
-## Fork debt, not upstream gaps
-
-Step 4 of the touch plan in `BACKLOG.md` deletes these once the gpui path covers everything the legacy one did; they are not waiting on upstream.
-
-- The legacy finger state machine: `TouchState` and the `FingerRoute::Legacy` branch of `dispatch` in `crates/gpui_android/src/touch.rs`.
-- `set_drag_active`: `PlatformWindow::set_drag_active` and `Window::set_drag_active` in gpui, called from the same files as (b).
-- `last_platform_input_was_touch`: `Window::last_platform_input_was_touch` and `PlatformWindow::last_input_was_touch`, and the legacy-only paths that check it, such as the terminal's double-click menu and the mouse-up requests in (e).
-- The `android_input.legacy_touch` setting: `AndroidInputSettingsContent::legacy_touch` in `crates/settings_content/src/workspace.rs`, its row in `crates/settings_ui/src/page_data.rs`, and `gpui_android::set_legacy_touch`.

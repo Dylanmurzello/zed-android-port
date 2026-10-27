@@ -6367,7 +6367,6 @@ impl EditorElement {
                         }
                         cx.stop_propagation();
                     });
-                    window.set_drag_active(false);
                 }
             });
         } else {
@@ -6382,7 +6381,7 @@ impl EditorElement {
                     // found by position.
                     let Some((scrollbar_layout, axis)) =
                         scrollbars_layout.get_hovered_axis(window).or_else(|| {
-                            if !window.last_platform_input_was_touch() {
+                            if !window.last_input_was_touch() {
                                 return None;
                             }
                             scrollbars_layout
@@ -6393,7 +6392,7 @@ impl EditorElement {
                         return;
                     };
 
-                    if editor.update(cx, |editor, cx| {
+                    editor.update(cx, |editor, cx| {
                         Self::press_scrollbar(
                             editor,
                             scrollbar_layout,
@@ -6401,12 +6400,8 @@ impl EditorElement {
                             event.position,
                             window,
                             cx,
-                        )
-                    }) {
-                        // Keeps Android's touch handling from turning the drag
-                        // into scrolling.
-                        window.set_drag_active(true);
-                    }
+                        );
+                    });
                 }
             });
         }

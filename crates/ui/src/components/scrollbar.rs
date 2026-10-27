@@ -849,9 +849,6 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
     ) {
         self.set_thumb_state(ThumbState::Dragging(axis, drag_offset), window, cx);
         self.scroll_handle().drag_started();
-        // Keeps Android's touch handling from turning the drag into
-        // scrolling.
-        window.set_drag_active(true);
     }
 
     /// Returns whether `position` is on a scrollbar.
@@ -882,7 +879,7 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
             // A finger rarely lands on the thin thumb, so a touch on the track
             // also grabs the thumb, by its center, after the jump.
             let touch_drag = window
-                .last_platform_input_was_touch()
+                .last_input_was_touch()
                 .then(|| (*axis, thumb_bounds.size.along(*axis) / 2.));
             self.set_offset(
                 scroll_handle.offset().apply_along(*axis, |_| click_offset),
@@ -1774,7 +1771,6 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
 
                         state.update_hovered_thumb(&event.position, window, cx);
                     });
-                    window.set_drag_active(false);
                 }
             });
 
@@ -1820,7 +1816,6 @@ impl<T: ScrollableHandle> Element for ScrollbarElement<T> {
                                     state.scroll_handle().drag_ended();
                                     state.set_thumb_state(ThumbState::Inactive, window, cx);
                                 });
-                                window.set_drag_active(false);
                             }
                         }
                     }

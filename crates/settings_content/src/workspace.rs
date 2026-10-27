@@ -607,11 +607,6 @@ pub struct AndroidInputSettingsContent {
     ///
     /// Default: false
     pub invert_scroll: Option<bool>,
-    /// Use Zdroid's original touch handling instead of Zed's touch gestures.
-    /// Turn on if a touch gesture stopped working for you, and report it.
-    ///
-    /// Default: false
-    pub legacy_touch: Option<bool>,
 }
 
 #[with_fallible_options]
