@@ -916,7 +916,7 @@ class MainActivity : GameActivity(), ImeHost {
                 cursorOverlay?.move(cursorX, cursorY)
             }
         }
-        forwardCapturedPointer(event)
+        forwardCapturedPointer(PRIMARY_WINDOW_ID, event, cursorX, cursorY)
     }
 
     /// Hide the hardware-pointer cursor sprite when the user shifts
@@ -1021,69 +1021,6 @@ class MainActivity : GameActivity(), ImeHost {
             if (sources and InputDevice.SOURCE_MOUSE_RELATIVE != 0) return true
         }
         return false
-    }
-
-    private fun forwardCapturedPointer(event: MotionEvent) {
-        val n = event.pointerCount
-        val xs = FloatArray(n)
-        val ys = FloatArray(n)
-        val rxs = FloatArray(n)
-        val rys = FloatArray(n)
-        val rotation = displayRotation()
-        for (i in 0 until n) {
-            xs[i] = event.getX(i)
-            ys[i] = event.getY(i)
-            val (dx, dy) = capturedRelativeDelta(event, i, rotation)
-            rxs[i] = dx
-            rys[i] = dy
-        }
-        val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        // `cursorX` / `cursorY` are the canonical cursor position in
-        // physical pixels (decorView coordinate space). Kotlin owns
-        // this because it also has to position `cursorView` at the
-        // same coords; passing it across JNI per event keeps the Rust
-        // side from drifting against the visible sprite.
-        NativeBridge.nativeOnCapturedPointer(
-            event.actionMasked,
-            event.source,
-            event.buttonState,
-            n,
-            xs,
-            ys,
-            rxs,
-            rys,
-            vs,
-            hs,
-            cursorX,
-            cursorY,
-        )
-    }
-
-    @Suppress("unused")
-    private fun describeCapturedPointer(event: MotionEvent): String {
-        val sb = StringBuilder()
-        sb.append("act=").append(MotionEvent.actionToString(event.actionMasked))
-        sb.append(" src=0x").append(java.lang.Integer.toHexString(event.source))
-        sb.append(" btn=0x").append(java.lang.Integer.toHexString(event.buttonState))
-        sb.append(" n=").append(event.pointerCount)
-        val pc = event.pointerCount.coerceAtMost(3)
-        for (i in 0 until pc) {
-            sb.append(" p").append(i).append("=(")
-            sb.append("%.1f".format(event.getX(i))).append(",")
-            sb.append("%.1f".format(event.getY(i))).append(" rx=")
-            sb.append("%.2f".format(event.getAxisValue(MotionEvent.AXIS_RELATIVE_X, i))).append(" ry=")
-            sb.append("%.2f".format(event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y, i)))
-            sb.append(" tt=").append(event.getToolType(i))
-            sb.append(")")
-        }
-        val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        if (vs != 0f || hs != 0f) {
-            sb.append(" vscroll=").append("%.2f".format(vs))
-            sb.append(" hscroll=").append("%.2f".format(hs))
-        }
-        return sb.toString()
     }
 
     /** Backs the Zdroid menu's background-mode toggle. */
