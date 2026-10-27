@@ -10,7 +10,7 @@ crates/zed/resources/windows/zed.sh text eol=lf
 # The `ours` driver applies only when enabled for that one command:
 #   git -c merge.ours.driver=true merge vX.Y.Z
 # Leave it unset otherwise: during rebases, cherry-picks and other merges it
-# silently keeps one side of these files (see FORK.md).
+# silently keeps one side of these files.
 
 # Identity / docs (ONLY files where we have actually authored content
 # different from upstream, verified via

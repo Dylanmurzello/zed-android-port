@@ -193,7 +193,7 @@ You'll need:
 - [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) (`cargo install cargo-ndk`)
 - Android NDK r27 (`sdkmanager "ndk;27.0.12077973"`)
 - Gradle 8+, `adb` on `$PATH`
-- A device with USB or wireless debugging on (see "Debugging on the tablet" in [FORK.md](FORK.md))
+- A device with USB or wireless debugging on
 
 ```sh
 cd crates/gpui_android/examples/zed_android

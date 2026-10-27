@@ -47,13 +47,13 @@ These use normal 3-way merge. Expect occasional conflicts when upstream refactor
 
 ### Startup code the app copies (silent-staleness class)
 
-The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/zed/migrate.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand (see "Syncing a Zed release" in FORK.md).
+The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/zed/migrate.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand.
 
 When you resolve a conflict in one of these, ALSO check if a workaround doc under `crates/gpui_android/docs/workarounds/` covers the affected file: the doc explains why the patch is there, which makes the resolution obvious.
 
 ## Merge driver
 
-`.gitattributes` declares `merge=ours` for owned files. Enable the `ours` driver only for the upstream merge command itself, never in your git config: with it on, rebases, cherry-picks and other merges silently keep one side of those files (see "The `ours` merge driver" in FORK.md):
+`.gitattributes` declares `merge=ours` for owned files. Enable the `ours` driver only for the upstream merge command itself, never in your git config: with it on, rebases, cherry-picks and other merges silently keep one side of those files:
 
 ```sh
 git -c merge.ours.driver=true merge vX.Y.Z

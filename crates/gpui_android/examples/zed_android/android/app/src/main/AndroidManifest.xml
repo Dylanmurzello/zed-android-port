@@ -48,8 +48,7 @@
           Lets `adb shell` profile release builds with simpleperf or
           Perfetto on Android 10 and later, as Google recommends for
           measuring the builds people run. It doesn't make the app
-          debuggable: no debugger and no run-as. See "Debugging on the
-          tablet" in FORK.md.
+          debuggable: no debugger and no run-as.
         -->
         <profileable android:shell="true" />
 
