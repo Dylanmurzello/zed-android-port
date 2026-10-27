@@ -107,34 +107,6 @@ object NativeBridge {
     /// extra window's id for spawned windows.
     external fun isHoldDragActive(windowId: Long): Boolean
 
-    /// Structured captured-pointer sink for spawned
-    /// `ExtraWindowActivity` windows. Same fields as
-    /// `nativeOnCapturedPointer` plus a `windowId` so the Rust-side
-    /// per-window state machine routes correctly. Extra activities
-    /// call this from their `onGenericMotionEvent` override; gesture
-    /// behavior (tap, scroll, hold-drag, drag-lock, cursor follow)
-    /// is identical per window.
-    external fun nativeOnExtraCapturedPointer(
-        windowId: Long,
-        actionMasked: Int,
-        source: Int,
-        buttonState: Int,
-        pointerCount: Int,
-        xs: FloatArray,
-        ys: FloatArray,
-        rxs: FloatArray,
-        rys: FloatArray,
-        vscroll: Float,
-        hscroll: Float,
-        cursorPhysicalX: Float,
-        cursorPhysicalY: Float,
-    )
-
-    /// Probe sink kept for diagnostic use; the structured sink below
-    /// is the real path. The probe just logs a stringified summary
-    /// when the synthesis layer is suspect on a given device.
-    external fun nativeOnCapturedPointerProbe(summary: String)
-
     /// Polled every frame by the SplashScreen's
     /// `setKeepOnScreenCondition`. Returns true once gpui has run at
     /// least one paint cycle; the splash then exits with its
@@ -144,20 +116,19 @@ object NativeBridge {
     /// `frame_timing::paint_finished` call.
     external fun nativeIsZedReady(): Boolean
 
-    /// Structured captured-pointer sink. Marshals the relevant
-    /// `MotionEvent` fields per event so the Rust side can synthesize
-    /// `MouseMove` / `MouseDown` / `MouseUp` / `ScrollWheel` from the
-    /// raw stream. `xs`/`ys` are absolute pointer positions in the
-    /// touchpad's coordinate space; `rxs`/`rys` are
-    /// `AXIS_RELATIVE_X` / `AXIS_RELATIVE_Y` per pointer (the deltas
-    /// that drive cursor motion + scroll synthesis). `vscroll`/
-    /// `hscroll` are zero for trackpad on Samsung — included for
-    /// completeness so a hardware mouse routed through the same
-    /// capture path can still scroll via `ACTION_SCROLL`.
+    /// Captured-pointer sink, called only by [forwardCapturedPointer].
+    /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
+    /// window's id. `xs`/`ys` are absolute pointer positions in the
+    /// touchpad's coordinate space; `rxs`/`rys` are `AXIS_RELATIVE_X` /
+    /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
+    /// motion and scroll synthesis). `vscroll`/`hscroll` carry a
+    /// mouse wheel's `ACTION_SCROLL`.
     external fun nativeOnCapturedPointer(
+        windowId: Long,
         actionMasked: Int,
         source: Int,
         buttonState: Int,
+        metaState: Int,
         pointerCount: Int,
         xs: FloatArray,
         ys: FloatArray,

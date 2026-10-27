@@ -687,7 +687,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 cursorOverlay?.move(cursorX, cursorY)
             }
         }
-        forwardCapturedPointer(event)
+        forwardCapturedPointer(extraWindowId, event, cursorX, cursorY)
     }
 
     /// JNI bridge: Rust's `cursor.rs::set_pointer_icon_inner` pushes the
@@ -698,39 +698,6 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         runOnUiThread {
             cursorOverlay?.setStyle(style)
         }
-    }
-
-    private fun forwardCapturedPointer(event: MotionEvent) {
-        val n = event.pointerCount
-        val xs = FloatArray(n)
-        val ys = FloatArray(n)
-        val rxs = FloatArray(n)
-        val rys = FloatArray(n)
-        val rotation = displayRotation()
-        for (i in 0 until n) {
-            xs[i] = event.getX(i)
-            ys[i] = event.getY(i)
-            val (dx, dy) = capturedRelativeDelta(event, i, rotation)
-            rxs[i] = dx
-            rys[i] = dy
-        }
-        val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        NativeBridge.nativeOnExtraCapturedPointer(
-            extraWindowId,
-            event.actionMasked,
-            event.source,
-            event.buttonState,
-            n,
-            xs,
-            ys,
-            rxs,
-            rys,
-            vs,
-            hs,
-            cursorX,
-            cursorY,
-        )
     }
 
     /// Forward hardware key events to the gpui-side window. AppCompatActivity

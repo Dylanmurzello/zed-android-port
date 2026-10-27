@@ -66,12 +66,13 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use android_activity::input::MetaState;
 use futures::channel::mpsc;
 use gpui::{
-    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels,
+    PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
-use jni::objects::{JFloatArray, JObject, JString};
+use jni::objects::{JFloatArray, JObject};
 
 /// Java `MotionEvent.getActionMasked()` constants. Mirrors the ones in
 /// `events.rs` for the same JNI reason: `MotionAction` from the NDK
@@ -203,6 +204,8 @@ pub(crate) struct CapturedEvent {
     pub action_masked: i32,
     pub source: i32,
     pub button_state: i32,
+    /// `MotionEvent.getMetaState()`: the modifier keys held on any keyboard.
+    pub meta_state: i32,
     pub pointer_count: usize,
     pub xs: Vec<f32>,
     pub ys: Vec<f32>,
@@ -383,7 +386,8 @@ pub(crate) fn translate(
     event: CapturedEvent,
     scale_factor: f32,
 ) -> Vec<PlatformInput> {
-    let modifiers = Modifiers::default();
+    let modifiers =
+        crate::events::keyboard::modifiers_from_meta(MetaState(event.meta_state as u32));
     let pressed_mouse_button = button_from_state(event.button_state);
     let scale = if scale_factor > 0.0 {
         scale_factor
@@ -981,82 +985,19 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_isHoldDragActive<'local>(
     is_hold_drag_active(window_id as u64)
 }
 
-/// Probe sink (kept alongside the structured one for debug). Logs a
-/// stringified summary of each captured event.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointerProbe<'local>(
-    mut env: jni::JNIEnv<'local>,
-    _bridge: JObject<'local>,
-    summary: JString<'local>,
-) {
-    let summary: String = match env.get_string(&summary) {
-        Ok(s) => s.into(),
-        Err(err) => {
-            log::warn!("captured_pointer: failed to decode summary: {err:#}");
-            return;
-        }
-    };
-    log::info!("captured_pointer: {summary}");
-}
-
-/// Structured sink for the primary `MainActivity` window. Marshals
-/// Kotlin-side `MotionEvent` fields, builds a `CapturedEvent` tagged
-/// with `PRIMARY_WINDOW_ID`, dispatches onto the channel for the game
-/// thread to drain. Spawned `ExtraWindowActivity` windows use
-/// `nativeOnExtraCapturedPointer` instead.
+/// Sink for `NativeBridge.nativeOnCapturedPointer`, which Kotlin's
+/// `forwardCapturedPointer` calls for both MainActivity
+/// (`PRIMARY_WINDOW_ID`) and spawned `ExtraWindowActivity` windows.
+/// Builds a `CapturedEvent` and queues it for the game thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnCapturedPointer<'local>(
-    env: jni::JNIEnv<'local>,
-    _bridge: JObject<'local>,
-    action_masked: i32,
-    source: i32,
-    button_state: i32,
-    pointer_count: i32,
-    xs: JFloatArray<'local>,
-    ys: JFloatArray<'local>,
-    rxs: JFloatArray<'local>,
-    rys: JFloatArray<'local>,
-    vscroll: f32,
-    hscroll: f32,
-    cursor_physical_x: f32,
-    cursor_physical_y: f32,
-) {
-    let n = pointer_count.max(0) as usize;
-    let xs = read_floats(&env, &xs, n);
-    let ys = read_floats(&env, &ys, n);
-    let rxs = read_floats(&env, &rxs, n);
-    let rys = read_floats(&env, &rys, n);
-    dispatch(CapturedEvent {
-        window_id: PRIMARY_WINDOW_ID,
-        action_masked,
-        source,
-        button_state,
-        pointer_count: n,
-        xs,
-        ys,
-        rxs,
-        rys,
-        vscroll,
-        hscroll,
-        cursor_physical_x,
-        cursor_physical_y,
-    });
-}
-
-/// Structured sink for spawned `ExtraWindowActivity` windows. Same
-/// payload as `nativeOnCapturedPointer` plus a `windowId` so the
-/// per-window state machine routes the event to the right
-/// `SynthState`. Extra windows call this from their
-/// `onGenericMotionEvent` override; gesture pipelines (tap, scroll,
-/// hold-drag, drag-lock, cursor follow) are identical per window.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraCapturedPointer<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: jni::sys::jlong,
     action_masked: i32,
     source: i32,
     button_state: i32,
+    meta_state: i32,
     pointer_count: i32,
     xs: JFloatArray<'local>,
     ys: JFloatArray<'local>,
@@ -1077,6 +1018,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraCapturedPointer
         action_masked,
         source,
         button_state,
+        meta_state,
         pointer_count: n,
         xs,
         ys,
