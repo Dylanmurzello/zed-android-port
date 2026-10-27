@@ -59,6 +59,21 @@ object NativeBridge {
     /// which window is active. Zed closes the active window for Ctrl+W.
     external fun nativeOnExtraFocusChanged(windowId: Long, hasFocus: Boolean)
 
+    /// Posted by [WindowInsetsReporter] for `MainActivity`
+    /// (`MainActivity.PRIMARY_WINDOW_ID`) and each extra window, in physical
+    /// pixels: the `systemBars() | displayCutout()` insets, and how far the
+    /// on-screen keyboard and the programming extras row on it reach up
+    /// from the window's bottom edge. Rust lays gpui out above them.
+    /// Handled in `crates/gpui_android/src/insets.rs`.
+    external fun nativeOnWindowInsetsChanged(
+        windowId: Long,
+        safeAreaLeft: Int,
+        safeAreaTop: Int,
+        safeAreaRight: Int,
+        safeAreaBottom: Int,
+        obscuredBottom: Int,
+    )
+
     /// MotionEvent fields marshaled into primitive arrays (we can't share
     /// `MotionEvent` across the JNI boundary). Pointer indices are
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the

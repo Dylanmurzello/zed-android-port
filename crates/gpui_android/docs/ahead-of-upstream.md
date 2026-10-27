@@ -51,3 +51,11 @@ Zed shows a tab's close button on hover, which a finger can't do, so the app's d
 - Ours: `set_default_settings` in `crates/gpui_android/examples/zed_android/src/android_input.rs`.
 - Builds on: the `tabs.show_close_button` setting (`ShowCloseButton`).
 - Landed upstream when: `crates/workspace/src/pane.rs` shows the close button for touch input, for example by checking `Window::last_input_was_touch`.
+
+## Upstream APIs Zdroid doesn't use yet
+
+Upstream gpui has these, but nothing in Zed drives them yet, so Zdroid keeps its own behavior. At each Zed sync, run the grep; once it finds something, adopt the API.
+
+- `PlatformWindow::set_text_input_configuration`: gpui forwards each text field's `TextInputConfiguration` (autocorrect, autocapitalization, suggestions, the enter key's action), but Zed's editor doesn't supply one, so every field gets gpui's default of no autocorrect and no suggestions. Zdroid keeps choosing the `EditorInfo` per field kind (terminal or code editor) in `ImeHostView.onCreateInputConnection`. Adopt when `grep -rn "fn text_input_configuration" crates/editor` finds an implementation.
+- `PlatformWindow::set_back_handler` and `set_back_enabled`: gpui's hooks for the Android back button and back gesture. Nothing in Zed calls them. Adopt when `grep -rn "set_back_handler\|set_back_enabled" crates --include='*.rs' | grep -v "^crates/gpui"` finds a caller.
+- The `ime` part of `PlatformWindow::insets`: `AndroidWindow` reports it as zero, consumed the way `adjustResize` consumes it, because Zdroid shrinks the layout area above the keyboard itself (`AndroidWindowState::layout_bounds` in `crates/gpui_android/src/window.rs`). If Zed's workspace ever lays out with `Window::fully_visible_bounds` or `Window::insets` (`grep -rn "fully_visible_bounds\|\.insets()" crates/workspace crates/zed`), report the real `ime` inset and stop shrinking.
