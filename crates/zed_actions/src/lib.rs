@@ -47,16 +47,12 @@ actions!(
         /// Opens project-specific settings.
         #[action(deprecated_aliases = ["zed_actions::OpenProjectSettings"])]
         OpenProjectSettings,
-        /// Opens the project-specific settings JSON file.
-        OpenProjectSettingsFile,
         /// Opens the project tasks configuration.
         OpenProjectTasks,
         /// Opens the project tasks configuration with worktree setup guidance.
         OpenWorktreeSetupTasks,
         /// Opens the default keymap file.
         OpenDefaultKeymap,
-        /// Opens the default settings file (read-only).
-        OpenDefaultSettings,
         /// Opens the user keymap file.
         #[action(deprecated_aliases = ["zed_actions::OpenKeymap"])]
         OpenKeymapFile,
