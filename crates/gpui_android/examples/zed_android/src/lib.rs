@@ -1057,6 +1057,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         gpui_android::set_trackpad_mode_enabled(trackpad_active);
         gpui_android::set_programming_extras_row_enabled(android_input.programming_extras_row);
         gpui_android::set_invert_scroll(android_input.invert_scroll);
+        gpui_android::set_legacy_touch(android_input.legacy_touch);
     };
     push_android_input_atomics(cx);
     cx.observe_global::<SettingsStore>(move |cx| {

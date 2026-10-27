@@ -91,10 +91,14 @@ pub(crate) enum ExtraWindowEvent {
         action_index: i32,
         meta_state: i32,
         button_state: i32,
+        /// `MotionEvent.getFlags()`.
+        flags: i32,
         event_time_millis: i64,
         vscroll: f32,
         hscroll: f32,
         positions: Vec<(f32, f32, i32)>,
+        /// `MotionEvent.getToolType` for each pointer in `positions`.
+        tool_types: Vec<i32>,
     },
     /// Hardware key event on the extra window. Raw fields from the Java
     /// `KeyEvent`; same off-thread translation policy as `Motion`. Without
@@ -760,19 +764,22 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     action_index: i32,
     meta_state: i32,
     button_state: i32,
+    flags: i32,
     event_time_millis: i64,
     vscroll: f32,
     hscroll: f32,
     xs: JFloatArray<'local>,
     ys: JFloatArray<'local>,
     pointer_ids: JIntArray<'local>,
+    tool_types: JIntArray<'local>,
 ) {
     let window_id = window_id as u64;
     log::debug!(
         "multi_window: nativeOnExtraTouchEvent windowId={window_id} action={action_masked}"
     );
-    let positions = match read_pointers(&mut env, &xs, &ys, &pointer_ids) {
-        Ok(v) => v,
+    let (positions, tool_types) = match read_pointers(&mut env, &xs, &ys, &pointer_ids, &tool_types)
+    {
+        Ok(pointers) => pointers,
         Err(err) => {
             log::warn!("multi_window: failed to read pointers: {err:#}");
             return;
@@ -784,10 +791,12 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
         action_index,
         meta_state,
         button_state,
+        flags,
         event_time_millis,
         vscroll,
         hscroll,
         positions,
+        tool_types,
     });
 }
 
@@ -822,31 +831,37 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraKeyEvent<'local
     });
 }
 
+/// Reads the pointers' positions and ids, and separately their tool types.
 fn read_pointers(
     env: &mut jni::JNIEnv,
     xs: &JFloatArray,
     ys: &JFloatArray,
     pointer_ids: &JIntArray,
-) -> Result<Vec<(f32, f32, i32)>> {
+    tool_types: &JIntArray,
+) -> Result<(Vec<(f32, f32, i32)>, Vec<i32>)> {
     let count = env.get_array_length(xs).context("xs length")? as usize;
     if count == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut x_buf = vec![0f32; count];
     let mut y_buf = vec![0f32; count];
     let mut id_buf = vec![0i32; count];
+    let mut tool_type_buf = vec![0i32; count];
     env.get_float_array_region(xs, 0, &mut x_buf)
         .context("xs region")?;
     env.get_float_array_region(ys, 0, &mut y_buf)
         .context("ys region")?;
     env.get_int_array_region(pointer_ids, 0, &mut id_buf)
         .context("pointer_ids region")?;
-    Ok(x_buf
+    env.get_int_array_region(tool_types, 0, &mut tool_type_buf)
+        .context("tool_types region")?;
+    let positions = x_buf
         .into_iter()
         .zip(y_buf)
         .zip(id_buf)
         .map(|((x, y), id)| (x, y, id))
-        .collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    Ok((positions, tool_type_buf))
 }
 
 #[allow(dead_code)]

@@ -38,6 +38,24 @@ use crate::window::AndroidWindowState;
 /// small vec rather than a single optional event.
 pub(crate) type MotionInputs = Vec<PlatformInput>;
 
+/// What [`translate_motion_event`] made of an event.
+#[derive(Default)]
+pub(crate) struct TranslatedMotion {
+    pub(crate) inputs: MotionInputs,
+    /// Whether the event is consumed. Events fed to gpui's touch recognizer
+    /// are, even when they produce no input yet.
+    pub(crate) handled: bool,
+}
+
+impl From<MotionInputs> for TranslatedMotion {
+    fn from(inputs: MotionInputs) -> Self {
+        Self {
+            handled: !inputs.is_empty(),
+            inputs,
+        }
+    }
+}
+
 /// Java `MotionEvent.getActionMasked()` constants. We can't reuse
 /// `android_activity::input::MotionAction` for the extra-window path
 /// because that enum's constructor is private: `MotionEvent`s authored
@@ -51,6 +69,14 @@ pub(crate) const JAVA_ACTION_POINTER_UP: i32 = 6;
 pub(crate) const JAVA_ACTION_HOVER_MOVE: i32 = 7;
 pub(crate) const JAVA_ACTION_SCROLL: i32 = 8;
 pub(crate) const JAVA_ACTION_HOVER_ENTER: i32 = 9;
+
+/// Java `MotionEvent.TOOL_TYPE_*` constants, for the same reason.
+pub(crate) const JAVA_TOOL_TYPE_FINGER: i32 = 1;
+pub(crate) const JAVA_TOOL_TYPE_PALM: i32 = 5;
+
+/// Java `MotionEvent.FLAG_CANCELED`: the pointer going up was cancelled,
+/// such as a palm the system rejected, so it must not act as a release.
+pub(crate) const JAVA_FLAG_CANCELED: i32 = 0x20;
 
 /// Convert an Android `MotionEvent` (mouse / stylus / finger) into one
 /// or more gpui `PlatformInput`s. Coordinates arrive from Android in
@@ -66,9 +92,9 @@ pub(crate) fn translate_motion_event(
     event: &MotionEvent,
     scale_factor: f32,
     state: &mut AndroidWindowState,
-) -> MotionInputs {
+) -> TranslatedMotion {
     if event.pointer_count() == 0 {
-        return MotionInputs::new();
+        return TranslatedMotion::default();
     }
     let primary = event.pointer_at_index(0);
     let position = point(
@@ -116,7 +142,7 @@ pub(crate) fn translate_motion_event(
                     .next_click_count(button, position, input_source);
                 state.clicks.mark_non_primary_down(button);
                 out.push(mouse::button_down(button, position, modifiers, click_count));
-                return out;
+                return out.into();
             }
             // Mouse left button down. Latch position + time and emit
             // Down(Left) immediately for instant click feedback.
@@ -191,7 +217,7 @@ pub(crate) fn translate_motion_event(
         }
         _ => {}
     }
-    out
+    out.into()
 }
 
 /// Touch translator for events arriving on extra `SurfaceView`s (i.e.
@@ -200,10 +226,11 @@ pub(crate) fn translate_motion_event(
 /// NDK-backed `MotionEvent`; this one takes the raw fields we marshal
 /// across the JNI boundary in `ExtraWindowActivity.forwardTouchEvent`.
 ///
-/// Source classification isn't yet plumbed across the JNI bridge, so we
+/// Source classification isn't plumbed across the JNI bridge, so we
 /// route touch-like actions (Down/Up/Move/Cancel/PointerDown/PointerUp)
 /// through the touch SM unconditionally and reserve the mouse-only
-/// actions (HOVER_*, SCROLL) for the mouse path below.
+/// actions (HOVER_*, SCROLL) for the mouse path below. Only the tool
+/// types decide whether a gesture can go to gpui's touch recognizer.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn translate_extra_motion_event(
     window_id: u64,
@@ -211,9 +238,11 @@ pub(crate) fn translate_extra_motion_event(
     action_index: i32,
     meta_state: i32,
     button_state: i32,
+    flags: i32,
     vscroll: f32,
     hscroll: f32,
     positions: &[(f32, f32, i32)],
+    tool_types: &[i32],
     scale_factor: f32,
     state: &mut AndroidWindowState,
 ) -> MotionInputs {
@@ -249,9 +278,11 @@ pub(crate) fn translate_extra_motion_event(
             action_index,
             meta_state,
             button_state,
+            flags,
             vscroll,
             hscroll,
             positions,
+            tool_types,
             scale_factor,
         );
     }

@@ -152,6 +152,12 @@ pub(crate) struct AndroidWindowState {
     /// (the dispatcher branches via the
     /// `ime::TRACKPAD_MODE_ENABLED` atomic).
     pub(crate) trackpad_touch: crate::touch::TrackpadTouchState,
+    /// The recognizer the current finger gesture goes to, `touch` or
+    /// `touch_feed`; see [`crate::touch::FingerRoute`].
+    pub(crate) finger_route: crate::touch::FingerRoute,
+    /// Feeds finger gestures to gpui's own touch gesture recognizer when
+    /// `android_input.legacy_touch` is off.
+    pub(crate) touch_feed: crate::touch::TouchFeed,
     /// Set by elements (scrollbar thumb, splitter, resize handle) while
     /// they're actively driving a direct-manipulation drag. Flips via
     /// `PlatformWindow::set_drag_active` on this window's
@@ -610,12 +616,15 @@ impl AndroidWindow {
         crate::ime::request_keyboard(&android_app, extra_window_id, show);
     }
 
+    /// `touch_slop` is the one gpui's touch recognizer uses, in logical
+    /// pixels.
     pub(crate) fn new(
         handle: AnyWindowHandle,
         _params: WindowParams,
         gpu_context: GpuContext,
         appearance: WindowAppearance,
         android_app: AndroidApp,
+        touch_slop: Pixels,
     ) -> Self {
         let display: Rc<dyn PlatformDisplay> = Rc::new(AndroidDisplay::new());
         let bounds = display.bounds();
@@ -650,6 +659,8 @@ impl AndroidWindow {
             captured: crate::captured_pointer::CapturedPointerState::default(),
             touch: crate::touch::TouchState::default(),
             trackpad_touch: crate::touch::TrackpadTouchState::default(),
+            finger_route: crate::touch::FingerRoute::default(),
+            touch_feed: crate::touch::TouchFeed::new(touch_slop),
             drag_active: AtomicBool::new(false),
             last_input_was_touch: AtomicBool::new(false),
             extra_window_id: None,

@@ -607,6 +607,14 @@ pub struct AndroidInputSettingsContent {
     ///
     /// Default: false
     pub invert_scroll: Option<bool>,
+    /// Use Zdroid's original touch handling. Turn off to try Zed's touch
+    /// gestures: momentum scrolling, double-tap to select a word, and taps
+    /// that don't fire when you start a scroll. Long-press selection and
+    /// dragging scrollbars, splitters and dock edges don't work with Zed's
+    /// gestures yet.
+    ///
+    /// Default: true
+    pub legacy_touch: Option<bool>,
 }
 
 #[with_fallible_options]
