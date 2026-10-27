@@ -15,10 +15,11 @@ Three things stand between an Android-built Zed and a working Open Remote
 flow: the SSH transport's source-build fallback (which would need
 rustup + zig + cargo-zigbuild on Termux), the auto-updater (uninitialized
 on Android because we self-distribute via APK, but the remote_server
-URL resolver depends on it), and Zed's worktree-shell env capture
-(which forwards every Android-flavored env var across the SSH tunnel
-and breaks the remote shell). All three are dealt with in lib.rs's
-boot-time env setup + a small filter in `transport/ssh.rs::build_command_posix`.
+URL resolver depends on it), and the Android terminal environment
+(which used to be forwarded across the SSH tunnel and broke the remote
+shell). The first two are dealt with in lib.rs's boot-time env setup and
+small patches in `transport/ssh.rs` and `auto_update.rs`; the third by
+adding the Android variables only to local terminals.
 
 ## Symptom catalogue
 
@@ -67,25 +68,23 @@ periodically self-updating the APK.
 
 ### D. `ld.so: object '/data/data/com.zdroid/files/usr/lib/libtermux-exec.so' from LD_PRELOAD cannot be preloaded: ignored.`
 
-Sprayed on every command run via `remote_server` RPC. Caused by Zed's
-worktree-shell env capture
-(`crates/project/src/environment.rs::local_directory_environment`)
-inheriting our entire Termux env from `profile.d/termux-exec.sh`, then
-the SSH transport at
-`crates/remote/src/transport/ssh.rs::build_command_posix`
-forwarding it across the tunnel via
-`exec env LD_PRELOAD=… HOME=… TERMUX__HOME=… ./remote_server`. Glibc
-on the remote can't dlopen `/data/data/com.zdroid/...` (path
-doesn't exist on Linux) and complains. **Bigger problem**: `HOME` and
-`TMPDIR` were also being overridden, breaking remote `~/.ssh/`,
-`~/.bashrc`, subprocess scratch space.
+Printed on every command in a remote terminal or task. Zed builds a
+remote terminal's environment with `terminal::insert_zed_terminal_env`
+(called from `project/src/terminals.rs::create_remote_shell`) and sends it
+across the tunnel as `exec env LD_PRELOAD=… HOME=… TERMUX__HOME=… <shell>`.
+The fork used to add the Android variables (HOME, PATH, SHELL, TMPDIR and
+the runtime overlay with `LD_PRELOAD` and the Termux variables) inside that
+function, so they reached the remote too. Glibc on the remote can't dlopen
+`/data/data/com.zdroid/...` (path doesn't exist on Linux) and complains.
+**Bigger problem**: `HOME`, `PATH` and `TMPDIR` were also being overridden,
+breaking remote `~/.ssh/`, `~/.bashrc`, command lookup and subprocess
+scratch space.
 
-Fix: filter known-Android-only env vars in `build_command_posix`
-before they reach the `exec env` invocation. Strip:
-`LD_PRELOAD`, `HOME`, `TMPDIR`, `PREFIX`, `SSL_CERT_FILE`,
-`CURL_CA_BUNDLE`, anything starting with `TERMUX__` or `TERMUX_APP__`.
-Generic dev env (NVM_DIR, PYENV_ROOT, RUSTUP_HOME, etc.) keeps
-forwarding so non-Android Zed clients aren't regressed.
+Fix: the Android variables are added by `insert_android_terminal_env`,
+which `TerminalBuilder::new` calls for the local pty only (for a remote
+terminal that's the local `ssh` process, which needs them). Earlier
+versions instead filtered a list of names in `build_command_posix`, which
+missed `PATH` and `SHELL` and also applied on desktop.
 
 ### F. `failed to fetch release: "invalid channel: dev"`
 
@@ -147,8 +146,8 @@ std::env::remove_var("LD_PRELOAD");                         // partial (D), kept
 auto_update::init(client.clone(), cx);                      // (C, init for URL resolver)
 ```
 
-The `LD_PRELOAD` removal isn't strictly required after the (D) filter
-landed in `transport/ssh.rs`, but kept for hygiene — it ensures any
+The `LD_PRELOAD` removal isn't strictly required after the (D) fix, but
+kept for hygiene — it ensures any
 non-SSH subprocess we spawn (cargo invocations, language servers run
 locally, etc.) doesn't see a path that's about to break on the next
 shell startup re-source.
@@ -160,12 +159,10 @@ whatever ReleaseChannel inferred, so the app data dir stays put.
 
 ## What the upstream Zed code change does
 
-`crates/remote/src/transport/ssh.rs::build_command_posix` filters
-input_env before assembling the `exec env K=V K=V ./remote_server`
-invocation. The filter is keyed on env-var name — strips a fixed
-list of Android/Termux-only names, plus any `TERMUX__` /
-`TERMUX_APP__` prefix. Non-Android Zed clients are unaffected because
-those env vars don't exist in their environment.
+`crates/terminal/src/terminal.rs` gains an Android-only
+`insert_android_terminal_env`, called from `TerminalBuilder::new` right
+after upstream's `insert_zed_terminal_env`. Upstream's function, which
+also builds the environment sent to SSH remotes, is unchanged.
 
 ## Verifying the fix on device
 
@@ -183,7 +180,7 @@ echo "TMPDIR=${TMPDIR:-/tmp}"
 ls; pwd; whoami
 ```
 
-If LD_PRELOAD shows up despite the filter, run:
+If LD_PRELOAD shows up anyway, run:
 
 ```sh
 ps -ef | grep zed-remote-server | grep -v grep
@@ -191,17 +188,14 @@ cat /proc/<remote_server_pid>/environ | tr '\0' '\n' | grep -E 'LD_PRELOAD|TERMU
 ```
 
 That tells you whether it's leaking from the transport's `exec env`
-line (filter regressed) or from the remote's own bash startup
+line (the Android variables reached `insert_zed_terminal_env` again) or from the remote's own bash startup
 (separate problem — check `~/.bashrc`, `/etc/profile.d/`).
 
 ## Failure modes if regressed
 
-- **(D) filter list too narrow**: a new Termux env var leaks across.
-  Add it to the filter at `transport/ssh.rs::build_command_posix`.
+- **(D) Android variables added to `insert_zed_terminal_env` again**:
+  `LD_PRELOAD`, `HOME`, `PATH` and the Termux variables leak across.
   Logcat won't show this; check the remote shell's `cat /proc/$$/environ`.
-- **(D) filter list too wide**: a legit user env var (NVM, etc.) gets
-  stripped. Symptom: that toolchain doesn't work on remote. Check the
-  filter; only Android-only names should be in it.
 - **(B) channel switch undone**: Open Remote starts hard-bailing again
   on Dev channel. settings.json from Dev-channel state will look
   empty; original is on disk under the Dev-channel data dir

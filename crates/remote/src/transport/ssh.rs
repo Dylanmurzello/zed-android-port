@@ -2104,32 +2104,6 @@ fn build_command_posix(
     write!(exec, "exec env ")?;
 
     for (k, v) in input_env.iter() {
-        // Strip env vars that are only meaningful inside the local
-        // Zed-on-Android process. These leak into remote shells via
-        // Zed's worktree-shell capture (`crates/project/src/environment.rs::
-        // local_directory_environment`), which inherits LD_PRELOAD +
-        // TERMUX_* from our Termux bootstrap's profile.d. On a Linux
-        // remote (typical SSH target), the LD_PRELOAD path doesn't
-        // exist, so glibc spams `ld.so: object … cannot be preloaded:
-        // ignored` on every command. Other Termux-flavored vars
-        // (TMPDIR, HOME, SSL_CERT_FILE, etc.) point at our app-private
-        // Android paths that don't resolve on the remote either —
-        // overriding HOME breaks ssh-config / known-hosts / shell-rc
-        // resolution, overriding TMPDIR breaks subprocess scratch
-        // space.
-        //
-        // The filter here is deliberately conservative: only strip
-        // names that are unambiguously Termux/Android-only. Generic
-        // dev env vars (NVM_DIR, PYENV_ROOT, RUSTUP_HOME, etc.) keep
-        // forwarding so non-Android Zed clients aren't affected.
-        let drop = matches!(
-            k.as_str(),
-            "LD_PRELOAD" | "PREFIX" | "TMPDIR" | "HOME" | "SSL_CERT_FILE" | "CURL_CA_BUNDLE"
-        ) || k.starts_with("TERMUX__")
-            || k.starts_with("TERMUX_APP__");
-        if drop {
-            continue;
-        }
         let assignment = format!("{k}={v}");
         let assignment = ssh_shell_kind
             .try_quote(&assignment)

@@ -662,32 +662,28 @@ pub fn insert_zed_terminal_env(
     env.insert("TERM".to_string(), "xterm-256color".to_string());
     env.insert("COLORTERM".to_string(), "truecolor".to_string());
     env.insert("TERM_PROGRAM_VERSION".to_string(), version.to_string());
+}
 
-    // Android: alacritty's pty spawn replaces the inherited env
-    // entirely with the explicit map, so we copy a small universal
-    // subset (HOME / PATH / SHELL / TMPDIR / LANG) over from the
-    // Zed-Rust process env. Anything adapter-flavored — Termux vars,
-    // libtermux-exec preload, CA bundle paths, HOME=TERMUX__HOME
-    // override — comes from the active runtime adapter's
-    // `env_for_terminal` registered into `util::env` at android_main.
-    // For chroot mode the overlay is empty (the zd-exec wrapper
-    // handles env at the chroot boundary). For bootstrap mode it
-    // carries the historical Termux-flavored shape.
-    #[cfg(target_os = "android")]
-    {
-        for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {
-            if let Ok(value) = std::env::var(key) {
-                env.entry(key.to_string()).or_insert(value);
-            }
+/// Alacritty's pty spawn replaces the inherited env with this map, so the
+/// local shell needs the process's HOME, PATH, SHELL, TMPDIR and LANG plus
+/// the active runtime's overlay (Termux variables, the exec preload, CA
+/// bundle paths, HOME pointing at the runtime's home). This is not part of
+/// `insert_zed_terminal_env` because that one also builds the environment
+/// sent to SSH remotes, where these paths don't exist.
+#[cfg(target_os = "android")]
+fn insert_android_terminal_env(env: &mut HashMap<String, String>) {
+    for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            env.entry(key.to_string()).or_insert(value);
         }
-        for (key, op) in util::env::terminal_env_overlay() {
-            match op {
-                util::env::EnvOp::Set(value) => {
-                    env.insert(key.clone(), value.to_string_lossy().into_owned());
-                }
-                util::env::EnvOp::Remove => {
-                    env.remove(key);
-                }
+    }
+    for (key, op) in util::env::terminal_env_overlay() {
+        match op {
+            util::env::EnvOp::Set(value) => {
+                env.insert(key.clone(), value.to_string_lossy().into_owned());
+            }
+            util::env::EnvOp::Remove => {
+                env.remove(key);
             }
         }
     }
@@ -1176,6 +1172,8 @@ impl TerminalBuilder {
             }
 
             insert_zed_terminal_env(&mut env, &version);
+            #[cfg(target_os = "android")]
+            insert_android_terminal_env(&mut env);
 
             #[derive(Default)]
             struct ShellParams {
