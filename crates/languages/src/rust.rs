@@ -69,16 +69,9 @@ impl RustLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// Android: upstream rust-analyzer releases only publish `-gnu` and
-// `-musl` aarch64 assets, no `aarch64-linux-android` asset. The Android
-// runtime adapters (bootstrap, chroot) provide a Termux-flavored or
-// chroot-internal apt-installed rust-analyzer via `pkg install
-// rust-analyzer`, which `check_if_user_installed` resolves first. The
-// constants here only matter when PATH lookup misses and the download
-// fallback fires; default to the `-gnu` asset name so the URL at
-// least matches a real upstream artifact (the binary won't run on
-// bionic without a wrapper, but at minimum the error path stops
-// 404'ing on a malformed URL).
+// Android: rust-analyzer publishes no Android asset, and the Linux block
+// picks its libc at runtime. The runtime's own rust-analyzer on PATH is
+// found first; this only names a real asset for the download fallback.
 #[cfg(target_os = "android")]
 impl RustLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;

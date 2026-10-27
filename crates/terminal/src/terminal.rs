@@ -2961,42 +2961,27 @@ impl Terminal {
     fn determine_scroll_lines(&mut self, e: &ScrollEvent, scroll_multiplier: f32) -> Option<i32> {
         let line_height = self.last_content.terminal_bounds.line_height;
         match e.touch_phase {
-            // Don't zero the accumulator on touch-down: it holds the absolute
-            // scroll-up distance, so the sub-row remainder used for smooth
-            // rendering (`scroll_fract_px`) stays continuous across gestures
-            // instead of snapping to a row boundary when a new drag begins.
-            TouchPhase::Started => None,
+            /* Reset scroll state on started */
+            TouchPhase::Started => {
+                self.scroll_px = px(0.);
+                None
+            }
+            /* Calculate the appropriate scroll lines */
             TouchPhase::Moved => {
                 let old_offset = (self.scroll_px / line_height) as i32;
 
                 self.scroll_px += e.delta.pixel_delta(line_height).y * scroll_multiplier;
 
-                // Clamp at the bottom (newest line). The accumulator is an
-                // absolute up-scroll distance, so it can't go negative; this
-                // keeps `scroll_px % line_height` a valid sub-row offset and
-                // stops a spurious shift when already pinned to the bottom.
-                self.scroll_px = cmp::max(self.scroll_px, px(0.));
-
                 let new_offset = (self.scroll_px / line_height) as i32;
+
+                // Whenever we hit the edges, reset our stored scroll to 0
+                // so we can respond to changes in direction quickly
+                self.scroll_px %= self.last_content.terminal_bounds.height();
 
                 Some(new_offset - old_offset)
             }
             // Cancellation does not commit a scroll, same as a plain end.
             TouchPhase::Ended | TouchPhase::Cancelled => None,
-        }
-    }
-
-    /// Sub-row vertical scroll remainder in `[0, line_height)`. The renderer
-    /// shifts the grid origin down by this so precise (touch / trackpad)
-    /// scrollback moves smoothly instead of snapping to whole rows; the mouse
-    /// handlers subtract it back before mapping a pixel position to a cell.
-    /// Returns zero on the alternate screen, where the running program owns the
-    /// grid and a sub-row shift would only misalign it.
-    pub fn scroll_fract_px(&self) -> Pixels {
-        if self.last_content.mode.contains(Modes::ALT_SCREEN) {
-            Pixels::ZERO
-        } else {
-            self.scroll_px % self.last_content.terminal_bounds.line_height
         }
     }
 

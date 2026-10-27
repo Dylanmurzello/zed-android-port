@@ -963,7 +963,9 @@ impl TerminalElement {
                 let scroll_top = view.scroll_top;
                 terminal.update(cx, |terminal, cx| {
                     let mut adjusted_event = e.clone();
-                    adjusted_event.position.y += scroll_top - terminal.scroll_fract_px();
+                    if scroll_top > Pixels::ZERO {
+                        adjusted_event.position.y += scroll_top;
+                    }
                     terminal.mouse_down(&adjusted_event, mouse_input_mode, cx);
                     cx.notify();
                 })
@@ -986,7 +988,9 @@ impl TerminalElement {
                     terminal.update(cx, |terminal, cx| {
                         if terminal.selection_started() || hovered {
                             let mut adjusted_event = e.clone();
-                            adjusted_event.position.y += scroll_top - terminal.scroll_fract_px();
+                            if scroll_top > Pixels::ZERO {
+                                adjusted_event.position.y += scroll_top;
+                            }
                             terminal.mouse_drag(
                                 &adjusted_event,
                                 hitbox.bounds,
@@ -1610,13 +1614,8 @@ impl Element for TerminalElement {
             let terminal_view = self.terminal_view.read(cx);
             let scroll_top = terminal_view.scroll_top;
             let mouse_input_mode = terminal_view.mouse_input_mode();
-            let scroll_fract = self.terminal.read(cx).scroll_fract_px();
 
-            // `scroll_top` (block-below-cursor) shifts content up; the smooth
-            // scrollback remainder shifts it down to reveal history above, so
-            // the two combine with opposite sign.
-            let origin =
-                layout.dimensions.bounds.origin - GpuiPoint::new(px(0.), scroll_top - scroll_fract);
+            let origin = layout.dimensions.bounds.origin - GpuiPoint::new(px(0.), scroll_top);
             let scale_factor = window.scale_factor();
             let snap_px = |value: Pixels| {
                 Pixels::from((f32::from(value) * scale_factor).floor() / scale_factor)

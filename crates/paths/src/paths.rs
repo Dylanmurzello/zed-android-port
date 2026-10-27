@@ -118,7 +118,6 @@ pub fn set_custom_data_dir(dir: &str) -> &'static PathBuf {
     })
 }
 
-
 /// Returns the path to the configuration directory used by Zed.
 pub fn config_dir() -> &'static PathBuf {
     CONFIG_DIR.get_or_init(|| {
@@ -194,17 +193,11 @@ pub fn state_dir() -> &'static PathBuf {
 pub fn temp_dir() -> &'static PathBuf {
     static TEMP_DIR: OnceLock<PathBuf> = OnceLock::new();
     TEMP_DIR.get_or_init(|| {
-        // When a custom data dir is set (Zdroid's per-adapter root),
-        // co-locate temp inside it. Without this, scratch lives on a
-        // different mount than the destination dirs (languages/,
-        // extensions/, etc.) which causes rename(2) to fail with EXDEV
-        // when the destination is under a bind-mount boundary — Android
-        // FBE namespaces expose the same f2fs partition at two paths
-        // that the kernel treats as separate mounts. Keeping temp under
-        // the custom data dir ensures src + dst share a mount.
-        //
-        // For upstream Zed (no override), fall through to platform
-        // defaults — behavior is unchanged.
+        // Android exposes the app's data under two paths that the kernel
+        // treats as separate mounts, so renaming from the default temp dir
+        // into languages/ or extensions/ fails with EXDEV. Keep temp under
+        // the custom data dir, on the same mount.
+        #[cfg(target_os = "android")]
         if let Some(custom_dir) = CUSTOM_DATA_DIR.get() {
             return custom_dir.join("tmp");
         }

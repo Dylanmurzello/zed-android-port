@@ -702,53 +702,30 @@ impl WasmHost {
                 .context("failed to initialize wasm extension")?;
 
             let (tx, mut rx) = mpsc::unbounded::<ExtensionCall>();
+            #[cfg(target_os = "android")]
             let extension_id = manifest.id.clone();
             let extension_task = async move {
                 while let Some(call) = rx.next().await {
-                    // A single panicking call (e.g. an unwrap in extension
-                    // wasm code that hits a "binary not found" / WASI download
-                    // failure / network error path) used to abort the entire
-                    // tokio task that owns the receiver, dropping the receiver
-                    // and closing the channel. Every subsequent call from
-                    // lsp_store / theme_extension / etc. then errored with
-                    // "wasm extension channel should not be closed yet" — the
-                    // user sees the extension as bricked even though it loaded
-                    // fine, and a Zed restart was the only recovery.
-                    //
-                    // Catching the panic here keeps the worker alive: the bad
-                    // call returns an error to its return_rx (which itself
-                    // gets dropped, surfacing as "wasm extension channel" at
-                    // the caller), the next call gets a fresh shot. If the
-                    // user fixes the underlying cause (installs the missing
-                    // tool, gets the network back, etc.), the next call works.
-                    //
-                    // AssertUnwindSafe: the wasm Store is `&mut` borrowed,
-                    // and a panic mid-call leaves it in an undefined state
-                    // for that call, but the next call gets a clean
-                    // re-entry into the wasm runtime since wasmtime traps
-                    // are designed to be recoverable. This is the standard
-                    // pattern for keeping host worker tasks resilient to
-                    // guest-language faults.
-                    let fut = std::panic::AssertUnwindSafe(
-                        (call)(&mut extension, &mut store),
-                    );
-                    if let Err(panic) = fut.catch_unwind().await {
+                    #[cfg(not(target_os = "android"))]
+                    (call)(&mut extension, &mut store).await;
+                    // Android: a panic in one call ended this task, which
+                    // closed the channel, so every later call to the
+                    // extension failed until Zed restarted. Log it and keep
+                    // serving calls.
+                    #[cfg(target_os = "android")]
+                    if let Err(panic) =
+                        std::panic::AssertUnwindSafe((call)(&mut extension, &mut store))
+                            .catch_unwind()
+                            .await
+                    {
                         let payload = panic
                             .downcast_ref::<&'static str>()
-                            .map(|s| s.to_string())
+                            .map(|message| message.to_string())
                             .or_else(|| panic.downcast_ref::<String>().cloned())
                             .unwrap_or_else(|| "<non-string panic>".to_string());
-                        log::error!(
-                            "wasm extension {extension_id} call panicked: {payload}; \
-                             keeping worker alive"
-                        );
+                        log::error!("wasm extension {extension_id} call panicked: {payload}");
                     }
                 }
-                log::warn!(
-                    "wasm extension {extension_id} worker exited \
-                     (channel closed); calls after this will fail with \
-                     'channel closed' until the extension reloads"
-                );
             };
 
             anyhow::Ok((

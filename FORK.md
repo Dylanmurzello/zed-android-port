@@ -34,7 +34,7 @@ git for-each-ref --format='%(refname:short) %(objectname)' 'refs/tags/v0.*' | so
 
 ## The `ours` merge driver
 
-`.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`, and UPSTREAM_MERGE.md tells you to enable the driver once per clone. Don't: with the driver on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
+`.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`. Don't enable the driver in your git config: with it on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
 
 ```sh
 git -c merge.ours.driver=true merge v1.26.2-pre
@@ -61,7 +61,7 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   git checkout dylan/main -- crates/zed/RELEASE_CHANNEL
   ```
 
-- When sweeping upstream's `.github/workflows` files, keep `zdroid_apk.yml`.
+- Remove the files upstream added under `.github/` that would act on the fork (workflows, actions, `renovate.json`), and keep `zdroid_apk.yml`. Keep every other upstream file, including ones the Android build doesn't use: deleting them only causes conflicts on the next sync.
 - `.rules` is upstream's file for AI agents (`CLAUDE.md`, `AGENTS.md` and `GEMINI.md` link to it), with two fork changes to keep when the merge touches it:
   - The **Zdroid fork** section at the top, the fork's rules for agents. Edit fork rules there, not in tool-specific files, so every agent reads them.
   - Upstream's README review-banner rule (the line starting `* HARD RULE: When modifying any source files`) stays deleted. It makes agents add a banner to `README.md` that only a human may delete, which suits Zed's own pull requests but means a manual edit on every pull request here.
