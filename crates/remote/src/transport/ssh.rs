@@ -1127,18 +1127,16 @@ impl SshRemoteConnection {
 
         let wanted_version = cx.update(|cx| match release_channel {
             ReleaseChannel::Nightly => Ok(None),
-            // Android builds come from a Zed stable release and report its
-            // version as the app version, so they fetch that release's
-            // server like a stable client, while keeping ReleaseChannel::Dev
-            // so the app data dir / settings.json / recent_projects don't
-            // namespace-shift. Client and server must match: newer clients
+            // Android builds come from a Zed stable or preview release and
+            // report its version as the app version, so they fetch that
+            // release's server like a client of its channel, while keeping
+            // ReleaseChannel::Dev so the app data dir / settings.json /
+            // recent_projects don't namespace-shift. Client and server must match: newer clients
             // launch agents through server subcommands older servers lack.
             // Non-Android Dev clients keep the original bail — they're
             // presumed to be Zed devs running `cargo run`, who can pre-stage
             // a remote_server binary on the remote or build from source.
-            ReleaseChannel::Dev if cfg!(target_os = "android") => {
-                Ok(Some(AppVersion::global(cx)))
-            }
+            ReleaseChannel::Dev if cfg!(target_os = "android") => Ok(Some(AppVersion::global(cx))),
             ReleaseChannel::Dev => {
                 anyhow::bail!(
                     "ZED_BUILD_REMOTE_SERVER is not set and no remote server exists at ({:?})",
@@ -2126,12 +2124,7 @@ fn build_command_posix(
         // forwarding so non-Android Zed clients aren't affected.
         let drop = matches!(
             k.as_str(),
-            "LD_PRELOAD"
-                | "PREFIX"
-                | "TMPDIR"
-                | "HOME"
-                | "SSL_CERT_FILE"
-                | "CURL_CA_BUNDLE"
+            "LD_PRELOAD" | "PREFIX" | "TMPDIR" | "HOME" | "SSL_CERT_FILE" | "CURL_CA_BUNDLE"
         ) || k.starts_with("TERMUX__")
             || k.starts_with("TERMUX_APP__");
         if drop {

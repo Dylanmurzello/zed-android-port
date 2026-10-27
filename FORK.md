@@ -37,7 +37,7 @@ git for-each-ref --format='%(refname:short) %(objectname)' 'refs/tags/v0.*' | so
 `.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`, and UPSTREAM_MERGE.md tells you to enable the driver once per clone. Don't: with the driver on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
 
 ```sh
-git -c merge.ours.driver=true merge v1.25.3
+git -c merge.ours.driver=true merge v1.26.2-pre
 ```
 
 If an earlier setup enabled it, run `git config --unset merge.ours.driver`.
@@ -46,16 +46,16 @@ If an earlier setup enabled it, run `git config --unset merge.ours.driver`.
 
 Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
 
-- Merge a stable release tag instead of `upstream/main`:
+- Merge a release tag instead of `upstream/main`. Preview tags (`vX.Y.Z-pre`) work as well as stable ones; the fork took v1.26.2-pre without waiting for 1.26 to reach stable:
 
   ```sh
-  git fetch upstream tag v1.25.3 --no-tags
-  git checkout -b upstream-sync-v1.25.3 zdroid
-  git -c merge.ours.driver=true merge v1.25.3
+  git fetch upstream tag v1.26.2-pre --no-tags
+  git checkout -b upstream-sync-v1.26.2-pre zdroid
+  git -c merge.ours.driver=true merge v1.26.2-pre
   ```
 
 - The sync branch lands on `zdroid`, not `main`, wherever UPSTREAM_MERGE.md says `main`.
-- Release tags set `crates/zed/RELEASE_CHANNEL` to `stable`, and the merge takes that without a conflict. Put it back to `dev`. The Android build relies on the Dev channel: it allows the newest extension API and keeps workspace state in the same database scope as earlier releases. For SSH projects, Android's Dev funnel (`remote/src/transport/ssh.rs`, `auto_update/src/auto_update.rs`) downloads the stable remote server matching the Zed version in `crates/zed/Cargo.toml`, which the app reports as its own version. That only works when the sync is a published release tag.
+- Release tags set `crates/zed/RELEASE_CHANNEL` to `stable` or `preview`, and the merge takes that without a conflict. Put it back to `dev`. The Android build relies on the Dev channel: it allows the newest extension API and keeps workspace state in the same database scope as earlier releases. For SSH projects, Android's Dev funnel (`remote/src/transport/ssh.rs`, `auto_update/src/auto_update.rs`) downloads the remote server matching the Zed version in `crates/zed/Cargo.toml`, which the app reports as its own version, from Zed's stable channel or, failing that, its preview channel. That only works when the sync is a published release tag.
 
   ```sh
   git checkout dylan/main -- crates/zed/RELEASE_CHANNEL
@@ -73,7 +73,7 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
 - List the upstream files the fork still changes, and drop any patch the new release made unnecessary, for example because upstream fixed the same bug. Each one can conflict again on the next sync:
 
   ```sh
-  git diff --stat v1.25.3 HEAD -- . ':!crates/gpui_android' ':!crates/zdroid_runtime' ':!.github' ':!*.md' ':!Cargo.lock'
+  git diff --stat v1.26.2-pre HEAD -- . ':!crates/gpui_android' ':!crates/zdroid_runtime' ':!.github' ':!*.md' ':!Cargo.lock'
   ```
 - Push the sync branch and open a pull request into `zdroid`. The **Zdroid APK** check builds the full APK. It covers the `cargo ndk` gate, Gradle, and the bundled helper binaries.
 - Never `git push --tags`. A local clone carries every Zed `v1.x.y` tag, and those match the release trigger.

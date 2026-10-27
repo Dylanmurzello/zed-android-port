@@ -9,7 +9,7 @@
 
 use gpui::{
     Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection, PlatformInput,
-    Pixels, Point, ScrollDelta, ScrollWheelEvent, TouchPhase, point, px,
+    Pixels, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
 
 /// Android `MotionEvent.BUTTON_*` bit constants. NDK definitions live in
@@ -90,7 +90,7 @@ pub(crate) fn button_up(
     })
 }
 
-/// Build the `ScrollWheelEvent` for an `ACTION_SCROLL` event (mouse
+/// Build the `ScrollEvent` for an `ACTION_SCROLL` event (mouse
 /// wheel, mouse-equivalent trackpad scroll).
 ///
 /// Android's `AXIS_VSCROLL` is +1.0 for "up / forward" (wheel rotated
@@ -108,11 +108,12 @@ pub(crate) fn wheel_scroll(
     if vscroll == 0.0 && hscroll == 0.0 {
         return None;
     }
-    Some(PlatformInput::ScrollWheel(ScrollWheelEvent {
+    Some(PlatformInput::Scroll(ScrollEvent {
         position,
         delta: ScrollDelta::Lines(point(hscroll, vscroll)),
         modifiers,
         touch_phase: TouchPhase::Moved,
+        source: ScrollSource::Pointer,
     }))
 }
 
@@ -125,10 +126,11 @@ pub(crate) fn pixel_scroll(
     position: Point<Pixels>,
     modifiers: Modifiers,
 ) -> PlatformInput {
-    PlatformInput::ScrollWheel(ScrollWheelEvent {
+    PlatformInput::Scroll(ScrollEvent {
         position,
         delta: ScrollDelta::Pixels(delta),
         modifiers,
         touch_phase: TouchPhase::Moved,
+        source: ScrollSource::Pointer,
     })
 }

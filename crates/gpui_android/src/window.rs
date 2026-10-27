@@ -150,7 +150,7 @@ pub(crate) struct AndroidWindowState {
     /// `AndroidWindow`. The touch SM checks this in its `Move` handler:
     /// while set, single-finger drag emits `MouseMove(Left held)` so
     /// the dragging element receives motion instead of having the SM
-    /// auto-convert to `ScrollWheel`. Without this gate, a touch-drag
+    /// auto-convert to `Scroll`. Without this gate, a touch-drag
     /// on a scrollbar thumb gets clobbered by the threshold-cross
     /// `MouseUp(0)` cancel.
     pub(crate) drag_active: AtomicBool,
@@ -535,7 +535,7 @@ impl AndroidWindowStatePtr {
                 state.modifiers = event.modifiers;
                 state.capslock = event.capslock;
             }
-            PlatformInput::ScrollWheel(event) => {
+            PlatformInput::Scroll(event) => {
                 state.mouse_position = event.position;
                 state.modifiers = event.modifiers;
             }
