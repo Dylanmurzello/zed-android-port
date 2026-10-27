@@ -276,10 +276,9 @@ impl Onboarding {
                 user_store: workspace.user_store().clone(),
                 _settings_subscription: cx
                     .observe_global::<SettingsStore>(move |_, cx| cx.notify()),
-                _runtime_subscription: cx
-                    .observe_global::<crate::runtime_global::ActiveRuntime>(
-                        move |_, cx| cx.notify(),
-                    ),
+                _runtime_subscription: cx.observe_global::<crate::runtime_global::ActiveRuntime>(
+                    move |_, cx| cx.notify(),
+                ),
             }
         })
     }
@@ -362,8 +361,14 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("Welcome to Zdroid")
-                                                            .size(HeadlineSize::Small),
+                                                        Headline::new(
+                                                            if cfg!(target_os = "android") {
+                                                                "Welcome to Zdroid"
+                                                            } else {
+                                                                "Welcome to Zed"
+                                                            },
+                                                        )
+                                                        .size(HeadlineSize::Small),
                                                     )
                                                     .child(
                                                         Label::new("The editor for what's next")
@@ -435,10 +440,8 @@ impl Item for Onboarding {
             scroll_handle: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _settings_subscription: cx.observe_global::<SettingsStore>(move |_, cx| cx.notify()),
-            _runtime_subscription: cx
-                .observe_global::<crate::runtime_global::ActiveRuntime>(
-                    move |_, cx| cx.notify(),
-                ),
+            _runtime_subscription:
+                cx.observe_global::<crate::runtime_global::ActiveRuntime>(move |_, cx| cx.notify()),
         })))
     }
 

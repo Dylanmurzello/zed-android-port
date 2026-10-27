@@ -19,6 +19,7 @@ pub mod shell_env;
 pub mod disambiguate;
 pub mod env;
 pub mod markdown;
+#[cfg(target_os = "android")]
 pub mod path_equivalence;
 pub mod path_list;
 pub mod paths;
