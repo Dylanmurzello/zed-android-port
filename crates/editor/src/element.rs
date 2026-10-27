@@ -6250,28 +6250,15 @@ impl EditorElement {
                                 .find(|(_, a)| *a == axis)
                         })
                     {
-                        let ScrollbarLayout {
-                            hitbox,
-                            text_unit_size,
-                            ..
-                        } = scrollbar_layout;
-
-                        let old_position = mouse_position.along(axis);
-                        let new_position = event.position.along(axis);
-                        if (hitbox.origin.along(axis)..hitbox.bottom_right().along(axis))
-                            .contains(&old_position)
-                        {
-                            let position = editor.scroll_position(cx).apply_along(axis, |p| {
-                                (p + ScrollOffset::from(
-                                    (new_position - old_position) / *text_unit_size,
-                                ))
-                                .max(0.)
-                            });
-                            editor.set_scroll_position(position, window, cx);
-                        }
-
-                        editor.scroll_manager.show_scrollbars(window, cx);
-                        cx.stop_propagation();
+                        Self::drag_scrollbar(
+                            editor,
+                            scrollbar_layout,
+                            axis,
+                            mouse_position,
+                            event.position,
+                            window,
+                            cx,
+                        );
                     } else if let Some((layout, axis)) = scrollbars_layout
                         .get_hovered_axis(window)
                         .filter(|_| !event.dragging())
@@ -6290,6 +6277,74 @@ impl EditorElement {
                     }
 
                     mouse_position = event.position;
+                })
+            }
+        });
+
+        // gpui_android sends finger input to gpui's touch gestures, which
+        // scroll the content under a dragging finger unless an element claims
+        // the drag when the finger lands. A claimed touch never becomes a tap,
+        // so this goes by hover, which a menu over the scrollbar blocks.
+        #[cfg(target_os = "android")]
+        window.on_mouse_event({
+            let editor = self.editor.clone();
+            let scrollbars_layout = scrollbars_layout.clone();
+            move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture {
+                    return;
+                }
+                editor.update(cx, |editor, cx| match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if let Some((scrollbar_layout, axis)) =
+                            scrollbars_layout.get_hovered_axis(window)
+                            && Self::press_scrollbar(
+                                editor,
+                                scrollbar_layout,
+                                axis,
+                                event.start_position,
+                                window,
+                                cx,
+                            )
+                        {
+                            editor.scroll_manager.scrollbar_touch_position =
+                                Some(event.start_position);
+                            window.prevent_default();
+                        }
+                    }
+                    gpui::TouchPhase::Moved => {
+                        if let Some(last_position) = editor.scroll_manager.scrollbar_touch_position
+                            && let Some((scrollbar_layout, axis)) = editor
+                                .scroll_manager
+                                .dragging_scrollbar_axis()
+                                .and_then(|axis| {
+                                    scrollbars_layout
+                                        .iter_scrollbars()
+                                        .find(|(_, a)| *a == axis)
+                                })
+                        {
+                            Self::drag_scrollbar(
+                                editor,
+                                scrollbar_layout,
+                                axis,
+                                last_position,
+                                event.position,
+                                window,
+                                cx,
+                            );
+                            editor.scroll_manager.scrollbar_touch_position = Some(event.position);
+                        }
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
+                        if editor
+                            .scroll_manager
+                            .scrollbar_touch_position
+                            .take()
+                            .is_some()
+                        {
+                            editor.scroll_manager.reset_scrollbar_state(cx);
+                            cx.stop_propagation();
+                        }
+                    }
                 })
             }
         });
@@ -6338,52 +6393,99 @@ impl EditorElement {
                         return;
                     };
 
-                    let ScrollbarLayout {
-                        hitbox,
-                        visible_range,
-                        text_unit_size,
-                        thumb_bounds,
-                        ..
-                    } = scrollbar_layout;
-
-                    let Some(thumb_bounds) = thumb_bounds else {
-                        return;
-                    };
-
-                    editor.update(cx, |editor, cx| {
-                        editor
-                            .scroll_manager
-                            .set_dragged_scroll_thumb_axis(axis, cx);
-
-                        let event_position = event.position.along(axis);
-
-                        if event_position < thumb_bounds.origin.along(axis)
-                            || thumb_bounds.bottom_right().along(axis) < event_position
-                        {
-                            let center_position = ((event_position - hitbox.origin.along(axis))
-                                / *text_unit_size)
-                                .round() as u32;
-                            let start_position = center_position.saturating_sub(
-                                (visible_range.end - visible_range.start) as u32 / 2,
-                            );
-
-                            let position = editor
-                                .scroll_position(cx)
-                                .apply_along(axis, |_| start_position as ScrollOffset);
-
-                            editor.set_scroll_position(position, window, cx);
-                        } else {
-                            editor.scroll_manager.show_scrollbars(window, cx);
-                        }
-
-                        cx.stop_propagation();
-                    });
-                    // Keeps Android's touch handling from turning the drag
-                    // into scrolling.
-                    window.set_drag_active(true);
+                    if editor.update(cx, |editor, cx| {
+                        Self::press_scrollbar(
+                            editor,
+                            scrollbar_layout,
+                            axis,
+                            event.position,
+                            window,
+                            cx,
+                        )
+                    }) {
+                        // Keeps Android's touch handling from turning the drag
+                        // into scrolling.
+                        window.set_drag_active(true);
+                    }
                 }
             });
         }
+    }
+
+    /// Returns whether the scrollbar has a thumb to drag.
+    fn press_scrollbar(
+        editor: &mut Editor,
+        scrollbar_layout: &ScrollbarLayout,
+        axis: ScrollbarAxis,
+        position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Editor>,
+    ) -> bool {
+        let ScrollbarLayout {
+            hitbox,
+            visible_range,
+            text_unit_size,
+            thumb_bounds,
+            ..
+        } = scrollbar_layout;
+
+        let Some(thumb_bounds) = thumb_bounds else {
+            return false;
+        };
+
+        editor
+            .scroll_manager
+            .set_dragged_scroll_thumb_axis(axis, cx);
+
+        let event_position = position.along(axis);
+
+        if event_position < thumb_bounds.origin.along(axis)
+            || thumb_bounds.bottom_right().along(axis) < event_position
+        {
+            let center_position =
+                ((event_position - hitbox.origin.along(axis)) / *text_unit_size).round() as u32;
+            let start_position = center_position
+                .saturating_sub((visible_range.end - visible_range.start) as u32 / 2);
+
+            let position = editor
+                .scroll_position(cx)
+                .apply_along(axis, |_| start_position as ScrollOffset);
+
+            editor.set_scroll_position(position, window, cx);
+        } else {
+            editor.scroll_manager.show_scrollbars(window, cx);
+        }
+
+        cx.stop_propagation();
+        true
+    }
+
+    fn drag_scrollbar(
+        editor: &mut Editor,
+        scrollbar_layout: &ScrollbarLayout,
+        axis: ScrollbarAxis,
+        old_position: gpui::Point<Pixels>,
+        new_position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Editor>,
+    ) {
+        let ScrollbarLayout {
+            hitbox,
+            text_unit_size,
+            ..
+        } = scrollbar_layout;
+
+        let old_position = old_position.along(axis);
+        let new_position = new_position.along(axis);
+        if (hitbox.origin.along(axis)..hitbox.bottom_right().along(axis)).contains(&old_position) {
+            let position = editor.scroll_position(cx).apply_along(axis, |p| {
+                (p + ScrollOffset::from((new_position - old_position) / *text_unit_size)).max(0.)
+            });
+            editor.set_scroll_position(position, window, cx);
+        }
+
+        editor.scroll_manager.show_scrollbars(window, cx);
+        cx.stop_propagation();
     }
 
     fn collect_fast_scrollbar_markers(

@@ -261,12 +261,9 @@ fn android_input_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Legacy Touch Handling",
-                description: "Use Zdroid's original touch handling. Turn \
-                    off to try Zed's touch gestures: momentum scrolling, \
-                    double-tap to select a word, and taps that don't fire \
-                    when you start a scroll. Long-press selection and \
-                    dragging scrollbars, splitters and dock edges don't \
-                    work with Zed's gestures yet.",
+                description: "Use Zdroid's original touch handling instead \
+                    of Zed's touch gestures. Turn on if a touch gesture \
+                    stopped working for you, and report it.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.legacy_touch"),

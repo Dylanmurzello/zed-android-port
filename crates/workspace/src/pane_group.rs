@@ -1223,7 +1223,7 @@ mod element {
 
         fn compute_resize(
             flexes: &Arc<Mutex<Vec<f32>>>,
-            e: &MouseMoveEvent,
+            position: Point<Pixels>,
             ix: usize,
             axis: Axis,
             child_start: Point<Pixels>,
@@ -1252,7 +1252,7 @@ mod element {
             // This is basically a "bucket" of pixel changes that need to be applied in response to this
             // mouse event. Probably a small, fractional number like 0.5 or 1.5 pixels
             let mut proposed_current_pixel_change =
-                (e.position - child_start).along(axis) - size(ix, flexes.as_slice());
+                (position - child_start).along(axis) - size(ix, flexes.as_slice());
 
             // This takes a pixel change, and computes the flex changes that correspond to this pixel change
             // as well as the next one, for some reason
@@ -1317,6 +1317,14 @@ mod element {
                 .log_err();
             cx.stop_propagation();
             window.refresh();
+        }
+
+        /// Touch has no hover, so a finger gets a wider area around the
+        /// divider than the mouse does.
+        fn handle_hit(hitbox: &Hitbox, position: Point<Pixels>, window: &Window) -> bool {
+            hitbox.is_hovered(window)
+                || (window.last_platform_input_was_touch()
+                    && hitbox.bounds.dilate(px(16.0)).contains(&position))
         }
 
         fn layout_handle(
@@ -1585,12 +1593,7 @@ mod element {
                             if !phase.bubble() {
                                 return;
                             }
-                            // Touch has no hover, so a finger gets a wider
-                            // area around the divider than the mouse does.
-                            let hit = handle_hitbox.is_hovered(window)
-                                || (window.last_platform_input_was_touch()
-                                    && handle_hitbox.bounds.dilate(px(16.0)).contains(&e.position));
-                            if hit {
+                            if Self::handle_hit(&handle_hitbox, e.position, window) {
                                 dragged_handle.replace(Some(ix));
                                 if e.click_count >= 2 {
                                     let mut borrow = flexes.lock();
@@ -1617,7 +1620,7 @@ mod element {
                             if phase.bubble() && *dragged_handle == Some(ix) {
                                 Self::compute_resize(
                                     &flexes,
-                                    e,
+                                    e.position,
                                     ix,
                                     axis,
                                     child_bounds.origin,
@@ -1626,6 +1629,57 @@ mod element {
                                     window,
                                     cx,
                                 )
+                            }
+                        }
+                    });
+                    // gpui_android sends finger input to gpui's touch gestures,
+                    // which scroll the content under a dragging finger unless
+                    // an element claims the drag when the finger lands.
+                    #[cfg(target_os = "android")]
+                    window.on_mouse_event({
+                        let workspace = self.workspace.clone();
+                        let dragged_handle = layout.dragged_handle.clone();
+                        let flexes = self.flexes.clone();
+                        let handle_hitbox = handle.hitbox.clone();
+                        let child_bounds = child.bounds;
+                        let axis = self.axis;
+                        move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                            if !phase.bubble() {
+                                return;
+                            }
+                            match event.phase {
+                                gpui::TouchPhase::Started => {
+                                    if Self::handle_hit(
+                                        &handle_hitbox,
+                                        event.start_position,
+                                        window,
+                                    ) {
+                                        dragged_handle.replace(Some(ix));
+                                        window.prevent_default();
+                                        cx.stop_propagation();
+                                    }
+                                }
+                                gpui::TouchPhase::Moved => {
+                                    if *dragged_handle.borrow() == Some(ix) {
+                                        Self::compute_resize(
+                                            &flexes,
+                                            event.position,
+                                            ix,
+                                            axis,
+                                            child_bounds.origin,
+                                            bounds.size,
+                                            workspace.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    }
+                                }
+                                gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
+                                    if *dragged_handle.borrow() == Some(ix) {
+                                        dragged_handle.replace(None);
+                                        window.refresh();
+                                    }
+                                }
                             }
                         }
                     });

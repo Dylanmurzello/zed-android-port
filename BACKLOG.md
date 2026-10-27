@@ -171,7 +171,7 @@ An audit of `crates/gpui_android`'s input code found 22 problems. These are the 
 
 **Touch**
 
-With `android_input.legacy_touch` off (step 1 of the touch plan below), 6 and 7 are fixed and the long press in 8 fires from a timer. Until step 2 claims long presses, a long press nothing claims still ends as a tap when the finger lifts. The items stay open for the default, `touch.rs`'s finger state machine.
+Since step 2 of the touch plan below, fingers go to gpui's touch gestures by default, which fixes 6 and 7 and fires the long press in 8 from a timer. A long press outside the editor and the terminal, which claim it, still ends as a tap when the finger lifts. The touch half of these items stays open only for `android_input.legacy_touch`, `touch.rs`'s finger state machine, until step 4 deletes it; trackpad-mode hold-to-drag, capture's drag lock and losing pointer capture in 8 are unchanged.
 
 6. **Starting a scroll or long press can click.** Touch-down sends a mouse down at once, and the gesture ends with a `click_count: 0` mouse up, which gpui still treats as a click. Starting a scroll on a project-panel file can open it, and every scroll moves the editor's caret to where the finger landed. Fix: send the mouse down only once a tap is decided, as `TrackpadTouchState` already does.
 7. **A two-finger swipe right-clicks.** `touch.rs` fires the right-click as soon as a second finger lands within 800 ms and 250 px, so most two-finger swipes open the context menu. Fix: fire on lift if the fingers barely moved.
@@ -205,7 +205,11 @@ The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parall
 3. gpui's recognizer has no two-finger tap: detect it in gpui_android before forwarding (cancel the touches, then send a secondary click), or propose it upstream.
 4. Remove `set_drag_active`, `last_input_was_touch` and `last_platform_input_was_touch` from gpui and the finger state machine from `touch.rs`.
 
-Step 1 landed behind `android_input.legacy_touch` (default on, which keeps `touch.rs`'s state machine; off sends fingers to gpui's recognizer through `touch::TouchFeed`). It folds in step 3: `TouchFeed` turns a two-finger tap into a secondary click when the fingers lift, and a two-finger drag into one touch at the fingers' centroid.
+Step 1 landed behind `android_input.legacy_touch` (on keeps `touch.rs`'s state machine; off sends fingers to gpui's recognizer through `touch::TouchFeed`). It folds in step 3: `TouchFeed` turns a two-finger tap into a secondary click when the fingers lift, and a two-finger drag into one touch at the fingers' centroid.
+
+Step 2 is done, and `legacy_touch` now defaults to off. Touch drags are claimed by the scrollbar thumb, the editor scrollbar, the pane splitter and the dock resize handle (the dock resizes through `Workspace::drag_dock_edge`, since gpui's drag and drop doesn't follow touches), long presses by the editor (word selection, drag to extend) and the terminal (selection, then the context menu on release), and taps carry the keyboard's modifiers. The `set_drag_active` calls stay until step 4; the terminal's double-click menu runs only on the legacy path. A finger can't drag tabs or project panel entries any more: on the legacy path a long press then a drag started gpui's drag and drop, and gpui's touch gestures have nothing for it yet.
+
+Next is step 4: delete the legacy path, which is `touch.rs`'s finger state machine, `set_drag_active`, `last_platform_input_was_touch` (and `PlatformWindow::last_input_was_touch` behind it) and the `legacy_touch` setting. The touch-widened hit areas (splitter, dock handle, a scrollbar track press grabbing the thumb) then read gpui's `Window::last_input_was_touch` instead.
 
 Also evaluate `Application::run_embedded` as a replacement for the custom android run-loop shim, and upstream's `ThreadedDispatcher` as a replacement for the hand-rolled calloop worker pool in `gpui_android/src/dispatcher.rs`.
 

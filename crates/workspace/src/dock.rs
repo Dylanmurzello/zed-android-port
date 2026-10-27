@@ -301,6 +301,10 @@ pub struct Dock {
     restoration: DockRestoreState,
     zoom_layer_open: bool,
     modal_layer: Entity<ModalLayer>,
+    /// Whether a finger is dragging the resize handle, which gpui's drag and
+    /// drop, and so `active_drag_value`, doesn't track on Android.
+    #[cfg(target_os = "android")]
+    touch_resizing: bool,
     _subscriptions: [Subscription; 2],
 }
 
@@ -469,6 +473,8 @@ impl Dock {
                 restoration: DockRestoreState::Restoring { pending: None },
                 zoom_layer_open: false,
                 modal_layer,
+                #[cfg(target_os = "android")]
+                touch_resizing: false,
             }
         });
 
@@ -1288,6 +1294,63 @@ impl Dock {
     }
 }
 
+/// gpui_android sends finger input to gpui's touch gestures, which scroll the
+/// content under a dragging finger unless an element claims the drag when the
+/// finger lands. gpui's drag and drop, which resizes a dock for the mouse,
+/// doesn't follow touches, so the claimed drag resizes the dock itself.
+#[cfg(target_os = "android")]
+fn touch_resize_listener(
+    dock: WeakEntity<Dock>,
+    workspace: WeakEntity<Workspace>,
+    position: DockPosition,
+) -> impl IntoElement {
+    gpui::canvas(
+        |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
+        move |_, hitbox, window, _| {
+            window.on_mouse_event(move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                if !phase.bubble() {
+                    return;
+                }
+                let Ok(resizing) = dock.read_with(cx, |dock, _| dock.touch_resizing) else {
+                    return;
+                };
+                match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if hitbox.is_hovered(window) {
+                            dock.update(cx, |dock, cx| {
+                                dock.touch_resizing = true;
+                                cx.notify();
+                            })
+                            .log_err();
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    gpui::TouchPhase::Moved if resizing => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.drag_dock_edge(position, event.position, window, cx);
+                            })
+                            .log_err();
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled if resizing => {
+                        dock.update(cx, |dock, cx| {
+                            dock.touch_resizing = false;
+                            dock.snap_active_panel_size(window, cx);
+                            cx.notify();
+                        })
+                        .log_err();
+                    }
+                    _ => {}
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
 impl Render for Dock {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dispatch_context = Self::dispatch_context();
@@ -1307,6 +1370,8 @@ impl Render for Dock {
                 && cx
                     .active_drag_value::<DraggedDock>()
                     .is_some_and(|dragged_dock| dragged_dock.0 == position);
+            #[cfg(target_os = "android")]
+            let is_this_dragging = is_this_dragging || self.touch_resizing;
             let pill_color = if is_this_dragging {
                 cx.theme().colors().border_focused
             } else {
@@ -1354,6 +1419,12 @@ impl Render for Dock {
                         }),
                     )
                     .occlude();
+                #[cfg(target_os = "android")]
+                let handle = handle.child(touch_resize_listener(
+                    cx.weak_entity(),
+                    self.workspace.clone(),
+                    position,
+                ));
                 match self.position() {
                     DockPosition::Left => deferred(
                         handle

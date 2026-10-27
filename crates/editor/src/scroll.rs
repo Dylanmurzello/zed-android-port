@@ -163,6 +163,11 @@ pub struct ScrollManager {
     visible_column_count: Option<f64>,
     forbid_vertical_scroll: bool,
     minimap_thumb_state: Option<ScrollbarThumbState>,
+    /// Where the finger was at the last step of an Android touch drag on a
+    /// scrollbar. gpui keeps the window's mouse position at the drag's start,
+    /// which is where the mouse drag measures its steps from.
+    #[cfg(target_os = "android")]
+    pub(crate) scrollbar_touch_position: Option<gpui::Point<Pixels>>,
     _save_scroll_position_task: Task<()>,
 }
 
@@ -186,6 +191,8 @@ impl ScrollManager {
             visible_column_count: None,
             forbid_vertical_scroll: false,
             minimap_thumb_state: None,
+            #[cfg(target_os = "android")]
+            scrollbar_touch_position: None,
             _save_scroll_position_task: Task::ready(()),
         }
     }

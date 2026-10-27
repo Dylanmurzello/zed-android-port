@@ -8983,6 +8983,34 @@ impl Workspace {
         }
     }
 
+    /// Android's touch drag on a dock edge calls this too, because gpui's
+    /// drag and drop, which calls it for the mouse, doesn't follow touches.
+    pub(crate) fn drag_dock_edge(
+        &mut self,
+        dock: DockPosition,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.previous_dock_drag_coordinates == Some(position) {
+            return;
+        }
+        self.previous_dock_drag_coordinates = Some(position);
+
+        match dock {
+            DockPosition::Left => {
+                self.resize_left_dock(position.x - self.bounds.left(), window, cx);
+            }
+            DockPosition::Right => {
+                self.resize_right_dock(self.bounds.right() - position.x, window, cx);
+            }
+            DockPosition::Bottom => {
+                self.resize_bottom_dock(self.bounds.bottom() - position.y, window, cx);
+            }
+        };
+        self.serialize_workspace(window, cx);
+    }
+
     fn resize_left_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let workspace_width = self.bounds.size.width;
         let mut size = new_size.min(workspace_width - RESIZE_HANDLE_SIZE);
@@ -9742,40 +9770,13 @@ impl Render for Workspace {
                             .when(self.zoomed.is_none(), |this| {
                                 this.on_drag_move(cx.listener(
                                     move |workspace, e: &DragMoveEvent<DraggedDock>, window, cx| {
-                                        if workspace.previous_dock_drag_coordinates
-                                            != Some(e.event.position)
-                                        {
-                                            workspace.previous_dock_drag_coordinates =
-                                                Some(e.event.position);
-
-                                            match e.drag(cx).0 {
-                                                DockPosition::Left => {
-                                                    workspace.resize_left_dock(
-                                                        e.event.position.x
-                                                            - workspace.bounds.left(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                                DockPosition::Right => {
-                                                    workspace.resize_right_dock(
-                                                        workspace.bounds.right()
-                                                            - e.event.position.x,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                                DockPosition::Bottom => {
-                                                    workspace.resize_bottom_dock(
-                                                        workspace.bounds.bottom()
-                                                            - e.event.position.y,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            };
-                                            workspace.serialize_workspace(window, cx);
-                                        }
+                                        let dock = e.drag(cx).0;
+                                        workspace.drag_dock_edge(
+                                            dock,
+                                            e.event.position,
+                                            window,
+                                            cx,
+                                        );
                                     },
                                 ))
                             })

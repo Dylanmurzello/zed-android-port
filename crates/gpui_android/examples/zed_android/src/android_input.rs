@@ -8,6 +8,7 @@ use gpui::{
 };
 use settings::{
     AndroidInputSettingsContent, RegisterSetting, Settings, SettingsContent, SettingsStore,
+    ShowCloseButton,
 };
 use ui::{IconButton, IconName, IconSize, Switch, Tooltip, prelude::*};
 use workspace::{HideStatusItem, ItemHandle, StatusItemView};
@@ -31,13 +32,14 @@ impl Settings for AndroidInputSettings {
             trackpad_mode_active: android_input.trackpad_mode_active.unwrap_or(false),
             programming_extras_row: android_input.programming_extras_row.unwrap_or(false),
             invert_scroll: android_input.invert_scroll.unwrap_or(false),
-            legacy_touch: android_input.legacy_touch.unwrap_or(true),
+            legacy_touch: android_input.legacy_touch.unwrap_or(false),
         }
     }
 }
 
 /// Adds the `android_input` defaults to Zed's default settings, which only
-/// Android reads, so the Settings window shows their values.
+/// Android reads, so the Settings window shows their values. Also shows tabs'
+/// close buttons, which Zed shows on hover, since a finger doesn't hover.
 pub fn set_default_settings(cx: &mut App) {
     SettingsStore::update_global(cx, |store, cx| {
         store.update_default_settings(cx, |defaults| {
@@ -47,8 +49,9 @@ pub fn set_default_settings(cx: &mut App) {
                 trackpad_mode_active: Some(false),
                 programming_extras_row: Some(false),
                 invert_scroll: Some(false),
-                legacy_touch: Some(true),
+                legacy_touch: Some(false),
             });
+            defaults.tabs.get_or_insert_default().show_close_button = Some(ShowCloseButton::Always);
         });
     });
 }
