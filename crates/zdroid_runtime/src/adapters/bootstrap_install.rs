@@ -16,8 +16,10 @@ use std::fs;
 use std::io::{Cursor, Read, Write as _};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -60,23 +62,58 @@ const SYMLINKS_DELIM: &str = "←";
 /// the latest release tag at download time.
 const VERSION_FILE: &str = ".bootstrap-version";
 
+/// Set while an install runs. Two installs at once would extract into the
+/// same staging directory, and the runtime picker can start a second one
+/// from a reopened window while the first is still downloading.
+static INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct InstallRunning;
+
+impl Drop for InstallRunning {
+    fn drop(&mut self) {
+        INSTALL_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+/// Without these, a dropped connection hangs the install. The read timeout
+/// applies to each read, so a slow download of the whole archive is fine.
+fn http_agent(redirects: u32) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .redirects(redirects)
+        .timeout_connect(Duration::from_secs(30))
+        .timeout_read(Duration::from_secs(60))
+        .build()
+}
+
+/// ureq's default.
+const MAX_REDIRECTS: u32 = 5;
+
 /// Download the latest release zip + extract into `<prefix>` atomically.
 /// Idempotent against `<prefix>/.bootstrap-version` — if the on-disk
-/// sentinel matches the latest tag, the function returns Ok without
-/// touching the network or filesystem beyond a tag resolve.
+/// sentinel matches the latest tag and the prefix still has its shell, the
+/// function returns Ok without touching the network or filesystem beyond a
+/// tag resolve.
 pub fn install_latest(
     prefix: &Path,
     release_repo: &str,
     progress: &mut dyn ProgressSink,
 ) -> Result<()> {
+    if INSTALL_RUNNING.swap(true, Ordering::AcqRel) {
+        bail!("a bootstrap install is already running");
+    }
+    let _install_running = InstallRunning;
+
     progress.step("Resolving latest bootstrap release");
     let tag_name = resolve_latest_tag(release_repo)
         .with_context(|| format!("resolve latest release tag for {release_repo}"))?;
     log::info!("bootstrap_install: latest release tag = {tag_name}");
 
     let version_file = prefix.join(VERSION_FILE);
+    // The sentinel is a dotfile, so clearing the prefix with `rm -rf *`
+    // leaves it behind.
     if let Ok(existing) = fs::read_to_string(&version_file)
         && existing.trim() == tag_name
+        && prefix.join("bin/bash").is_file()
     {
         log::info!("bootstrap_install: $PREFIX already at {tag_name}, skipping extract");
         progress.step(&format!("Bootstrap {tag_name} already installed"));
@@ -125,7 +162,7 @@ pub fn install_latest(
 /// works even when the release has zero assets uploaded.
 fn resolve_latest_tag(release_repo: &str) -> Result<String> {
     let url = format!("https://github.com/{release_repo}/releases/latest");
-    let agent_no_redirect = ureq::builder().redirects(0).build();
+    let agent_no_redirect = http_agent(0);
     let head = agent_no_redirect
         .get(&url)
         .set("User-Agent", "zdroid-bootstrap-installer")
@@ -222,7 +259,8 @@ fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
 }
 
 fn fetch_asset_bytes(url: &str) -> Result<Vec<u8>> {
-    let resp = ureq::get(url)
+    let resp = http_agent(MAX_REDIRECTS)
+        .get(url)
         .set("User-Agent", "zdroid-bootstrap-installer")
         .call()
         .map_err(|e| anyhow!("HTTP GET {url}: {e}"))?;
@@ -264,7 +302,8 @@ struct GitHubAsset {
 
 fn find_release_asset(release_repo: &str, tag: &str) -> Result<GitHubAsset> {
     let url = format!("https://api.github.com/repos/{release_repo}/releases/tags/{tag}");
-    let release: GitHubRelease = ureq::get(&url)
+    let release: GitHubRelease = http_agent(MAX_REDIRECTS)
+        .get(&url)
         .set("User-Agent", "zdroid-bootstrap-installer")
         .set("Accept", "application/vnd.github+json")
         .call()
