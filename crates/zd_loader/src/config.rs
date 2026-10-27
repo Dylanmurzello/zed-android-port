@@ -157,6 +157,9 @@ pub struct Config {
     pub program: Buf,
     pub selftest: bool,
     pub close_fds: bool,
+    /// Attach to the parent with `PTRACE_TRACEME` right before the jump
+    /// into the guest; see `env::TRACEME`.
+    pub traceme: bool,
     /// The guest's auxiliary vector as built for it, served as
     /// `/proc/self/auxv`.
     pub auxv_ptr: usize,
@@ -189,6 +192,7 @@ impl Config {
             program: Buf::new(),
             selftest: false,
             close_fds: false,
+            traceme: false,
             auxv_ptr: 0,
             auxv_len: 0,
             guest_exe: Buf::new(),
@@ -270,6 +274,8 @@ pub fn init(
             config.selftest = value == b"1";
         } else if let Some(value) = env_value(entry, env::CLOSE_FDS.as_bytes()) {
             config.close_fds = value == b"1";
+        } else if let Some(value) = env_value(entry, env::TRACEME.as_bytes()) {
+            config.traceme = value == b"1";
         } else if let Some(value) = env_value(entry, env::IDENTITY.as_bytes()) {
             config.identity = Identity::parse(value).ok_or(InitError::BadIdentity)?;
         } else if let Some(value) = env_value(entry, env::GUEST_ENV.as_bytes()) {

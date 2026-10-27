@@ -83,8 +83,18 @@ pub mod env {
     /// handler writes it from its own record on every `execve`, so a
     /// stale copy in a guest's environment never wins.
     pub const IDENTITY: &str = "ZD_IDENTITY";
+    /// `1` when the process being exec'd had asked for `ptrace(PTRACE_TRACEME)`.
+    /// The handler answers that request itself and carries it here; the
+    /// loader attaches to the parent only once the guest is mapped and its
+    /// vector recorded, then stops with the SIGTRAP a traced exec delivers.
+    /// Attaching at the request would turn every SIGSYS between it and the
+    /// exec into a ptrace stop that the parent, blocked on its exec pipe,
+    /// never resumes (lldb-server, gdb), and a tracer reading the process at
+    /// its first stop would see the loader's vector instead of the guest's.
+    /// Per exec.
+    pub const TRACEME: &str = "ZD_TRACEME";
     /// Variables that describe one exec and must not reach the guest.
-    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV];
+    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV, TRACEME];
 }
 
 /// Separator between entries in [`env::BINDS`] and [`env::GUEST_ENV`].
@@ -93,5 +103,8 @@ pub const LIST_SEPARATOR: char = ';';
 /// Separator between the guest and host halves of a binding.
 pub const BIND_SEPARATOR: char = ':';
 
-/// Guest `PATH` used when the guest environment does not set one.
-pub const DEFAULT_GUEST_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/// Guest `PATH` used when the guest environment does not set one. The
+/// farm advertises binaries from `root/.cargo/bin` and `root/.local/bin`,
+/// so the loader's name lookup for a farm link has to search them too.
+pub const DEFAULT_GUEST_PATH: &str =
+    "/root/.cargo/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";

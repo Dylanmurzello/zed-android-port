@@ -299,6 +299,9 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
     set_process_name(program);
     let new_sp = build_guest_vector(&stack, &invocation, &loaded);
     // SAFETY: the guest image and its stack are in place.
+    if config::get().traceme {
+        attach_to_parent();
+    }
     unsafe { jump(loaded.start_address(), new_sp) }
 }
 
@@ -535,6 +538,21 @@ fn set_process_name(program: &[u8]) {
     buffer[..len].copy_from_slice(&name[..len]);
     if let Err(_errno) = sys::prctl(sys::PR_SET_NAME, buffer.as_ptr() as usize, 0, 0, 0) {
         // Cosmetic: `ps` shows the loader's name instead.
+    }
+}
+
+/// The deferred `PTRACE_TRACEME` (see `env::TRACEME`): attach now that the
+/// guest is mapped and its vector recorded, then stop with the SIGTRAP a
+/// traced exec delivers, so the parent's `waitpid` sees exactly what a
+/// native exec gives it and its resume starts the guest. If the kernel
+/// refuses the attach (already traced, parent gone) the guest simply runs
+/// untraced; raising SIGTRAP untraced would kill it.
+fn attach_to_parent() {
+    if sys::ptrace(sys::PTRACE_TRACEME, 0, 0, 0).is_err() {
+        return;
+    }
+    if let Err(_errno) = sys::tgkill(sys::getpid(), sys::gettid(), sys::SIGTRAP) {
+        // Not traced after all; the guest starts without a stop.
     }
 }
 

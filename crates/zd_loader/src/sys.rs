@@ -322,6 +322,30 @@ pub fn memfd_create(name: *const u8, flags: usize) -> Result<i32, i32> {
     check(unsafe { syscall6(nr::MEMFD_CREATE, name as usize, flags, 0, 0, 0, 0) }).map(|fd| fd as i32)
 }
 
+/// `struct iovec`.
+#[repr(C)]
+pub struct IoVec {
+    pub base: usize,
+    pub len: usize,
+}
+
+/// Copy the `remote` ranges of process `pid` into the `local` ranges.
+/// The kernel asks for ptrace-attach rights on `pid`, which its tracer
+/// and its ancestors have.
+pub fn process_vm_readv(pid: u32, local: &[IoVec], remote: &[IoVec]) -> Result<usize, i32> {
+    check(unsafe {
+        syscall6(
+            nr::PROCESS_VM_READV,
+            pid as usize,
+            local.as_ptr() as usize,
+            local.len(),
+            remote.as_ptr() as usize,
+            remote.len(),
+            0,
+        )
+    })
+}
+
 pub fn lseek(fd: i32, offset: usize, whence: usize) -> Result<usize, i32> {
     check(unsafe { syscall6(nr::LSEEK, fd as usize, offset, whence, 0, 0, 0) })
 }
@@ -338,6 +362,21 @@ pub fn getpid() -> u32 {
 /// and the handler answers with the ack instead of a pid.
 pub fn getpid_probe(magic: u64) -> u64 {
     unsafe { syscall6(nr::GETPID, magic as usize, 0, 0, 0, 0, 0) as u64 }
+}
+
+pub fn gettid() -> u32 {
+    unsafe { syscall6(nr::GETTID, 0, 0, 0, 0, 0, 0) as u32 }
+}
+
+pub fn tgkill(tgid: u32, tid: u32, signal: usize) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::TGKILL, tgid as usize, tid as usize, signal, 0, 0, 0) }).map(|_| ())
+}
+
+pub const PTRACE_TRACEME: usize = 0;
+pub const SIGTRAP: usize = 5;
+
+pub fn ptrace(request: usize, pid: u32, address: usize, data: usize) -> Result<usize, i32> {
+    check(unsafe { syscall6(nr::PTRACE, request, pid as usize, address, data, 0, 0) })
 }
 
 pub fn readlinkat(dirfd: isize, path: *const u8, buffer: &mut [u8]) -> Result<usize, i32> {

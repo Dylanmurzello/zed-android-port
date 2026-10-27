@@ -54,6 +54,8 @@ pub mod nr {
     pub const INIT_MODULE: u32 = 105;
     pub const CLOCK_SETTIME: u32 = 112;
     pub const CLOCK_GETTIME: u32 = 113;
+    pub const PTRACE: u32 = 117;
+    pub const TGKILL: u32 = 131;
     pub const RT_SIGACTION: u32 = 134;
     pub const RT_SIGPROCMASK: u32 = 135;
     pub const RT_SIGRETURN: u32 = 139;
@@ -81,6 +83,7 @@ pub mod nr {
     pub const GETEUID: u32 = 175;
     pub const GETGID: u32 = 176;
     pub const GETEGID: u32 = 177;
+    pub const GETTID: u32 = 178;
     pub const SOCKET: u32 = 198;
     pub const BIND: u32 = 200;
     pub const CONNECT: u32 = 203;
@@ -96,6 +99,7 @@ pub mod nr {
     pub const NAME_TO_HANDLE_AT: u32 = 264;
     pub const CLOCK_ADJTIME: u32 = 266;
     pub const SETNS: u32 = 268;
+    pub const PROCESS_VM_READV: u32 = 270;
     pub const FINIT_MODULE: u32 = 273;
     pub const RENAMEAT2: u32 = 276;
     pub const SECCOMP: u32 = 277;
@@ -238,6 +242,14 @@ pub mod socket {
 /// the engine's own SIGSYS handler in the vfork child; the handler clears
 /// the flag in the guest's struct and re-executes the call in the VER0
 /// form, which the filter lets through.
+/// `ptrace(2)` requests the filter traps.
+pub mod ptrace {
+    /// Answered by the handler and performed by the loader after the next
+    /// exec; see `env::TRACEME`.
+    pub const TRACEME: u64 = 0;
+    pub const TRAPPED_REQUESTS: &[u64] = &[TRACEME];
+}
+
 pub mod clone {
     pub const CLONE_CLEAR_SIGHAND: u64 = 0x1_0000_0000;
     pub const CLONE_ARGS_SIZE_VER0: u64 = 64;
@@ -334,6 +346,9 @@ pub fn name(number: u32) -> Option<&'static str> {
         nr::SETTIMEOFDAY => "settimeofday",
         nr::ADJTIMEX => "adjtimex",
         nr::GETPID => "getpid",
+        nr::GETTID => "gettid",
+        nr::TGKILL => "tgkill",
+        nr::PTRACE => "ptrace",
         nr::GETUID => "getuid",
         nr::GETEUID => "geteuid",
         nr::GETGID => "getgid",
@@ -353,6 +368,7 @@ pub fn name(number: u32) -> Option<&'static str> {
         nr::NAME_TO_HANDLE_AT => "name_to_handle_at",
         nr::CLOCK_ADJTIME => "clock_adjtime",
         nr::SETNS => "setns",
+        nr::PROCESS_VM_READV => "process_vm_readv",
         nr::FINIT_MODULE => "finit_module",
         nr::RENAMEAT2 => "renameat2",
         nr::SECCOMP => "seccomp",

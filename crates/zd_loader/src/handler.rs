@@ -8,12 +8,14 @@
 //! compat table (`ENOSYS`, `EPERM`, or success under fake root).
 
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use zd_engine_core::bpf::{self, ArgTrap, FilterSpec, SockFilter};
 use zd_engine_core::identity::{Identity, MAX_GROUPS};
 use zd_engine_core::compat::{self, Response};
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
+use zd_engine_core::stack::AT_NULL;
+use zd_engine_core::sysno::ptrace as ptrace_traps;
 use zd_engine_core::sysno::{
     MAX_TRAPPED, PROBE_ACK, PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE, TRAP_TABLE_FAKE_ROOT,
     clone as clone_traps, ioctl, is_engine_tag, name as syscall_name, nr, socket as socket_traps,
@@ -179,6 +181,12 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
                 arg: 1,
                 values: clone_traps::PASSED_SIZES,
                 unless: true,
+            },
+            ArgTrap {
+                nr: nr::PTRACE,
+                arg: 0,
+                values: ptrace_traps::TRAPPED_REQUESTS,
+                unless: false,
             },
         ],
         window_start: LOADER_IMAGE_BASE,
@@ -471,6 +479,7 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) 
         nr::IOCTL => termios2(regs),
         nr::SOCKET => socket(regs),
         nr::CLONE3 => clone3(regs, pc),
+        nr::PTRACE => traceme(regs),
         nr::FSTAT => {
             regs[0] = issue(number, &args_of(regs));
             fixup_stat(regs[0], regs[1] as *mut u8, false);
@@ -632,9 +641,11 @@ fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 
             issue(number, &args)
         }
         Ok(Translated::ProcExe(_)) => issue(number, &args),
-        Ok(Translated::ProcAuxv(who)) if is_self(who) && number == nr::OPENAT => serve_auxv(regs, regs[2] as usize),
-        Ok(Translated::ProcAuxv(who)) if is_self(who) && number == nr::OPENAT2 => {
-            serve_auxv(regs, open_how_flags(regs[2] as *const u64))
+        Ok(Translated::ProcAuxv(who)) if number == nr::OPENAT => {
+            serve_auxv(who, number, regs, regs[2] as usize)
+        }
+        Ok(Translated::ProcAuxv(who)) if number == nr::OPENAT2 => {
+            serve_auxv(who, number, regs, open_how_flags(regs[2] as *const u64))
         }
         Ok(Translated::ProcAuxv(_)) => issue(number, &args),
         Err(_) => sys::neg_errno(sys::ENAMETOOLONG),
@@ -1200,15 +1211,36 @@ fn sigaction(regs: &mut [u64; 31]) {
     regs[0] = issue(nr::RT_SIGACTION, &args);
 }
 
-/// `open("/proc/self/auxv")`: the kernel's copy describes the loader
+/// Largest `/proc/<pid>/auxv` served for another process; the kernel
+/// itself caps a vector at `AT_VECTOR_SIZE`, under 32 entries on arm64.
+const MAX_AUXV_BYTES: usize = 64 * 16;
+
+/// `open("/proc/<who>/auxv")`: the kernel's copy describes the loader
 /// (its `AT_PHDR`, `AT_ENTRY`, `AT_EXECFN`), so hand out a memfd holding
 /// the vector the guest actually started with. rustix-based programs
-/// (uutils among them) read `AT_EXECFN` this way instead of `argv[0]`.
-fn serve_auxv(regs: &[u64; 31], flags: usize) -> u64 {
-    let config = config::get();
-    if config.auxv_ptr == 0 {
-        return issue(nr::OPENAT, &args_of(regs));
-    }
+/// (uutils among them) read `AT_EXECFN` this way instead of `argv[0]`,
+/// and a debugger reads its tracee's vector to place the executable
+/// (lldb-server takes the load bias from `AT_ENTRY` and finds the
+/// dynamic linker rendezvous through `AT_PHDR`).
+fn serve_auxv(who: ProcExe, number: u32, regs: &[u64; 31], flags: usize) -> u64 {
+    let mut remote = [0u8; MAX_AUXV_BYTES];
+    let bytes: &[u8] = if is_self(who) {
+        let config = config::get();
+        if config.auxv_ptr == 0 {
+            return issue(number, &args_of(regs));
+        }
+        // SAFETY: recorded by `config::set_auxv` from the vector the loader
+        // built; it outlives the guest.
+        unsafe { core::slice::from_raw_parts(config.auxv_ptr as *const u8, config.auxv_len) }
+    } else {
+        let ProcExe::Pid(pid) = who else {
+            return issue(number, &args_of(regs));
+        };
+        match remote_auxv(pid, &mut remote) {
+            Some(length) => &remote[..length],
+            None => return issue(number, &args_of(regs)),
+        }
+    };
     if flags & sys::O_ACCMODE != sys::O_RDONLY {
         return sys::neg_errno(sys::EACCES);
     }
@@ -1216,9 +1248,6 @@ fn serve_auxv(regs: &[u64; 31], flags: usize) -> u64 {
         Ok(fd) => fd,
         Err(errno) => return sys::neg_errno(errno),
     };
-    // SAFETY: recorded by `config::set_auxv` from the vector the loader
-    // built; it outlives the guest.
-    let bytes = unsafe { core::slice::from_raw_parts(config.auxv_ptr as *const u8, config.auxv_len) };
     let mut written = 0usize;
     while written < bytes.len() {
         let count = sys::write(fd, &bytes[written..]);
@@ -1239,6 +1268,70 @@ fn serve_auxv(regs: &[u64; 31], flags: usize) -> u64 {
         return sys::neg_errno(errno);
     }
     fd as u64
+}
+
+/// The vector another engine process started with, read out of that
+/// process: `Config` is a static of this non-PIE image, so its fields
+/// sit at the same addresses in every process running this build. A
+/// process of another build, or one not running the loader, yields
+/// bytes that fail the shape checks, and the caller serves the kernel's
+/// file as before.
+fn remote_auxv(pid: u32, buffer: &mut [u8; MAX_AUXV_BYTES]) -> Option<usize> {
+    let config = config::get();
+    let mut pointer = 0usize;
+    let mut length = 0usize;
+    let local = [
+        sys::IoVec { base: &mut pointer as *mut usize as usize, len: size_of::<usize>() },
+        sys::IoVec { base: &mut length as *mut usize as usize, len: size_of::<usize>() },
+    ];
+    let remote = [
+        sys::IoVec { base: &config.auxv_ptr as *const usize as usize, len: size_of::<usize>() },
+        sys::IoVec { base: &config.auxv_len as *const usize as usize, len: size_of::<usize>() },
+    ];
+    if sys::process_vm_readv(pid, &local, &remote) != Ok(2 * size_of::<usize>()) {
+        return None;
+    }
+    if pointer == 0
+        || !pointer.is_multiple_of(8)
+        || length == 0
+        || !length.is_multiple_of(16)
+        || length > buffer.len()
+    {
+        return None;
+    }
+    let local = [sys::IoVec { base: buffer.as_mut_ptr() as usize, len: length }];
+    let remote = [sys::IoVec { base: pointer, len: length }];
+    if sys::process_vm_readv(pid, &local, &remote) != Ok(length) {
+        return None;
+    }
+    let entries = length / 16;
+    for index in 0..entries {
+        let offset = index * 16;
+        let key = u64::from_ne_bytes(buffer[offset..offset + 8].try_into().unwrap_or([0; 8]));
+        if (key == AT_NULL) != (index + 1 == entries) {
+            return None;
+        }
+    }
+    Some(length)
+}
+
+/// Set by `ptrace(PTRACE_TRACEME)` and consumed by the next `execve`,
+/// which carries it to the loader as `env::TRACEME`.
+pub static TRACEME_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// `ptrace(PTRACE_TRACEME)`: answered here and performed by the loader
+/// after the exec that follows. Attaching now would turn every SIGSYS
+/// between this call and the exec into a ptrace stop that the parent,
+/// blocked on its exec pipe, never resumes (lldb-server and gdb both
+/// launch that way), and a tracer looking at the process at its first stop
+/// would read the loader's auxiliary vector instead of the guest's.
+fn traceme(regs: &mut [u64; 31]) {
+    if regs[0] == ptrace_traps::TRACEME {
+        TRACEME_REQUESTED.store(true, Ordering::Relaxed);
+        regs[0] = 0;
+    } else {
+        regs[0] = issue(nr::PTRACE, &args_of(regs));
+    }
 }
 
 /// Write `bytes` into a guest buffer with `readlink` semantics: no NUL,

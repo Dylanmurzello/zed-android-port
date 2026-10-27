@@ -17,8 +17,10 @@ use zd_engine_core::stack::env_key;
 use zd_engine_core::sysno::nr;
 use zd_engine_core::translate::{ProcExe, Translated, Translator};
 
+use core::sync::atomic::Ordering;
+
 use crate::config::{self, ENGINE_KEYS};
-use crate::handler::cstr_bounded;
+use crate::handler::{TRACEME_REQUESTED, cstr_bounded};
 use crate::log;
 use crate::sys;
 
@@ -63,7 +65,7 @@ fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *cons
     }
 
     let envc = count_pointers(envp);
-    let needed = envc + ENGINE_KEYS.len() + 3;
+    let needed = envc + ENGINE_KEYS.len() + 4;
     let mut on_stack = [core::ptr::null::<u8>(); STACK_ENTRIES];
     let mut mapped: Option<(usize, usize)> = None;
     let slots: &mut [*const u8] = if needed <= STACK_ENTRIES {
@@ -136,6 +138,17 @@ fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *cons
         }
         writer.finish();
         slots[count] = identity_entry.as_ptr();
+        count += 1;
+    }
+    let mut traceme_entry = [0u8; 32];
+    if TRACEME_REQUESTED.swap(false, Ordering::Relaxed) {
+        let mut writer = Writer::new(&mut traceme_entry);
+        if writer.push(env::TRACEME.as_bytes()).is_err() || writer.push(b"=1").is_err() {
+            release(mapped);
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        }
+        writer.finish();
+        slots[count] = traceme_entry.as_ptr();
         count += 1;
     }
     slots[count] = core::ptr::null();
