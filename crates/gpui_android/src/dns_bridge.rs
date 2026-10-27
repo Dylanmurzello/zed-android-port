@@ -63,8 +63,7 @@ fn populate_inner(android_app: &AndroidApp) -> Result<usize> {
 
     let path = Path::new(RESOLV_CONF_PATH);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("create {}", dir.display()))?;
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
 
     let mut content = String::new();
@@ -85,9 +84,16 @@ fn query_android_dns(android_app: &AndroidApp) -> Result<Vec<String>> {
         .context("attach_current_thread for dns query")?;
     let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
     let result = env
-        .call_method(&activity, "getActiveDnsServers", "()Ljava/lang/String;", &[])
+        .call_method(
+            &activity,
+            "getActiveDnsServers",
+            "()Ljava/lang/String;",
+            &[],
+        )
         .context("MainActivity.getActiveDnsServers")?;
-    let result_obj = result.l().context("getActiveDnsServers returned non-object")?;
+    let result_obj = result
+        .l()
+        .context("getActiveDnsServers returned non-object")?;
     if result_obj.is_null() {
         return Ok(Vec::new());
     }

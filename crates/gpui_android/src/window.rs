@@ -12,10 +12,10 @@ use ndk::native_window::NativeWindow;
 use raw_window_handle as rwh;
 
 use gpui::{
-    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, GpuSpecs, Modifiers,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Pixels,
-    FrameRequestSource, Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size,
-    TextInputStateChange, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, FrameRequestSource,
+    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    Scene, Size, TextInputStateChange, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowParams, WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
@@ -868,10 +868,7 @@ impl PlatformWindow for AndroidWindow {
         self.ptr.callbacks.borrow_mut().should_close = Some(callback);
     }
 
-    fn on_hit_test_window_control(
-        &self,
-        _callback: Box<dyn FnMut() -> Option<WindowControlArea>>,
-    ) {
+    fn on_hit_test_window_control(&self, _callback: Box<dyn FnMut() -> Option<WindowControlArea>>) {
     }
 
     fn on_close(&self, callback: Box<dyn FnOnce()>) {

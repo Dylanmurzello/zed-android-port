@@ -141,11 +141,17 @@ impl RuntimeProvider for ExternalTermuxAdapter {
 
         vec![
             ("HOME".into(), EnvOp::Set(data_path.as_os_str().to_owned())),
-            ("TMPDIR".into(), EnvOp::Set(data_path.join("tmp").into_os_string())),
+            (
+                "TMPDIR".into(),
+                EnvOp::Set(data_path.join("tmp").into_os_string()),
+            ),
             ("TERM".into(), EnvOp::Set(OsString::from("xterm-256color"))),
             ("COLORTERM".into(), EnvOp::Set(OsString::from("truecolor"))),
             ("LANG".into(), EnvOp::Set(OsString::from("en_US.UTF-8"))),
-            ("ZED_BUILD_REMOTE_SERVER".into(), EnvOp::Set(OsString::from("never"))),
+            (
+                "ZED_BUILD_REMOTE_SERVER".into(),
+                EnvOp::Set(OsString::from("never")),
+            ),
             ("LD_PRELOAD".into(), EnvOp::Remove),
             ("PATH".into(), EnvOp::Set(existing_path)),
         ]

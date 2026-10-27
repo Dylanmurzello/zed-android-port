@@ -8,8 +8,8 @@
 //! to do anything special with a trackpad.
 
 use gpui::{
-    Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection, PlatformInput,
-    Pixels, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
+    Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection, Pixels,
+    PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
 
 /// Android `MotionEvent.BUTTON_*` bit constants. NDK definitions live in

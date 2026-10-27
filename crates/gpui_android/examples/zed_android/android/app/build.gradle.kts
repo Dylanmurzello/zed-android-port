@@ -78,6 +78,7 @@ tasks.register<Exec>("buildZdExec") {
         "26",
         "build",
         "--release",
+        "--locked",
         "-p",
         "zdroid_runtime",
         "--bin",
@@ -156,6 +157,7 @@ tasks.register<Exec>("buildAskpassHelper") {
         "26",
         "build",
         "--release",
+        "--locked",
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->

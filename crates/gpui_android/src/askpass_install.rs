@@ -69,9 +69,9 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
 
     let asset_manager = android_app.asset_manager();
     let asset_name = CString::new(ASSET_NAME)?;
-    let mut asset = asset_manager
-        .open(&asset_name)
-        .ok_or_else(|| anyhow!("{ASSET_NAME} asset not present in APK; check the cargo build step bundled it"))?;
+    let mut asset = asset_manager.open(&asset_name).ok_or_else(|| {
+        anyhow!("{ASSET_NAME} asset not present in APK; check the cargo build step bundled it")
+    })?;
     let expected_len = asset.length();
 
     if let Ok(meta) = fs::metadata(&target)
@@ -99,8 +99,7 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
             .with_context(|| format!("create_dir_all {}", parent.display()))?;
     }
     let staging = target.with_extension("new");
-    fs::write(&staging, &buf)
-        .with_context(|| format!("write staging {}", staging.display()))?;
+    fs::write(&staging, &buf).with_context(|| format!("write staging {}", staging.display()))?;
     let mut perms = fs::metadata(&staging)?.permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&staging, perms)

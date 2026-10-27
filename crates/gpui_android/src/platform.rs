@@ -9,18 +9,17 @@ use std::{
 };
 
 use android_activity::{AndroidApp, AndroidAppWaker};
-use ndk::configuration::UiModeNight;
 use anyhow::Result;
 use futures::channel::oneshot;
 use gpui::{
-    Action, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds, ClipboardItem,
-    CursorStyle,
-    DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Pixels,
-    ActivityGuard, Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper,
-    PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, RunnableVariant, Task, ThermalState,
-    WindowAppearance, WindowParams,
+    Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds,
+    ClipboardItem, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, Keymap, Menu, MenuItem,
+    PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PriorityQueueReceiver,
+    RunnableVariant, Task, ThermalState, WindowAppearance, WindowParams,
 };
 use gpui_wgpu::GpuContext;
+use ndk::configuration::UiModeNight;
 
 use crate::dispatcher::AndroidDispatcher;
 use crate::display::AndroidDisplay;
@@ -43,8 +42,7 @@ unsafe extern "C" {
     );
 }
 
-type ChoreographerFrameCallback =
-    unsafe extern "C" fn(frame_time_nanos: i64, data: *mut c_void);
+type ChoreographerFrameCallback = unsafe extern "C" fn(frame_time_nanos: i64, data: *mut c_void);
 
 /// `ANativeWindow_setFrameRate` is NDK API 30+. minSdk is 26, so we
 /// can't direct-link the symbol (it would `dlopen`-fail at app load on
@@ -93,7 +91,10 @@ pub(crate) fn set_native_window_frame_rate(window: *mut c_void) -> bool {
     // afresh. libandroid.so is always loaded on Android (Choreographer
     // FFI above depends on it) so this is effectively a handle fetch.
     let lib = unsafe {
-        libc::dlopen(c"libandroid.so".as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_LAZY)
+        libc::dlopen(
+            c"libandroid.so".as_ptr(),
+            libc::RTLD_NOLOAD | libc::RTLD_LAZY,
+        )
     };
     if lib.is_null() {
         log::warn!("set_native_window_frame_rate: libandroid.so not loaded; skipping");
@@ -109,7 +110,11 @@ pub(crate) fn set_native_window_frame_rate(window: *mut c_void) -> bool {
     }
     let set_frame_rate: SetFrameRateFn = unsafe { std::mem::transmute(sym) };
     let result = unsafe {
-        set_frame_rate(window, TARGET_FRAME_RATE_HZ, FRAME_RATE_COMPATIBILITY_DEFAULT)
+        set_frame_rate(
+            window,
+            TARGET_FRAME_RATE_HZ,
+            FRAME_RATE_COMPATIBILITY_DEFAULT,
+        )
     };
     if result == 0 {
         log::info!(
@@ -256,7 +261,8 @@ pub(crate) struct AndroidCommon {
     /// Receiver side of the JNI → game-thread channel for extra-window
     /// events. Drained each iteration of the platform run loop. `Some`
     /// from `AndroidCommon::new` until the loop terminates.
-    pub(crate) extra_event_rx: Option<futures::channel::mpsc::UnboundedReceiver<crate::multi_window::ExtraWindowEvent>>,
+    pub(crate) extra_event_rx:
+        Option<futures::channel::mpsc::UnboundedReceiver<crate::multi_window::ExtraWindowEvent>>,
     /// Receiver side of the JNI → game-thread channel for captured
     /// pointer events. Populated when `MainActivity` activates pointer
     /// capture; each captured `MotionEvent` is marshaled across JNI
@@ -269,9 +275,8 @@ pub(crate) struct AndroidCommon {
     /// gpui assigned). Drained each iteration of the platform run
     /// loop; `crate::ime::drain_ime_events` routes per-id into the
     /// right window's `PlatformInputHandler`.
-    pub(crate) ime_event_rx: Option<
-        futures::channel::mpsc::UnboundedReceiver<(u64, crate::ime::ImeEvent)>,
-    >,
+    pub(crate) ime_event_rx:
+        Option<futures::channel::mpsc::UnboundedReceiver<(u64, crate::ime::ImeEvent)>>,
     /// Tracks whether the soft keyboard was visible last tick.
     /// When this disagrees with the atomic Kotlin pushes via
     /// `nativeSetSoftKeyboardVisible`, we force a `window.refresh()`
@@ -518,17 +523,18 @@ impl AndroidPlatform {
 
         let appearance = self.common.borrow().appearance;
         let gpu_context = self.common.borrow().gpu_context.clone();
-        let mut window =
-            AndroidWindow::new(handle, options, gpu_context, appearance, self.android_app.clone());
+        let mut window = AndroidWindow::new(
+            handle,
+            options,
+            gpu_context,
+            appearance,
+            self.android_app.clone(),
+        );
         window.extra_window_id = Some(window_id);
         // Mirror to the state so the touch / trackpad dispatchers
         // (which receive `&mut AndroidWindowState`, not the wrapping
         // `AndroidWindow`) know which Activity owns this window.
-        window
-            .ptr()
-            .state
-            .borrow_mut()
-            .extra_window_id = Some(window_id);
+        window.ptr().state.borrow_mut().extra_window_id = Some(window_id);
         if let Err(err) = window.ptr().attach_surface(native_window, scale_factor) {
             crate::multi_window::unmark_window_registered(window_id);
             crate::multi_window::finish_extra_activity(&self.android_app, window_id);
@@ -680,7 +686,11 @@ impl AndroidPlatform {
                         crate::multi_window::unmark_window_registered(window_id);
                         continue;
                     };
-                    state.state.borrow().os_closed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    state
+                        .state
+                        .borrow()
+                        .os_closed
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     let close_cb = state.callbacks.borrow_mut().close.take();
                     if let Some(cb) = close_cb {
                         log::info!(
@@ -818,11 +828,7 @@ impl AndroidPlatform {
                     .last_input_was_touch
                     .store(false, std::sync::atomic::Ordering::Relaxed);
                 let scale_factor = window_state.scale_factor;
-                crate::captured_pointer::translate(
-                    &mut window_state.captured,
-                    event,
-                    scale_factor,
-                )
+                crate::captured_pointer::translate(&mut window_state.captured, event, scale_factor)
             };
             for input in inputs {
                 window_ptr.handle_input(input);
@@ -987,7 +993,8 @@ impl AndroidPlatform {
             // accidentally replace those stale marks (editor.rs:
             // 23690 — "use marked_ranges if present"). Detect and
             // clean up while we have the handler at hand.
-            handler_has_stale_mark = !our_composition_active && handler.marked_text_range().is_some();
+            handler_has_stale_mark =
+                !our_composition_active && handler.marked_text_range().is_some();
             if handler_has_stale_mark {
                 handler.unmark_text();
             }
@@ -1056,13 +1063,7 @@ impl AndroidPlatform {
         }
         self.common.borrow_mut().last_trackpad_mode_enabled = current;
         crate::cursor::set_trackpad_mode_active(&self.android_app, None, current);
-        let extra_ids: Vec<u64> = self
-            .common
-            .borrow()
-            .extra_windows
-            .keys()
-            .copied()
-            .collect();
+        let extra_ids: Vec<u64> = self.common.borrow().extra_windows.keys().copied().collect();
         for id in extra_ids {
             crate::cursor::set_trackpad_mode_active(&self.android_app, Some(id), current);
         }
@@ -1083,17 +1084,9 @@ impl AndroidPlatform {
         if let Err(err) = call_activity_set_extras_row(&self.android_app, None, current) {
             log::warn!("set_extras_row_enabled(primary): {err:#}");
         }
-        let extra_ids: Vec<u64> = self
-            .common
-            .borrow()
-            .extra_windows
-            .keys()
-            .copied()
-            .collect();
+        let extra_ids: Vec<u64> = self.common.borrow().extra_windows.keys().copied().collect();
         for id in extra_ids {
-            if let Err(err) =
-                call_activity_set_extras_row(&self.android_app, Some(id), current)
-            {
+            if let Err(err) = call_activity_set_extras_row(&self.android_app, Some(id), current) {
                 log::warn!("set_extras_row_enabled(w={id}): {err:#}");
             }
         }
@@ -1115,16 +1108,9 @@ impl AndroidPlatform {
         if let Err(err) = call_activity_set_soft_keyboard(&self.android_app, None, current) {
             log::warn!("set_soft_keyboard_enabled(primary): {err:#}");
         }
-        let extra_ids: Vec<u64> = self
-            .common
-            .borrow()
-            .extra_windows
-            .keys()
-            .copied()
-            .collect();
+        let extra_ids: Vec<u64> = self.common.borrow().extra_windows.keys().copied().collect();
         for id in extra_ids {
-            if let Err(err) =
-                call_activity_set_soft_keyboard(&self.android_app, Some(id), current)
+            if let Err(err) = call_activity_set_soft_keyboard(&self.android_app, Some(id), current)
             {
                 log::warn!("set_soft_keyboard_enabled(w={id}): {err:#}");
             }
@@ -1145,10 +1131,7 @@ impl AndroidPlatform {
         }
         self.common.borrow_mut().last_soft_keyboard_visible = current;
         if let Some(window_ptr) = self.common.borrow().window.clone() {
-            window_ptr
-                .state
-                .borrow_mut()
-                .force_render_after_recovery = true;
+            window_ptr.state.borrow_mut().force_render_after_recovery = true;
             FRAME_PENDING.store(true, std::sync::atomic::Ordering::Release);
         }
     }
@@ -1231,7 +1214,9 @@ impl AndroidPlatform {
             MainEvent::WindowResized { .. } => {
                 let window_ptr = self.common.borrow().window.clone();
                 let Some(window_ptr) = window_ptr else { return };
-                let Some(native_window) = self.android_app.native_window() else { return };
+                let Some(native_window) = self.android_app.native_window() else {
+                    return;
+                };
                 window_ptr.resize_surface(
                     native_window.width() as u32,
                     native_window.height() as u32,
@@ -1627,15 +1612,13 @@ impl Platform for AndroidPlatform {
                     "open_window: app destroyed before surface attached"
                 ));
             }
-            self.android_app.poll_events(
-                Some(std::time::Duration::from_millis(100)),
-                |event| {
+            self.android_app
+                .poll_events(Some(std::time::Duration::from_millis(100)), |event| {
                     if let android_activity::PollEvent::Main(main_event) = event {
                         log::trace!("MainEvent during open_window block: {main_event:?}");
                         self.handle_main_event_while_opening_window(main_event);
                     }
-                },
-            );
+                });
 
             // NOTE: do not drain main_receiver here. open_window runs inside
             // gpui's `cx.update` borrow guard; a runnable that calls
@@ -1646,8 +1629,13 @@ impl Platform for AndroidPlatform {
 
         let appearance = self.common.borrow().appearance;
         let gpu_context = self.common.borrow().gpu_context.clone();
-        let window =
-            AndroidWindow::new(handle, options, gpu_context, appearance, self.android_app.clone());
+        let window = AndroidWindow::new(
+            handle,
+            options,
+            gpu_context,
+            appearance,
+            self.android_app.clone(),
+        );
 
         let native_window = self.android_app.native_window().ok_or_else(|| {
             anyhow::anyhow!("open_window: native_window vanished between poll and attach")
@@ -1764,7 +1752,9 @@ impl Platform for AndroidPlatform {
         "Android"
     }
     fn app_path(&self) -> Result<PathBuf> {
-        Err(anyhow::anyhow!("app_path is not yet implemented on Android"))
+        Err(anyhow::anyhow!(
+            "app_path is not yet implemented on Android"
+        ))
     }
     fn path_for_auxiliary_executable(&self, _name: &str) -> Result<PathBuf> {
         Err(anyhow::anyhow!(
@@ -1842,7 +1832,9 @@ fn call_activity_set_extras_row(
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
     let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     let args = [enabled.into()];
     match extra_window_id {
         Some(id) => {
@@ -1859,13 +1851,8 @@ fn call_activity_set_extras_row(
         }
         None => {
             let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(
-                &activity,
-                "setProgrammingExtrasRowEnabled",
-                "(Z)V",
-                &args,
-            )
-            .context("call MainActivity.setProgrammingExtrasRowEnabled")?;
+            env.call_method(&activity, "setProgrammingExtrasRowEnabled", "(Z)V", &args)
+                .context("call MainActivity.setProgrammingExtrasRowEnabled")?;
         }
     }
     Ok(())
@@ -1882,7 +1869,9 @@ fn call_activity_set_keep_screen_on(android_app: &AndroidApp, on: bool) -> anyho
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
     let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     let activity = unsafe { JObject::from_raw(activity_ptr as _) };
     let result = env.call_method(&activity, "setKeepScreenOn", "(Z)V", &[on.into()]);
     if result.is_err() {
@@ -1916,7 +1905,9 @@ fn call_activity_set_soft_keyboard(
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
     let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread")?;
     let args = [enabled.into()];
     match extra_window_id {
         Some(id) => {
@@ -1933,13 +1924,8 @@ fn call_activity_set_soft_keyboard(
         }
         None => {
             let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(
-                &activity,
-                "setSoftKeyboardEnabled",
-                "(Z)V",
-                &args,
-            )
-            .context("call MainActivity.setSoftKeyboardEnabled")?;
+            env.call_method(&activity, "setSoftKeyboardEnabled", "(Z)V", &args)
+                .context("call MainActivity.setSoftKeyboardEnabled")?;
         }
     }
     Ok(())

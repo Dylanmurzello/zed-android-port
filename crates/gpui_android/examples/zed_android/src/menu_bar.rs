@@ -84,10 +84,7 @@ enum MenuEntry {
 impl MenuBar {
     pub fn new(workspace: WeakEntity<Workspace>, _cx: &mut Context<Self>) -> Self {
         let menus = app_menu_definitions();
-        let handles = menus
-            .iter()
-            .map(|_| PopoverMenuHandle::default())
-            .collect();
+        let handles = menus.iter().map(|_| PopoverMenuHandle::default()).collect();
         Self {
             hidden: false,
             workspace,
@@ -147,11 +144,7 @@ impl Render for MenuBar {
                                 if let Some(ref handle) = active_focus {
                                     menu = menu.context(handle.clone());
                                 }
-                                menu = build_menu_entries(
-                                    menu,
-                                    items(),
-                                    active_focus.clone(),
-                                );
+                                menu = build_menu_entries(menu, items(), active_focus.clone());
                                 menu
                             }))
                         }
@@ -254,14 +247,8 @@ fn zed_menu_items() -> Vec<MenuEntry> {
     vec![
         MenuEntry::Submenu("Settings", zed_settings_submenu_items),
         MenuEntry::Separator,
-        MenuEntry::Action(
-            "Check for Updates",
-            Box::new(auto_update::Check),
-        ),
-        MenuEntry::Action(
-            "Extensions",
-            Box::new(zed_actions::Extensions::default()),
-        ),
+        MenuEntry::Action("Check for Updates", Box::new(auto_update::Check)),
+        MenuEntry::Action("Extensions", Box::new(zed_actions::Extensions::default())),
         MenuEntry::Action(
             if gpui_android::background_mode::is_enabled() {
                 "Stop Running in Background"
@@ -271,14 +258,8 @@ fn zed_menu_items() -> Vec<MenuEntry> {
             Box::new(ToggleBackgroundMode),
         ),
         MenuEntry::Separator,
-        MenuEntry::Action(
-            "Welcome",
-            Box::new(workspace::welcome::ShowWelcome),
-        ),
-        MenuEntry::Action(
-            "Onboarding",
-            Box::new(zed_actions::OpenOnboarding),
-        ),
+        MenuEntry::Action("Welcome", Box::new(workspace::welcome::ShowWelcome)),
+        MenuEntry::Action("Onboarding", Box::new(zed_actions::OpenOnboarding)),
         MenuEntry::Separator,
         MenuEntry::Action("Quit", Box::new(zed_actions::Quit)),
     ]
@@ -308,10 +289,7 @@ fn zed_settings_submenu_items() -> Vec<MenuEntry> {
         ),
         MenuEntry::Separator,
         MenuEntry::Action("Open Keymap", Box::new(zed_actions::OpenKeymap)),
-        MenuEntry::Action(
-            "Open Keymap File",
-            Box::new(zed_actions::OpenKeymapFile),
-        ),
+        MenuEntry::Action("Open Keymap File", Box::new(zed_actions::OpenKeymapFile)),
         MenuEntry::Action(
             "Open Default Key Bindings",
             Box::new(zed_actions::OpenDefaultKeymap),
@@ -456,10 +434,7 @@ fn view_menu_items() -> Vec<MenuEntry> {
         MenuEntry::Separator,
         MenuEntry::Action("Toggle Left Dock", Box::new(workspace::ToggleLeftDock)),
         MenuEntry::Action("Toggle Right Dock", Box::new(workspace::ToggleRightDock)),
-        MenuEntry::Action(
-            "Toggle Bottom Dock",
-            Box::new(workspace::ToggleBottomDock),
-        ),
+        MenuEntry::Action("Toggle Bottom Dock", Box::new(workspace::ToggleBottomDock)),
         MenuEntry::Action("Toggle All Docks", Box::new(workspace::ToggleAllDocks)),
         MenuEntry::Submenu("Editor Layout", view_editor_layout_submenu_items),
         MenuEntry::Separator,
@@ -467,10 +442,7 @@ fn view_menu_items() -> Vec<MenuEntry> {
             "Project Panel",
             Box::new(zed_actions::project_panel::ToggleFocus),
         ),
-        MenuEntry::Action(
-            "Outline Panel",
-            Box::new(outline_panel::ToggleFocus),
-        ),
+        MenuEntry::Action("Outline Panel", Box::new(outline_panel::ToggleFocus)),
         MenuEntry::Action(
             "Terminal Panel",
             Box::new(terminal_view::terminal_panel::ToggleFocus),
@@ -482,22 +454,10 @@ fn view_menu_items() -> Vec<MenuEntry> {
 
 fn view_editor_layout_submenu_items() -> Vec<MenuEntry> {
     vec![
-        MenuEntry::Action(
-            "Split Up",
-            Box::new(workspace::SplitUp::default()),
-        ),
-        MenuEntry::Action(
-            "Split Down",
-            Box::new(workspace::SplitDown::default()),
-        ),
-        MenuEntry::Action(
-            "Split Left",
-            Box::new(workspace::SplitLeft::default()),
-        ),
-        MenuEntry::Action(
-            "Split Right",
-            Box::new(workspace::SplitRight::default()),
-        ),
+        MenuEntry::Action("Split Up", Box::new(workspace::SplitUp::default())),
+        MenuEntry::Action("Split Down", Box::new(workspace::SplitDown::default())),
+        MenuEntry::Action("Split Left", Box::new(workspace::SplitLeft::default())),
+        MenuEntry::Action("Split Right", Box::new(workspace::SplitRight::default())),
     ]
 }
 

@@ -27,9 +27,7 @@ pub(crate) struct AndroidDispatcher {
 impl AndroidDispatcher {
     /// Construct on the main thread. Returns the dispatcher plus a receiver that
     /// the platform's run loop drains each tick to execute main-thread runnables.
-    pub fn new(
-        android_app: &AndroidApp,
-    ) -> (Self, PriorityQueueReceiver<RunnableVariant>) {
+    pub fn new(android_app: &AndroidApp) -> (Self, PriorityQueueReceiver<RunnableVariant>) {
         let main_waker = android_app.create_waker();
         let (main_sender_inner, main_receiver) = PriorityQueueReceiver::new();
         let main_sender = PriorityQueueAndroidSender::new(main_sender_inner, main_waker);

@@ -42,8 +42,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use anyhow::{Context as _, Result, bail};
 use android_activity::AndroidApp;
+use anyhow::{Context as _, Result, bail};
 use futures::channel::{mpsc, oneshot};
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JFloatArray, JIntArray, JObject, JValue};
@@ -179,7 +179,10 @@ fn refs_table() -> std::sync::MutexGuard<'static, Option<HashMap<u64, GlobalRef>
 /// Kotlin methods on a specific extra Activity (cursor sprite for
 /// trackpad mode, per-window IME mode, etc.) go through this.
 pub(crate) fn extra_activity_for(window_id: u64) -> Option<GlobalRef> {
-    refs_table().as_ref().and_then(|m| m.get(&window_id)).cloned()
+    refs_table()
+        .as_ref()
+        .and_then(|m| m.get(&window_id))
+        .cloned()
 }
 
 /// Snapshot every registered extra-window id so callers can fan a
@@ -193,8 +196,7 @@ pub(crate) fn extra_activity_ids() -> Vec<u64> {
         .unwrap_or_default()
 }
 
-fn registered_set()
--> std::sync::MutexGuard<'static, Option<std::collections::HashSet<u64>>> {
+fn registered_set() -> std::sync::MutexGuard<'static, Option<std::collections::HashSet<u64>>> {
     REGISTERED_WINDOWS.lock().unwrap()
 }
 
@@ -317,7 +319,11 @@ pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) 
     let result = (|| -> Result<()> {
         let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
         let mut env = vm.attach_current_thread()?;
-        let activity_ref = match refs_table().as_ref().and_then(|m| m.get(&window_id)).cloned() {
+        let activity_ref = match refs_table()
+            .as_ref()
+            .and_then(|m| m.get(&window_id))
+            .cloned()
+        {
             Some(ar) => ar,
             None => return Ok(()),
         };
@@ -399,7 +405,11 @@ pub(crate) fn set_extra_activity_title(android_app: &AndroidApp, window_id: u64,
     let result = (|| -> Result<()> {
         let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
         let mut env = vm.attach_current_thread()?;
-        let activity_ref = match refs_table().as_ref().and_then(|m| m.get(&window_id)).cloned() {
+        let activity_ref = match refs_table()
+            .as_ref()
+            .and_then(|m| m.get(&window_id))
+            .cloned()
+        {
             Some(ar) => ar,
             None => return Ok(()),
         };
@@ -473,7 +483,12 @@ fn launch_extra_activity_inner(
     // knows about /data/app/<pkg>/base.apk's classes) and use that.
     let main_class = env.get_object_class(&main_activity)?;
     let class_loader = env
-        .call_method(&main_class, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
+        .call_method(
+            &main_class,
+            "getClassLoader",
+            "()Ljava/lang/ClassLoader;",
+            &[],
+        )?
         .l()?;
     let class_name = env.new_string("com.zdroid.ExtraWindowActivity")?;
     let extra_class = env
@@ -582,9 +597,7 @@ fn dispatch_event(event: ExtraWindowEvent) {
 /// but the process was killed and restarted, so gpui has no record).
 /// Activity uses the result to decide whether to proceed or `finish()`.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeIsExtraWindowKnown<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeIsExtraWindowKnown<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -599,9 +612,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeIsExtraWindowKnown<
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -671,9 +682,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityDestroyed<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityDestroyed<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -687,9 +696,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityDestroy
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -724,9 +731,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -745,9 +750,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceDestroyed<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceDestroyed<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,

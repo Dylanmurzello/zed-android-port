@@ -44,14 +44,10 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let socket = match env::args().find_map(|a| {
-        a.strip_prefix("--askpass=").map(String::from)
-    }) {
+    let socket = match env::args().find_map(|a| a.strip_prefix("--askpass=").map(String::from)) {
         Some(s) if !s.is_empty() => s,
         _ => {
-            eprintln!(
-                "zed-askpass-helper: missing or empty --askpass=<socket> argument"
-            );
+            eprintln!("zed-askpass-helper: missing or empty --askpass=<socket> argument");
             return ExitCode::from(2);
         }
     };
@@ -59,9 +55,7 @@ fn main() -> ExitCode {
     let mut stream = match UnixStream::connect(&socket) {
         Ok(s) => s,
         Err(err) => {
-            eprintln!(
-                "zed-askpass-helper: connect {socket}: {err}"
-            );
+            eprintln!("zed-askpass-helper: connect {socket}: {err}");
             return ExitCode::from(1);
         }
     };

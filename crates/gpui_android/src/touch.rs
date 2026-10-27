@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 use android_activity::AndroidApp;
 use android_activity::input::{MetaState, MotionAction, MotionEvent};
 use gpui::{
-    MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, Pixels, Point, ScrollDelta,
+    MouseButton, MouseDownEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta,
     ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
 
@@ -100,12 +100,16 @@ pub(crate) enum TouchAction {
     Down,
     /// Additional finger landed. `index` is the position of the newly-
     /// added pointer in [`TouchEvent::pointers`].
-    PointerDown { index: usize },
+    PointerDown {
+        index: usize,
+    },
     Move,
     /// A non-last finger lifted. `index` is the position of the lifting
     /// pointer in [`TouchEvent::pointers`] (the pointer is still
     /// present in the array per Android's POINTER_UP semantics).
-    PointerUp { index: usize },
+    PointerUp {
+        index: usize,
+    },
     Up,
     Cancel,
 }
@@ -134,13 +138,15 @@ pub(crate) fn dispatch_primary(
         let android_app = state.android_app.clone();
         let extra_window_id = state.extra_window_id;
         let bounds = state.bounds.size;
-        return state
-            .trackpad_touch
-            .on_event(&touch_event, &android_app, scale_factor, extra_window_id, bounds);
+        return state.trackpad_touch.on_event(
+            &touch_event,
+            &android_app,
+            scale_factor,
+            extra_window_id,
+            bounds,
+        );
     }
-    let drag_capture = state
-        .drag_active
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let drag_capture = state.drag_active.load(std::sync::atomic::Ordering::Relaxed);
     state.touch.on_event(&touch_event, drag_capture)
 }
 
@@ -157,22 +163,28 @@ pub(crate) fn dispatch_extra(
     positions: &[(f32, f32, i32)],
     scale_factor: f32,
 ) -> MotionInputs {
-    let Some(touch_event) =
-        build_from_extra_fields(action_masked, action_index, meta_state, positions, scale_factor)
-    else {
+    let Some(touch_event) = build_from_extra_fields(
+        action_masked,
+        action_index,
+        meta_state,
+        positions,
+        scale_factor,
+    ) else {
         return MotionInputs::new();
     };
     if crate::ime::trackpad_mode_enabled() {
         let android_app = state.android_app.clone();
         let extra_window_id = state.extra_window_id;
         let bounds = state.bounds.size;
-        return state
-            .trackpad_touch
-            .on_event(&touch_event, &android_app, scale_factor, extra_window_id, bounds);
+        return state.trackpad_touch.on_event(
+            &touch_event,
+            &android_app,
+            scale_factor,
+            extra_window_id,
+            bounds,
+        );
     }
-    let drag_capture = state
-        .drag_active
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let drag_capture = state.drag_active.load(std::sync::atomic::Ordering::Relaxed);
     state.touch.on_event(&touch_event, drag_capture)
 }
 
@@ -421,8 +433,7 @@ impl TouchState {
                     GesturePhase::SingleFingerDown => {
                         self.pointers.get(&primary_id).is_some_and(|s| {
                             s.down_time.elapsed() < TWO_FINGER_TAP_WINDOW
-                                && (new_pos - s.down_pos).magnitude()
-                                    <= TWO_FINGER_TAP_SLOP_PX
+                                && (new_pos - s.down_pos).magnitude() <= TWO_FINGER_TAP_SLOP_PX
                         })
                     }
                     GesturePhase::LongPressSelection => true,
@@ -444,12 +455,11 @@ impl TouchState {
                     // the context-menu emission. The pending
                     // `MouseDown(Left, count=2)` was emitted at
                     // long-press fire; emit its matching `Up` here.
-                    let cancel_count =
-                        if matches!(self.phase, GesturePhase::LongPressSelection) {
-                            2
-                        } else {
-                            0
-                        };
+                    let cancel_count = if matches!(self.phase, GesturePhase::LongPressSelection) {
+                        2
+                    } else {
+                        0
+                    };
                     out.push(PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
                         position: anchor,
@@ -1047,16 +1057,15 @@ impl TrackpadTouchState {
                     // Advance virtual cursor. Acceleration only on
                     // pure navigation; hold-to-drag stays 1:1 for
                     // text-selection precision.
-                    let (scaled_dx, scaled_dy) = if self.phase
-                        == TrackpadGesturePhase::SingleFingerDrag
-                    {
-                        (
-                            accelerate_delta(f32::from(delta.x)),
-                            accelerate_delta(f32::from(delta.y)),
-                        )
-                    } else {
-                        (f32::from(delta.x), f32::from(delta.y))
-                    };
+                    let (scaled_dx, scaled_dy) =
+                        if self.phase == TrackpadGesturePhase::SingleFingerDrag {
+                            (
+                                accelerate_delta(f32::from(delta.x)),
+                                accelerate_delta(f32::from(delta.y)),
+                            )
+                        } else {
+                            (f32::from(delta.x), f32::from(delta.y))
+                        };
                     self.cursor.x += px(scaled_dx);
                     self.cursor.y += px(scaled_dy);
                     // Clamp to the window's visible bounds so we don't
@@ -1108,8 +1117,7 @@ impl TrackpadTouchState {
                         f32::from(self.cursor.y) * scale_factor,
                     );
                 }
-                TrackpadGesturePhase::MultiFingerDown
-                | TrackpadGesturePhase::MultiFingerScroll => {
+                TrackpadGesturePhase::MultiFingerDown | TrackpadGesturePhase::MultiFingerScroll => {
                     let new_centroid = centroid(&event.pointers);
                     let baseline = self.scroll_centroid.unwrap_or(new_centroid);
                     let delta = point(new_centroid.x - baseline.x, new_centroid.y - baseline.y);

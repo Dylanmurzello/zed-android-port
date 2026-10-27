@@ -126,4 +126,3 @@ impl ClickTrackState {
         self.held_non_primary = None;
     }
 }
-

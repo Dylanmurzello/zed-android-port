@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 use android_activity::AndroidApp;
 use anyhow::Result;
 use gpui::ClipboardItem;
-use jni::{JavaVM, objects::{JObject, JValue}};
+use jni::{
+    JavaVM,
+    objects::{JObject, JValue},
+};
 
 const SERVICE_CLIPBOARD: &str = "clipboard";
 
@@ -32,8 +35,7 @@ const SERVICE_CLIPBOARD: &str = "clipboard";
 // 50ms cache TTL is short enough that pasted content from another app
 // shows up "instantly" by human standards while keeping the JNI rate
 // at <20 calls/sec instead of 60+/sec.
-static READ_CACHE: Mutex<Option<(Instant, Option<String>)>> =
-    Mutex::new(None);
+static READ_CACHE: Mutex<Option<(Instant, Option<String>)>> = Mutex::new(None);
 
 // Belt-and-braces against re-entry: if read() is somehow called from a
 // callback fired during another read (shouldn't happen but defends
@@ -254,10 +256,7 @@ fn drain_pending_exception(android_app: &AndroidApp) {
     let _ = clear_pending_exception(&mut env);
 }
 
-fn clipboard_manager<'a>(
-    env: &mut jni::JNIEnv<'a>,
-    activity: &JObject<'a>,
-) -> Result<JObject<'a>> {
+fn clipboard_manager<'a>(env: &mut jni::JNIEnv<'a>, activity: &JObject<'a>) -> Result<JObject<'a>> {
     let service_name = env.new_string(SERVICE_CLIPBOARD)?;
     let manager = env
         .call_method(
@@ -272,4 +271,3 @@ fn clipboard_manager<'a>(
     }
     Ok(manager)
 }
-

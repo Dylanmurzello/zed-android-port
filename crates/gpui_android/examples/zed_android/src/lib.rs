@@ -37,6 +37,7 @@ use prompt_store::PromptBuilder;
 use recent_projects::{RemoteSettings, open_remote_project};
 use release_channel::AppVersion;
 use remote::RemoteConnectionOptions;
+use reqwest_client::ReqwestClient;
 use session::{AppSession, Session};
 use settings::{Settings as _, SettingsStore, watch_config_file};
 use theme::{ActiveTheme as _, ThemeRegistry};
@@ -47,12 +48,7 @@ use workspace::{
     WorkspaceDb, WorkspaceSettings, WorkspaceStore, notifications::NotificationId,
     restore_multiworkspace, workspace_windows_for_location,
 };
-use reqwest_client::ReqwestClient;
-use zdroid_runtime::{
-    RuntimeId, RuntimeProvider,
-    adapters,
-    config::RuntimeFile,
-};
+use zdroid_runtime::{RuntimeId, RuntimeProvider, adapters, config::RuntimeFile};
 
 /// The Zed release this app is built from, reported as the app version so
 /// SSH projects fetch the matching stable remote server. Read from
@@ -99,7 +95,10 @@ fn migrate_development_credentials(cx: &mut App) {
             write.await?;
         }
         std::fs::remove_file(&path)?;
-        info!("zed_android: moved {} credentials into the Keystore", credentials.len());
+        info!(
+            "zed_android: moved {} credentials into the Keystore",
+            credentials.len()
+        );
         anyhow::Ok(())
     })
     .detach_and_log_err(cx);
@@ -373,9 +372,7 @@ fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowO
 /// adapter-derived metadata. Returns None when no toml exists or the
 /// adapter construction fails (defaults are filled in by the picker
 /// the first time the user opens it).
-fn build_active_provider(
-    data_path: &std::path::Path,
-) -> Option<Box<dyn RuntimeProvider>> {
+fn build_active_provider(data_path: &std::path::Path) -> Option<Box<dyn RuntimeProvider>> {
     let file = RuntimeFile::load(&data_path.join("usr/etc/zd-runtime.toml"))
         .ok()
         .flatten()?;
@@ -397,10 +394,8 @@ fn active_provider(data_path: &std::path::Path) -> Box<dyn RuntimeProvider> {
     let resolved = file
         .resolve()
         .expect("default Bootstrap RuntimeFile must resolve");
-    adapters::for_config(&resolved)
-        .expect("default Bootstrap adapter must construct")
+    adapters::for_config(&resolved).expect("default Bootstrap adapter must construct")
 }
-
 
 // The next four are copies of the functions in Zed's crates/zed/src/main.rs.
 fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
@@ -626,9 +621,7 @@ fn android_main(app: AndroidApp) {
     // its Termux-flavored paths, chroot publishes the bionic-clean
     // equivalents, external Termux publishes None.
     util::env::register_workspace_root(provider.workspace_root(&data_path));
-    util::env::register_npm_libtermux_exec_path(
-        provider.npm_libtermux_exec_path(&data_path),
-    );
+    util::env::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
 
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
@@ -654,9 +647,7 @@ fn android_main(app: AndroidApp) {
     // installs land with no zd-exec and `terminal.shell` (which the chroot adapter sets to
     // `<data>/files/bin/zd-exec`) fails with ENOENT. Phase 4 of the
     // Termux-divestment refactor moved this off `$PREFIX/bin/`.
-    if let Err(err) =
-        gpui_android::zd_exec_install::ensure_installed(&app, &data_path)
-    {
+    if let Err(err) = gpui_android::zd_exec_install::ensure_installed(&app, &data_path) {
         log::warn!(
             "zed_android: zd-exec install failed: {err:#}; \
              chroot adapter's integrated terminal will fail to spawn"
@@ -926,12 +917,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // anything. Read the toml directly: `None` flows to the label as
     // "Not configured yet" and disappears the instant the picker
     // writes a selection via `cx.set_global` (see runtime_picker.rs).
-    let current_from_toml = RuntimeFile::load(
-        &data_path.join("usr/etc/zd-runtime.toml"),
-    )
-    .ok()
-    .flatten()
-    .map(|f| f.runtime.kind);
+    let current_from_toml = RuntimeFile::load(&data_path.join("usr/etc/zd-runtime.toml"))
+        .ok()
+        .flatten()
+        .map(|f| f.runtime.kind);
     cx.set_global(onboarding::runtime_global::ActiveRuntime {
         current: current_from_toml,
     });
@@ -946,7 +935,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     let client = Client::production(cx);
     cx.set_http_client(client.http_client());
-    info!("zed_android: Client::production constructed (id={})", client.id());
+    info!(
+        "zed_android: Client::production constructed (id={})",
+        client.id()
+    );
 
     // Initialize auto_update so the remote_server CDN-fetch path can
     // resolve the right binary URL via `GlobalAutoUpdate`. The
@@ -990,10 +982,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // function.
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
-            |_workspace: &mut Workspace,
-             _: &auto_update::Check,
-             _window,
-             cx| {
+            |_workspace: &mut Workspace, _: &auto_update::Check, _window, cx| {
                 if let Some(updater) = app_updater::AppUpdater::global(cx) {
                     updater.update(cx, |updater, cx| updater.check(true, cx));
                 }
@@ -1030,12 +1019,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             allow_path_lookup: !settings.ignore_system_version,
             allow_binary_download: true,
             use_paths: settings.path.as_ref().map(|node_path| {
-                let node_path = std::path::PathBuf::from(
-                    shellexpand::tilde(node_path).as_ref(),
-                );
-                let npm_path = settings.npm_path.as_ref().map(|p| {
-                    std::path::PathBuf::from(shellexpand::tilde(&p).as_ref())
-                });
+                let node_path = std::path::PathBuf::from(shellexpand::tilde(node_path).as_ref());
+                let npm_path = settings
+                    .npm_path
+                    .as_ref()
+                    .map(|p| std::path::PathBuf::from(shellexpand::tilde(&p).as_ref()));
                 (
                     node_path.clone(),
                     npm_path.unwrap_or_else(|| {
@@ -1054,7 +1042,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     ui::on_new_scrollbars::<SettingsStore>(cx);
     let node_runtime = NodeRuntime::new(client.http_client(), None, node_options_rx);
     info!("zed_android: RealFs + NodeRuntime constructed (PATH lookup + managed download)");
-
 
     // Mirror `android_input.*` settings into gpui_android's runtime
     // atomics directly via observe_global, NOT via per-paint
@@ -1084,8 +1071,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
 
     load_embedded_fonts(cx);
 
-    let mut language_registry =
-        language::LanguageRegistry::new(cx.background_executor().clone());
+    let mut language_registry = language::LanguageRegistry::new(cx.background_executor().clone());
     language_registry.set_language_server_download_dir(paths::languages_dir().clone());
     let language_registry = Arc::new(language_registry);
 
@@ -1141,7 +1127,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // on theme changes so theme toggles actually recolour text. Bracket
     // matching, indents, and outline don't depend on this and would have
     // worked already; syntax colors and rainbow brackets do.
-    app_state.languages.set_theme(theme::GlobalTheme::theme(cx).clone());
+    app_state
+        .languages
+        .set_theme(theme::GlobalTheme::theme(cx).clone());
     cx.observe_global::<theme::GlobalTheme>({
         let languages = app_state.languages.clone();
         move |cx| {
@@ -1181,7 +1169,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     .shell = Some(shell.clone());
             });
         });
-        info!("zed_android: default terminal.shell -> {}", shell_path.display());
+        info!(
+            "zed_android: default terminal.shell -> {}",
+            shell_path.display()
+        );
 
         // Earlier versions wrote this value into settings.json, where it
         // outranks the default and still reaches remotes.
@@ -1227,18 +1218,17 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // db was preserving it correctly — every relaunch re-prompted the
     // restricted-mode trust dialog. Fall back to empty on fetch failure
     // (typically only happens if the db schema upgrade is mid-flight).
-    let db_trusted_paths =
-        match workspace::WorkspaceDb::global(cx).fetch_trusted_worktrees() {
-            Ok(paths) => paths,
-            Err(err) => {
-                error!(
-                    "zed_android: fetch_trusted_worktrees failed at boot: \
+    let db_trusted_paths = match workspace::WorkspaceDb::global(cx).fetch_trusted_worktrees() {
+        Ok(paths) => paths,
+        Err(err) => {
+            error!(
+                "zed_android: fetch_trusted_worktrees failed at boot: \
                      {err:#} — starting with empty trust map; user will \
                      be re-prompted for any previously trusted projects"
-                );
-                std::collections::HashMap::default()
-            }
-        };
+            );
+            std::collections::HashMap::default()
+        }
+    };
     project::trusted_worktrees::init(db_trusted_paths, cx);
     Project::init(&client, cx);
 
@@ -1394,14 +1384,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // the deep-link.
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
-            |_workspace: &mut Workspace,
-             _: &zed_actions::OpenSettings,
-             window,
-             cx| {
-                if std::path::Path::new(
-                    "/data/data/com.zdroid/files/usr/etc/zd-runtime.toml",
-                )
-                .exists()
+            |_workspace: &mut Workspace, _: &zed_actions::OpenSettings, window, cx| {
+                if std::path::Path::new("/data/data/com.zdroid/files/usr/etc/zd-runtime.toml")
+                    .exists()
                 {
                     // Runtime configured: let settings_ui's handler open
                     // the normal settings editor.
@@ -1452,11 +1437,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         // two-finger tap opens the Settings/Keymap/Themes/Icon
         // Themes/Extensions dropdown.
         let title_bar = cx.new(|inner_cx| {
-            title_bar::TitleBar::new(
-                weak_workspace.clone(),
-                menu_bar.downgrade(),
-                inner_cx,
-            )
+            title_bar::TitleBar::new(weak_workspace.clone(), menu_bar.downgrade(), inner_cx)
         });
         let header = cx.new(|_| header::Header::new(menu_bar, title_bar));
         workspace.set_titlebar_item(header.into(), window, cx);
