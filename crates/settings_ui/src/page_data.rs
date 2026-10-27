@@ -123,21 +123,15 @@ fn android_runtime_page() -> SettingsPage {
                 ),
                 button_text: "Open picker".into(),
                 on_click: Arc::new(|_settings_window, _window, cx| {
-                    workspace::with_active_or_new_workspace(
-                        cx,
-                        |_workspace, window, cx| {
-                            match cx.build_action(
-                                "zdroid_runtime::PickRuntime",
-                                None,
-                            ) {
-                                Ok(action) => window.dispatch_action(action, cx),
-                                Err(err) => log::warn!(
-                                    "settings_ui::android_runtime_page: \
+                    workspace::with_active_or_new_workspace(cx, |_workspace, window, cx| match cx
+                        .build_action("zdroid_runtime::PickRuntime", None)
+                    {
+                        Ok(action) => window.dispatch_action(action, cx),
+                        Err(err) => log::warn!(
+                            "settings_ui::android_runtime_page: \
                                      zdroid_runtime::PickRuntime not registered: {err}"
-                                ),
-                            }
-                        },
-                    );
+                        ),
+                    });
                 }),
                 files: USER,
             }),

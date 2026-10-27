@@ -155,7 +155,7 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 
 Pull requests from this repository build an APK signed with the release key, named `Zdroid-X.Y.Z-<commit>.apk`. Pull requests from forks never get the key, so they only produce the unsigned `zdroid-apk-unsigned` artifact, which won't install.
 
-The same workflow checks the formatting of the fork's crates (`cargo fmt -p gpui_android -p zdroid_runtime`, plus `cargo fmt` in the app and in `askpass-helper`) and runs the host tests of those that build outside Android (`cargo test -p zdroid_runtime`); a release waits for both. Every Cargo build in it, the helpers' included, uses `--locked`: update a lockfile in the pull request that needs it, not in CI.
+The same workflow checks formatting (`cargo fmt --all`, which covers the fork's edits to Zed's crates, plus `cargo fmt` in the app and in `askpass-helper`) and runs the host tests of those that build outside Android (`cargo test -p zdroid_runtime`); a release waits for both. Every Cargo build in it, the helpers' included, uses `--locked`: update a lockfile in the pull request that needs it, not in CI.
 
 1. Open the pull request's **Checks** tab, open the **Zdroid APK** run, and download the `zdroid-apk` artifact. GitHub delivers it as a `.zip`; unzip it to get the APK.
 2. Install it over the current release. Same package and key means it installs as an update and keeps your data.
