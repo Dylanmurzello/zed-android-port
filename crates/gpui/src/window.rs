@@ -5927,6 +5927,20 @@ impl Window {
                 self.dispatch_mouse_event(&scroll_wheel, cx);
             }
             RecognizedTouchGesture::Tap { down, up } => {
+                // The recognizer builds taps without modifiers, and
+                // gpui_android reports a keyboard cover's modifier keys as
+                // `ModifiersChanged`, so Ctrl+tap on a link needs them here.
+                #[cfg(target_os = "android")]
+                let (down, up) = (
+                    crate::MouseDownEvent {
+                        modifiers: self.modifiers,
+                        ..down
+                    },
+                    MouseUpEvent {
+                        modifiers: self.modifiers,
+                        ..up
+                    },
+                );
                 self.mouse_position = up.position;
                 cx.propagate_event = true;
                 self.dispatch_mouse_event(&down, cx);

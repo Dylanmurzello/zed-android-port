@@ -478,6 +478,80 @@ impl EditorElement {
                 }
             }
         });
+
+        // With gpui's touch gestures on Android, a long press selects the word
+        // under the finger and the finger's moves extend the selection, as
+        // with gpui_android's original touch handling, which sends a double
+        // click and a drag instead.
+        #[cfg(target_os = "android")]
+        window.on_mouse_event({
+            let position_map = layout.position_map.clone();
+            let editor = self.editor.clone();
+            let line_numbers = layout.line_numbers.clone();
+
+            move |event: &gpui::LongPressEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                let modifiers = window.modifiers();
+                match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if window.default_prevented()
+                            || !(position_map.text_hitbox.is_hovered(window)
+                                || position_map.gutter_hitbox.is_hovered(window))
+                        {
+                            return;
+                        }
+                        let mouse_down = MouseDownEvent {
+                            button: MouseButton::Left,
+                            position: event.start_position,
+                            modifiers,
+                            click_count: 2,
+                            first_mouse: false,
+                        };
+                        editor.update(cx, |editor, cx| {
+                            Self::mouse_left_down(
+                                editor,
+                                &mouse_down,
+                                &position_map,
+                                line_numbers.as_ref(),
+                                window,
+                                cx,
+                            );
+                        });
+                        window.capture_long_press(&editor);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Moved if window.has_long_press_capture(&editor) => {
+                        let mouse_move = MouseMoveEvent {
+                            position: event.position,
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers,
+                        };
+                        editor.update(cx, |editor, cx| {
+                            Self::mouse_dragged(editor, &mouse_move, &position_map, window, cx);
+                        });
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled
+                        if window.has_long_press_capture(&editor) =>
+                    {
+                        let mouse_up = MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: event.position,
+                            modifiers,
+                            click_count: 2,
+                        };
+                        editor.update(cx, |editor, cx| {
+                            Self::mouse_up(editor, &mouse_up, &position_map, window, cx);
+                        });
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }
+        });
     }
 
     fn paint_scroll_wheel_listener(

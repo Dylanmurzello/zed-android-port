@@ -3,7 +3,7 @@ use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Element,
     ElementId, Entity, FocusHandle, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId,
     HighlightStyle, Hitbox, Hsla, InputHandler, InteractiveElement, Interactivity, IntoElement,
-    LayoutId, Length, ModifiersChangedEvent, MouseButton, MouseMoveEvent, Pixels,
+    LayoutId, Length, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
     Point as GpuiPoint, StatefulInteractiveElement, StrikethroughStyle, Styled, TextRun, TextStyle,
     UTF16Selection, UnderlineStyle, WeakEntity, WhiteSpace, Window, div, fill, point, px, relative,
     size,
@@ -940,6 +940,83 @@ impl TerminalElement {
         result
     }
 
+    fn mouse_left_down(
+        terminal: &Entity<Terminal>,
+        terminal_view: &Entity<TerminalView>,
+        focus: &FocusHandle,
+        event: &MouseDownEvent,
+        mouse_input_mode: MouseInputMode,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.focus(focus, cx);
+
+        let view = terminal_view.read(cx);
+        let scroll_top = view.scroll_top;
+        terminal.update(cx, |terminal, cx| {
+            let mut adjusted_event = event.clone();
+            if scroll_top > Pixels::ZERO {
+                adjusted_event.position.y += scroll_top;
+            }
+            terminal.mouse_down(&adjusted_event, mouse_input_mode, cx);
+            cx.notify();
+        })
+    }
+
+    fn mouse_drag(
+        terminal: &Entity<Terminal>,
+        terminal_view: &Entity<TerminalView>,
+        focus: &FocusHandle,
+        hitbox: &Hitbox,
+        event: &MouseMoveEvent,
+        mouse_input_mode: MouseInputMode,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if event.pressed_button.is_some() && !cx.has_active_drag() && focus.is_focused(window) {
+            let hovered = hitbox.is_hovered(window);
+
+            let scroll_top = terminal_view.read(cx).scroll_top;
+            terminal.update(cx, |terminal, cx| {
+                if terminal.selection_started() || hovered {
+                    let mut adjusted_event = event.clone();
+                    if scroll_top > Pixels::ZERO {
+                        adjusted_event.position.y += scroll_top;
+                    }
+                    terminal.mouse_drag(&adjusted_event, hitbox.bounds, mouse_input_mode, cx);
+                    cx.notify();
+                }
+            })
+        }
+    }
+
+    /// Offers the context menu when a long press ends, so copy and paste
+    /// don't need a two-finger tap, unless the app in the terminal is using
+    /// the mouse.
+    #[cfg(target_os = "android")]
+    fn deploy_long_press_context_menu(
+        terminal: &Entity<Terminal>,
+        terminal_view: &Entity<TerminalView>,
+        position: GpuiPoint<Pixels>,
+        shift: bool,
+        mouse_input_mode: MouseInputMode,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if terminal.read(cx).mouse_mode(shift, mouse_input_mode) {
+            return;
+        }
+        let has_selection = terminal
+            .read(cx)
+            .last_content
+            .selection_text
+            .as_ref()
+            .is_some_and(|text| !text.is_empty());
+        terminal_view.update(cx, |view, cx| {
+            view.deploy_long_press_context_menu(position, has_selection, window, cx);
+        });
+    }
+
     fn register_mouse_listeners(
         &mut self,
         hitbox: &Hitbox,
@@ -957,18 +1034,15 @@ impl TerminalElement {
             let terminal_view = terminal_view.clone();
 
             move |e, window, cx| {
-                window.focus(&focus, cx);
-
-                let view = terminal_view.read(cx);
-                let scroll_top = view.scroll_top;
-                terminal.update(cx, |terminal, cx| {
-                    let mut adjusted_event = e.clone();
-                    if scroll_top > Pixels::ZERO {
-                        adjusted_event.position.y += scroll_top;
-                    }
-                    terminal.mouse_down(&adjusted_event, mouse_input_mode, cx);
-                    cx.notify();
-                })
+                Self::mouse_left_down(
+                    &terminal,
+                    &terminal_view,
+                    &focus,
+                    e,
+                    mouse_input_mode,
+                    window,
+                    cx,
+                )
             }
         });
 
@@ -981,26 +1055,16 @@ impl TerminalElement {
                     return;
                 }
 
-                if e.pressed_button.is_some() && !cx.has_active_drag() && focus.is_focused(window) {
-                    let hovered = hitbox.is_hovered(window);
-
-                    let scroll_top = terminal_view.read(cx).scroll_top;
-                    terminal.update(cx, |terminal, cx| {
-                        if terminal.selection_started() || hovered {
-                            let mut adjusted_event = e.clone();
-                            if scroll_top > Pixels::ZERO {
-                                adjusted_event.position.y += scroll_top;
-                            }
-                            terminal.mouse_drag(
-                                &adjusted_event,
-                                hitbox.bounds,
-                                mouse_input_mode,
-                                cx,
-                            );
-                            cx.notify();
-                        }
-                    })
-                }
+                Self::mouse_drag(
+                    &terminal,
+                    &terminal_view,
+                    &focus,
+                    &hitbox,
+                    e,
+                    mouse_input_mode,
+                    window,
+                    cx,
+                );
 
                 if hitbox.is_hovered(window) {
                     terminal.update(cx, |terminal, cx| {
@@ -1034,36 +1098,117 @@ impl TerminalElement {
                         terminal.mouse_up(event, mouse_input_mode, cx);
                         cx.notify();
                     });
-                    // gpui_android reports a long press as a double click,
-                    // optionally followed by a drag. Offer the context menu on
-                    // release so copy and paste don't need a two-finger tap,
-                    // unless the app in the terminal is using the mouse.
+                    // gpui_android's original touch handling reports a long
+                    // press as a double click, optionally followed by a drag.
+                    // With gpui's touch gestures this is a real double tap,
+                    // and the long press is handled below.
                     #[cfg(target_os = "android")]
                     if button == MouseButton::Left
                         && event.click_count == 2
                         && window.last_platform_input_was_touch()
-                        && !terminal
-                            .read(cx)
-                            .mouse_mode(event.modifiers.shift, mouse_input_mode)
+                        && !window.last_input_was_touch()
                     {
-                        let has_selection = terminal
-                            .read(cx)
-                            .last_content
-                            .selection_text
-                            .as_ref()
-                            .is_some_and(|text| !text.is_empty());
-                        terminal_view.update(cx, |view, cx| {
-                            view.deploy_long_press_context_menu(
-                                event.position,
-                                has_selection,
-                                window,
-                                cx,
-                            );
-                        });
+                        Self::deploy_long_press_context_menu(
+                            &terminal,
+                            &terminal_view,
+                            event.position,
+                            event.modifiers.shift,
+                            mouse_input_mode,
+                            window,
+                            cx,
+                        );
                     }
                 }
             });
         }
+
+        // A long press selects the word under the finger, the finger's moves
+        // extend the selection, and lifting it offers the context menu.
+        #[cfg(target_os = "android")]
+        window.on_mouse_event({
+            let terminal = terminal.clone();
+            let terminal_view = self.terminal_view.clone();
+            let focus = focus.clone();
+            let hitbox = hitbox.clone();
+            move |event: &gpui::LongPressEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                let modifiers = window.modifiers();
+                match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if window.default_prevented() || !hitbox.is_hovered(window) {
+                            return;
+                        }
+                        let mouse_down = MouseDownEvent {
+                            button: MouseButton::Left,
+                            position: event.start_position,
+                            modifiers,
+                            click_count: 2,
+                            first_mouse: false,
+                        };
+                        Self::mouse_left_down(
+                            &terminal,
+                            &terminal_view,
+                            &focus,
+                            &mouse_down,
+                            mouse_input_mode,
+                            window,
+                            cx,
+                        );
+                        window.capture_long_press(&terminal);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Moved if window.has_long_press_capture(&terminal) => {
+                        let mouse_move = MouseMoveEvent {
+                            position: event.position,
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers,
+                        };
+                        Self::mouse_drag(
+                            &terminal,
+                            &terminal_view,
+                            &focus,
+                            &hitbox,
+                            &mouse_move,
+                            mouse_input_mode,
+                            window,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled
+                        if window.has_long_press_capture(&terminal) =>
+                    {
+                        let ended = event.phase == gpui::TouchPhase::Ended;
+                        let mouse_up = gpui::MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: event.position,
+                            modifiers,
+                            click_count: if ended { 2 } else { 0 },
+                        };
+                        terminal.update(cx, |terminal, cx| {
+                            terminal.mouse_up(&mouse_up, mouse_input_mode, cx);
+                            cx.notify();
+                        });
+                        if ended {
+                            Self::deploy_long_press_context_menu(
+                                &terminal,
+                                &terminal_view,
+                                event.position,
+                                modifiers.shift,
+                                mouse_input_mode,
+                                window,
+                                cx,
+                            );
+                        }
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }
+        });
         for button in [MouseButton::Middle, MouseButton::Right] {
             self.interactivity.on_mouse_down(button, {
                 let terminal = terminal.clone();
