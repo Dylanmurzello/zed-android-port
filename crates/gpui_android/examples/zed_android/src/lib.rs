@@ -1195,9 +1195,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         );
     }
 
+    // Retain the client for public catalogs and project services, without
+    // registering Zed account actions through client::init.
     Client::set_global(client.clone(), cx);
     zed::init(cx);
-    client::init(&client, cx);
     feature_flags::FeatureFlagStore::init(cx);
     // Register the TrustedWorktrees global. git_store reads it via
     // `try_get_global` when a repo is added; without it, `is_trusted`
@@ -1305,14 +1306,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         },
         cx,
     );
-    client::RefreshLlmTokenListener::register(
-        app_state.client.clone(),
-        app_state.user_store.clone(),
-        cx,
-    );
     language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
+    // The native agent reads this registry even without Zed-hosted web search.
     web_search::init(cx);
-    web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
     let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
     // Zed counts an install as new when it creates the installation ID; the
     // app has none, and onboarding hasn't run yet on a new install.
@@ -1471,7 +1467,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // From here to the end of boot(), as in Zed's main().
     cx.observe_global::<SettingsStore>({
         let http = app_state.client.http_client();
-        let client = app_state.client.clone();
         move |cx| {
             for &mut window in cx.windows().iter_mut() {
                 let background_appearance = cx.theme().window_background_appearance();
@@ -1495,9 +1490,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             let new_host = &client::ClientSettings::get_global(cx).server_url;
             if &http.base_url() != new_host {
                 http.set_base_url(new_host);
-                if client.status().borrow().is_connected() {
-                    client.reconnect(&cx.to_async());
-                }
             }
         }
     })

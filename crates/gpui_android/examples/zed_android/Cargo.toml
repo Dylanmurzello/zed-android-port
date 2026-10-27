@@ -104,7 +104,6 @@ url = "2.2"
 util = { path = "../../../util" }
 watch = { path = "../../../watch" }
 web_search = { path = "../../../web_search" }
-web_search_providers = { path = "../../../web_search_providers" }
 workspace = { path = "../../../workspace" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
 platform_title_bar = { path = "../../../platform_title_bar" }

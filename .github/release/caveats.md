@@ -4,4 +4,4 @@
 - External Termux integration is unavailable. If an older release saved that choice, select Bootstrap or Kali chroot in **Settings → Android Runtime** and restart.
 - A keyboard with a built-in touchpad that Android reports as one device isn't recognized as a keyboard: the keyboard button stays in the status bar, and tapping text can show the on-screen keyboard.
 - A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
-- Native Zed model providers are enabled; provider sign-in, streaming and inline assistance still need validation on Android. Copilot edit prediction is not initialized.
+- Native BYO model providers, including OpenAI-compatible gateways such as LiteLLM, are enabled without a Zed account; streaming, tool calls and inline assistance still need validation on Android. Zed-hosted models and cloud web search are unavailable. Copilot edit prediction is not initialized.

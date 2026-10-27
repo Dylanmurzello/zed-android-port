@@ -1,8 +1,7 @@
 use gpui::{Action as _, App};
 use itertools::Itertools as _;
 use settings::{
-    AudioInputDeviceName, AudioOutputDeviceName, EditPredictionDataCollectionChoice,
-    LanguageSettingsContent, SemanticTokens, SettingsContent,
+    EditPredictionDataCollectionChoice, LanguageSettingsContent, SemanticTokens, SettingsContent,
 };
 use std::sync::{Arc, OnceLock};
 use strum::{EnumMessage, IntoDiscriminant as _, VariantArray};
@@ -13,9 +12,9 @@ use crate::{
     ActionLink, DynamicItem, PROJECT, SettingField, SettingItem, SettingsFieldMetadata,
     SettingsPage, SettingsPageItem, SubPageLink, USER, active_language, all_language_names,
     pages::{
-        open_audio_test_window, render_edit_prediction_setup_page, render_external_agents_page,
-        render_llm_providers_page, render_mcp_servers_page, render_sandbox_settings_page,
-        render_skills_setup_page, render_tool_permissions_setup_page,
+        render_edit_prediction_setup_page, render_external_agents_page, render_llm_providers_page,
+        render_mcp_servers_page, render_sandbox_settings_page, render_skills_setup_page,
+        render_tool_permissions_setup_page,
     },
 };
 
@@ -23,11 +22,6 @@ const DEFAULT_STRING: String = String::new();
 /// A default empty string reference. Useful in `pick` functions for cases either in dynamic item fields, or when dealing with `settings::Maybe`
 /// to avoid the "NO DEFAULT" case.
 const DEFAULT_EMPTY_STRING: Option<&String> = Some(&DEFAULT_STRING);
-
-const DEFAULT_AUDIO_OUTPUT: AudioOutputDeviceName = AudioOutputDeviceName(None);
-const DEFAULT_EMPTY_AUDIO_OUTPUT: Option<&AudioOutputDeviceName> = Some(&DEFAULT_AUDIO_OUTPUT);
-const DEFAULT_AUDIO_INPUT: AudioInputDeviceName = AudioInputDeviceName(None);
-const DEFAULT_EMPTY_AUDIO_INPUT: Option<&AudioInputDeviceName> = Some(&DEFAULT_AUDIO_INPUT);
 
 macro_rules! concat_sections {
     (@vec, $($arr:expr),+ $(,)?) => {{
@@ -75,6 +69,8 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         debugger_page(),
         terminal_page(),
         version_control_page(),
+        // Collaboration requires a Zed account, which Android does not use.
+        #[cfg(not(target_os = "android"))]
         collaboration_page(),
         ai_page(cx),
         network_page(),
@@ -4586,8 +4582,8 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn title_bar_section() -> [SettingsPageItem; 12] {
-        [
+    fn title_bar_section() -> Vec<SettingsPageItem> {
+        vec![
             SettingsPageItem::SectionHeader("Title Bar"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Show Branch Status Icon",
@@ -4704,6 +4700,8 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            // Android's titlebar does not expose Zed accounts.
+            #[cfg(not(target_os = "android"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Show Sign In",
                 description: "Show the sign in button in the titlebar.",
@@ -4723,6 +4721,7 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            #[cfg(not(target_os = "android"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Show User Menu",
                 description: "Show the user menu button in the titlebar.",
@@ -4742,6 +4741,7 @@ fn window_and_layout_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            #[cfg(not(target_os = "android"))]
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Show User Picture",
                 description: "Show user picture in the titlebar.",
@@ -8827,7 +8827,16 @@ fn version_control_page() -> SettingsPage {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn collaboration_page() -> SettingsPage {
+    use crate::pages::open_audio_test_window;
+    use settings::{AudioInputDeviceName, AudioOutputDeviceName};
+
+    const DEFAULT_AUDIO_OUTPUT: AudioOutputDeviceName = AudioOutputDeviceName(None);
+    const DEFAULT_EMPTY_AUDIO_OUTPUT: Option<&AudioOutputDeviceName> = Some(&DEFAULT_AUDIO_OUTPUT);
+    const DEFAULT_AUDIO_INPUT: AudioInputDeviceName = AudioInputDeviceName(None);
+    const DEFAULT_EMPTY_AUDIO_INPUT: Option<&AudioInputDeviceName> = Some(&DEFAULT_AUDIO_INPUT);
+
     fn calls_section() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SectionHeader("Calls"),

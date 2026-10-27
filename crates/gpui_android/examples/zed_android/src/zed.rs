@@ -9,7 +9,6 @@ use agent_settings::{UserAgentsMdState, init_user_agents_md};
 use agent_ui::AgentDiffToolbar;
 use anyhow::Context as _;
 use breadcrumbs::Breadcrumbs;
-use client::zed_urls;
 use editor::{Editor, MultiBuffer};
 use extension_host::ExtensionStore;
 use fs::Fs;
@@ -79,8 +78,8 @@ use workspace::{
     with_active_or_new_workspace,
 };
 use zed_actions::{
-    GetMerch, OpenAccountSettings, OpenBrowser, OpenDocs, OpenProjectTasks, OpenServerSettings,
-    OpenSettingsFile, OpenStatusPage, Quit,
+    GetMerch, OpenBrowser, OpenDocs, OpenProjectTasks, OpenServerSettings, OpenSettingsFile,
+    OpenStatusPage, Quit,
 };
 
 const DOCS_URL: &str = "https://zed.dev/docs/";
@@ -153,11 +152,6 @@ pub fn init(cx: &mut App) {
                 window,
                 cx,
             );
-        });
-    })
-    .on_action(|_: &OpenAccountSettings, cx| {
-        with_active_or_new_workspace(cx, |_, _, cx| {
-            cx.open_url(&zed_urls::account_url(cx));
         });
     })
     .on_action(|_: &OpenTasks, cx| {

@@ -322,8 +322,11 @@ impl Render for Onboarding {
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .on_action(Self::on_finish)
-            .on_action(cx.listener(Self::handle_sign_in))
-            .on_action(Self::handle_open_account)
+            // Android's welcome page has no Zed account flow or account commands.
+            .when(!cfg!(target_os = "android"), |this| {
+                this.on_action(cx.listener(Self::handle_sign_in))
+                    .on_action(Self::handle_open_account)
+            })
             .on_action(cx.listener(|_, _: &menu::SelectNext, window, cx| {
                 window.focus_next(cx);
                 cx.notify();

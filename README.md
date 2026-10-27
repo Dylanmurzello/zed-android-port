@@ -164,7 +164,7 @@ Switching is one tap (Settings → Android Runtime). Selection persists in `$PRE
 - **LSPs.** rust-analyzer baked in. gopls, ts-server, pyright, jdtls install in one `pkg`/`npm`/`go install`.
 - **Extensions.** Browse, install, manage. Themes, language configs, grammars, slash commands.
 - **Remote SSH.** Server-picker pill in the title bar, persisted server list, native askpass.
-- **Agents.** Zed's ACP agent UI and native model-provider registration. Provider sign-in, streaming and inline assistance still need Android device validation.
+- **Agents.** Zed's ACP agent UI and native BYO model providers, including OpenAI-compatible gateways such as LiteLLM. No Zed account flow. Native provider streaming and inline assistance still need Android device validation.
 - **Multi-window.** Android freeform and DeX, each extra window is a real Activity with OS chrome.
 - **Edge-to-edge** rendering with content under the display cutout.
 - **App menu bar** with nested submenus (Settings, Keymap, Themes, Extensions).
@@ -172,6 +172,44 @@ Switching is one tap (Settings → Android Runtime). Selection persists in `$PRE
 - **`ZedDocumentsProvider`** exposes the project root as a SAF volume, so other Android apps can browse Zed's worktrees.
 
 ---
+
+## AI with your own provider
+
+Zed's native agent supports your own API keys without a Zed account. Zdroid uses
+that upstream implementation and excludes Zed-hosted models, cloud web search,
+account commands and subscription prompts. Remote ACP agents keep their own
+authentication and configuration on the remote machine.
+
+For LiteLLM, open **Settings → AI → LLM Providers → Add Provider**, choose
+**OpenAI**, and enter your gateway URL, API key and model alias. Use the model's
+actual context limit and capabilities; agent tools need tool-call support.
+The key is saved through Android's credential store. You can also configure the
+endpoint and model in `settings.json`, then enter the key in LLM Providers:
+
+```json
+{
+  "language_models": {
+    "openai_compatible": {
+      "litellm": {
+        "api_url": "https://litellm.example.com/v1",
+        "available_models": [
+          { "name": "my-model", "max_tokens": 128000 }
+        ]
+      }
+    }
+  },
+  "agent": {
+    "default_model": { "provider": "litellm", "model": "my-model" }
+  }
+}
+```
+
+Replace the example URL, model alias and context limit with your gateway's values.
+The gateway must be reachable from the tablet, even when editing an SSH project;
+the native provider's requests originate in the Android app. Inference runs at
+the gateway's configured model provider. Native gateway streaming, tool calls,
+inline edits and credential recovery still need testing on a device. See
+[Zed's gateway documentation](https://zed.dev/docs/ai/use-a-gateway).
 
 ## <img src="https://api.iconify.design/lucide:hammer.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Build from source
 

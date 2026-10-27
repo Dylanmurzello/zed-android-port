@@ -14778,23 +14778,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "web_search_providers"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "client",
- "cloud_api_client",
- "cloud_api_types",
- "cloud_llm_client",
- "futures",
- "gpui",
- "http_client",
- "language_model",
- "serde_json",
- "web_search",
-]
-
-[[package]]
 name = "webpki-root-certs"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16339,7 +16322,6 @@ dependencies = [
  "vim_mode_setting",
  "watch",
  "web_search",
- "web_search_providers",
  "which_key",
  "workspace",
  "zdroid_runtime",

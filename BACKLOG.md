@@ -92,7 +92,7 @@ Settings search input was fixed in `29b29ddd63`, and text fields now request GPU
 
 The app initializes upstream `agent_ui` and `acp_tools`, including the agent panel and context-server UI; `agent`, `acp_thread`, and `context_server` are transitive dependencies. The earlier diagnosis that these dependencies and initialization were missing is obsolete. ACP agent sessions are already part of the app; keep using those upstream components.
 
-The 2026-10-28 review restored upstream model-provider registration, Copilot Chat initialization, token refresh, the language-model extension proxy, and web-search initialization. Provider sign-in, streamed responses, web search, inline edits and credential persistence still need device validation. Copilot edit prediction remains uninitialized. Verify local MCP tools under Bootstrap and chroot, including the sandbox fallback, and distinguish them from servers running on an SSH host. Keep using Zed's native agent/MCP implementation.
+The 2026-10-28 review restored upstream BYO model-provider registration, Copilot Chat initialization and the language-model extension proxy. Android excludes the Zed-hosted provider, account actions, trial prompts and cloud web-search provider. The empty native web-search registry remains initialized for agent code. OpenAI-compatible gateways (including LiteLLM), streamed tool calls, inline edits and credential persistence still need device validation. Copilot edit prediction remains uninitialized. Verify local MCP tools under Bootstrap and chroot, including the sandbox fallback, and distinguish them from servers running on an SSH host. Keep using Zed's native agent/MCP implementation without introducing Zed account services.
 
 ## Input review of 2026-10-26: open findings
 

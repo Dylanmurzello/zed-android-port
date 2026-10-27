@@ -33,7 +33,7 @@ prefix. No Bootstrap fork or userland update was made.
 
 | Area | Finding and change |
 |---|---|
-| Native Zed AI | `agent_ui` and its dependencies were already linked, but model providers were never registered. Initialize Zed's existing provider registry, extension proxy, Copilot Chat and token refresh in startup. The second pass also restored the native web-search registry and provider initialization: the agent's web-search tool otherwise reads a missing global. The existing agent and inline-assistant UI receives those providers; no Android provider implementation was added. Device sign-in and streaming remain unverified. |
+| Native Zed AI | `agent_ui` and its dependencies were already in the build graph, but model providers were never registered. Initialize Zed's existing BYO provider registry, extension proxy and Copilot Chat. Reuse native OpenAI-compatible gateways such as LiteLLM. Android excludes the Zed-hosted provider, token refresh and cloud web-search provider; retain the empty native web-search registry for agent code. Reuse API-key onboarding without sign-in/trial prompts, and remove account actions and account-only settings. The existing agent and inline-assistant UI receives the providers; no Android provider implementation was added. Device streaming, tool calls and credential recovery remain unverified. |
 | Runtime selection | The picker reconstructed defaults on every selection and discarded saved adapter settings. Centralize defaults and switch the active selection while preserving each configuration. Health checks and installation now use saved Bootstrap/chroot settings. Keep install/save errors visible. |
 | Unsupported runtime | External Termux had no working spawn or install implementation. Remove its selectable card and stub adapter. Continue reading the legacy configuration so users can recover through the picker. Remove unused setup types, the duplicate configuration enum, and unused uninstall/kill/restart interface methods. |
 | Spawn routing | Android's async command constructor duplicated the synchronous bridge. Convert the existing `gpui_util::new_std_command` to the async command type, retaining one implementation of environment-root and shebang routing. |
@@ -94,11 +94,12 @@ APIs.
    are implemented by the base branch. Adopt GPUI's text-input configuration
    and back-handler APIs when Zed supplies the corresponding configuration
    and handlers, as tracked in `ahead-of-upstream.md`.
-3. **Native feature validation:** test the newly registered providers, credential
-   persistence, inline assistance, local ACP/MCP and sandbox behavior. Copilot
-   edit prediction, debugger UI, REPL and collaboration startup remain absent.
-   Those should be enabled through their existing Zed components when their
-   Android dependencies are verified.
+3. **Native feature validation:** test the newly registered BYO providers,
+   LiteLLM streaming and tool calls, credential persistence, inline assistance,
+   local ACP/MCP and sandbox behavior. Copilot edit prediction, debugger UI and
+   REPL startup remain absent; use their existing Zed components when their
+   Android dependencies are verified. Zed account services and collaboration
+   are intentionally excluded.
 4. **Storage and clipboard:** `prompt_for_paths` still ignores parts of
    `PathPromptOptions`; system reveal/open hooks are empty. The clipboard is
    text-only and can drop a second write while one is in flight. Use Android
@@ -127,6 +128,12 @@ Completed locally on the combined branch:
   `zd-exec` and the static askpass helper. Lint: zero errors, 19 warnings.
 - `git diff --check`; tracked askpass asset restored after Gradle.
 
+After excluding Zed account services, the locked Android check and formatting
+checks passed again. The earlier host tests and Kotlin/Lint checks cover the
+unchanged runtime, platform and Android application changes. Native provider
+startup/idle cost, memory use and APK size have not been measured; inference
+uses the configured provider, without loading model weights in the Android app.
+
 These checks do **not** include a fully linked editor APK or a new build running
 on the tablet. The PR's **Zdroid APK** build remains the full packaging gate.
 ADB confirmed the reference tablet has 0.9.15 (56) installed; the app was not
@@ -142,8 +149,11 @@ Before release, test Bootstrap first:
   install leaves an actionable error. Recover an old External Termux selection.
 - Import a shared-storage project, cancel a copy, repeat an import, and trigger
   a read/write failure; never open a partial tree or alter an existing project.
-- Model-provider sign-in, a streamed response, web search and inline edit, then app restart
-  and credential recovery; local and SSH agent/MCP workflows.
+- Fresh agent setup shows provider configuration without Zed account/trial UI.
+  Configure a LiteLLM model and key, stream a response with a tool call, perform
+  an inline edit, then restart and verify credential recovery. Check local and
+  SSH ACP/MCP workflows and the no-provider state. Gateway requests originate
+  on the tablet even for SSH projects; Zed-hosted web search is not enabled.
 - Cursor capture/release in main and extra windows; rapid tap, long hold,
   two-finger tap and slow scrolling on the keyboard-cover trackpad. Verify the
   Android 10–12 cursor fallback separately if supporting those OS versions.
