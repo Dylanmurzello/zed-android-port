@@ -966,6 +966,11 @@ struct SettledScrollRange {
 pub struct Editor {
     focus_handle: FocusHandle,
     last_focused_descendant: Option<WeakFocusHandle>,
+    /// Whether the last blur came from the window going inactive, so the
+    /// focus it regains on reactivation doesn't request the on-screen
+    /// keyboard: Android restores the keyboard's previous state on return.
+    #[cfg(target_os = "android")]
+    blurred_by_window_deactivation: bool,
     /// The text buffer being edited
     buffer: Entity<MultiBuffer>,
     /// Map of how text in the buffer should be displayed.
@@ -2364,6 +2369,8 @@ impl Editor {
             focus_handle,
             show_cursor_when_unfocused: false,
             last_focused_descendant: None,
+            #[cfg(target_os = "android")]
+            blurred_by_window_deactivation: false,
             buffer: multi_buffer.clone(),
             display_map: display_map.clone(),
             placeholder_display_map: None,
@@ -10985,6 +10992,17 @@ impl Editor {
         {
             window.focus(&descendant, cx);
         } else {
+            // Per gpui's `EntityInputHandler` docs, focus alone doesn't show the
+            // keyboard; a single-line field (a picker or search bar) asks for it
+            // as it opens, like a search screen on Android.
+            #[cfg(target_os = "android")]
+            if self.mode.is_single_line()
+                && !self.read_only(cx)
+                && !mem::take(&mut self.blurred_by_window_deactivation)
+            {
+                window.request_virtual_keyboard();
+            }
+
             if let Some(blame) = self.blame.as_ref() {
                 blame.update(cx, GitBlame::focus)
             }
@@ -11040,6 +11058,10 @@ impl Editor {
     }
 
     pub fn handle_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "android")]
+        {
+            self.blurred_by_window_deactivation = !window.is_window_active();
+        }
         self.cursor_animations.clear();
         self.blink_manager.update(cx, BlinkManager::disable);
         self.buffer

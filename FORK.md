@@ -82,6 +82,7 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
   ```sh
   git diff v1.25.3 v1.26.2-pre -- crates/zed/src/main.rs crates/zed/src/zed.rs crates/zed/src/zed/migrate.rs
   ```
+- Go through [crates/gpui_android/docs/ahead-of-upstream.md](crates/gpui_android/docs/ahead-of-upstream.md), the features Zdroid implements ahead of Zed. If the release covers one, take upstream's and delete ours.
 - Push the sync branch and open a pull request into `zdroid`. The **Zdroid APK** check builds the full APK. It covers the `cargo ndk` gate, Gradle, and the bundled helper binaries.
 - Never `git push --tags`. A local clone carries every Zed `v1.x.y` tag, and those match the release trigger.
 

@@ -13,7 +13,7 @@
 //! every IME event onto an mpsc channel and the game thread drains it
 //! each iteration of the main loop (same pattern as `multi_window`
 //! and `captured_pointer`). Show/hide IME goes the other direction —
-//! Rust → Kotlin — via direct JNI calls on `MainActivity.showIme()` /
+//! Rust → Kotlin — via direct JNI calls on `MainActivity.requestIme()` /
 //! `hideIme()`.
 
 use std::sync::Mutex;
@@ -29,6 +29,18 @@ pub(crate) static SOFT_KEYBOARD_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn soft_keyboard_visible() -> bool {
     SOFT_KEYBOARD_VISIBLE.load(Ordering::Acquire)
+}
+
+/// Whether a connected physical keyboard blocks the on-screen one, as
+/// `MainActivity` last reported through `nativeSetPhysicalKeyboardBlocksIme`:
+/// one is connected (`PhysicalKeyboard.kt` says what counts) and Android's
+/// "show on-screen keyboard while a physical keyboard is connected" setting
+/// is off. One UI's Samsung Keyboard doesn't show then, so the keyboard
+/// isn't requested and the status bar hides its keyboard button.
+pub(crate) static PHYSICAL_KEYBOARD_BLOCKS_IME: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn physical_keyboard_blocks_ime() -> bool {
+    PHYSICAL_KEYBOARD_BLOCKS_IME.load(Ordering::Acquire)
 }
 
 /// Mirrors the `android_input.on_screen_keyboard` user setting.
@@ -722,20 +734,8 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
     }
 }
 
-/// Show the soft keyboard. Calls `MainActivity.showIme()` on the
-/// activity backing this app, which requests focus on `ImeHostView`
-/// and invokes `InputMethodManager.showSoftInput`. Idempotent —
-/// repeated calls when the IME is already up are no-ops on the OS
-/// side. Logs but does not panic on failure (Activity recreation
-/// in flight, etc.).
-pub(crate) fn show_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
-    log::info!("ime::show_keyboard w={extra_window_id:?}");
-    if let Err(err) = call_activity_void(android_app, extra_window_id, "showIme") {
-        log::warn!("ime::show_keyboard failed: {err:#}");
-    }
-}
-
-/// Hide the soft keyboard. Pairs with `show_keyboard`.
+/// Hide the soft keyboard when the window's text field loses focus, or
+/// a physical keyboard connects.
 pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
     log::info!("ime::hide_keyboard w={extra_window_id:?}");
     if let Err(err) = call_activity_void(android_app, extra_window_id, "hideIme") {
@@ -743,10 +743,9 @@ pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u6
     }
 }
 
-/// Show or hide the soft keyboard on an explicit request (gpui's
-/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`): the
-/// Activity's `requestIme`, which also sets or clears its "user dismissed
-/// the keyboard" flag, so text fields auto-show it again after a show.
+/// Show or hide the soft keyboard on an explicit request, gpui's
+/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`: the Activity's
+/// `requestIme`.
 pub(crate) fn request_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>, show: bool) {
     log::info!("ime::request_keyboard w={extra_window_id:?} show={show}");
     if let Err(err) = call_activity(
@@ -925,5 +924,17 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetSoftKeyboardVisible
     visible: jni::sys::jboolean,
 ) {
     SOFT_KEYBOARD_VISIBLE.store(visible != 0, Ordering::Release);
+    crate::platform::wake_run_loop();
+}
+
+/// `MainActivity` pushes [`PHYSICAL_KEYBOARD_BLOCKS_IME`] here at startup
+/// and whenever an input device or the Android setting changes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetPhysicalKeyboardBlocksIme<'local>(
+    _env: JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    blocks_ime: jni::sys::jboolean,
+) {
+    PHYSICAL_KEYBOARD_BLOCKS_IME.store(blocks_ime != 0, Ordering::Release);
     crate::platform::wake_run_loop();
 }

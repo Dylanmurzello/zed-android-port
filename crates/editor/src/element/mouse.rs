@@ -383,6 +383,20 @@ impl EditorElement {
                                 window,
                                 cx,
                             );
+
+                            // gpui's `EntityInputHandler` docs: a click on the field
+                            // requests the keyboard, which reopens it after a dismissal.
+                            // Not for gpui_android's legacy finger input, which sends a
+                            // mouse down as every scroll starts; its taps ask on the lift.
+                            #[cfg(target_os = "android")]
+                            if !window.default_prevented()
+                                && !(window.last_platform_input_was_touch()
+                                    && !window.last_input_was_touch())
+                                && !editor.read_only(cx)
+                                && position_map.text_hitbox.is_hovered(window)
+                            {
+                                window.request_virtual_keyboard();
+                            }
                         }),
                         MouseButton::Right => editor.update(cx, |editor, cx| {
                             Self::mouse_right_down(editor, event, &position_map, window, cx);
@@ -403,7 +417,20 @@ impl EditorElement {
             move |event: &MouseUpEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble {
                     editor.update(cx, |editor, cx| {
-                        Self::mouse_up(editor, event, &position_map, window, cx)
+                        Self::mouse_up(editor, event, &position_map, window, cx);
+
+                        // gpui_android's legacy finger input ends a tap with a
+                        // click count of 1 and a scroll or cancel with 0.
+                        #[cfg(target_os = "android")]
+                        if event.button == MouseButton::Left
+                            && event.click_count >= 1
+                            && window.last_platform_input_was_touch()
+                            && !window.last_input_was_touch()
+                            && !editor.read_only(cx)
+                            && position_map.text_hitbox.is_hovered(window)
+                        {
+                            window.request_virtual_keyboard();
+                        }
                     });
                 }
             }

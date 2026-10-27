@@ -62,7 +62,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     /// Invisible 1x1 [ImeHostView] that owns the IME `InputConnection`
     /// for this Activity's gpui window. Installed in [onCreate]
     /// alongside the SurfaceView; Rust signals show / hide via JNI
-    /// calls to [showIme] / [hideIme] which requestFocus on this view
+    /// calls to [requestIme] / [hideIme] which requestFocus on this view
     /// and invoke `InputMethodManager`.
     private var imeHostView: ImeHostView? = null
 
@@ -76,15 +76,12 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     // `ZdroidInputConnection.commitText` never intercepts.
 
     /// Mirror of the OS IME's visibility from our perspective. Same
-    /// rationale as MainActivity: gpui's `set_input_handler` /
-    /// `take_input_handler` fires per paint, so we filter repeats
-    /// before touching `InputMethodManager`.
+    /// rationale as MainActivity: every click into a text field requests
+    /// the keyboard, so we filter repeats before touching
+    /// `InputMethodManager`.
     private var imeShown: Boolean = false
     private var programmaticHidePending: Boolean = false
-    private var programmaticShowPending: Boolean = false
     private var lastImeInsetBottom: Int = 0
-    @Volatile
-    private var imeManuallyDismissed: Boolean = false
 
     @Volatile
     private var imeTextState: ImeTextState? = null
@@ -259,11 +256,9 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         addContentView(imeHost, android.view.ViewGroup.LayoutParams(1, 1))
         imeHostView = imeHost
 
-        // Inset-transition listener — same rationale as MainActivity.
-        // Tracks programmatic-vs-user IME dismissals so the
-        // auto-show on text-input focus is correctly suppressed
-        // once the user has manually closed the keyboard in this
-        // window (Back press, swipe-down on the IME bar).
+        // Inset-transition listener — same rationale as MainActivity:
+        // keeps [imeShown] in step when the user closes the keyboard
+        // (Back press, swipe-down on the IME bar).
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(imeHost) { _, insets ->
             val imeBottom = insets.getInsets(
                 androidx.core.view.WindowInsetsCompat.Type.ime()
@@ -271,7 +266,8 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             val wasVisible = lastImeInsetBottom > 0
             val nowVisible = imeBottom > 0
             if (!wasVisible && nowVisible) {
-                programmaticShowPending = false
+                // Confirms a show; see MainActivity.
+                imeRequestGeneration++
                 if (!imeShown) setImeShown(true)
                 Log.i(TAG_IME, "WindowInsets[w=$extraWindowId]: IME shown (inset=$imeBottom)")
             } else if (wasVisible && !nowVisible) {
@@ -279,11 +275,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                     programmaticHidePending = false
                     Log.i(TAG_IME, "WindowInsets[w=$extraWindowId]: IME hidden (programmatic)")
                 } else {
-                    Log.i(
-                        TAG_IME,
-                        "WindowInsets[w=$extraWindowId]: IME hidden by user, marking manual-dismiss"
-                    )
-                    setImeManuallyDismissed(true)
+                    Log.i(TAG_IME, "WindowInsets[w=$extraWindowId]: IME hidden by user")
                 }
                 setImeShown(false)
             }
@@ -305,6 +297,20 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         }
     }
 
+    /// Bumped by every show or hide request; see `MainActivity`.
+    private var imeRequestGeneration: Int = 0
+
+    /// Clears [imeShown] if the IME never appeared after a show request;
+    /// see `MainActivity.confirmImeShown`.
+    private fun confirmImeShown(host: ImeHostView) {
+        val generation = ++imeRequestGeneration
+        host.checkImeShownLater {
+            if (generation != imeRequestGeneration || !imeShown) return@checkImeShownLater
+            Log.i(TAG_IME, "IME[w=$extraWindowId] didn't appear after the show request, marking it hidden")
+            setImeShown(false)
+        }
+    }
+
     /// JNI hook from
     /// `gpui_android::platform::tick_extras_row_enabled`. Kept as a
     /// no-op for extra windows so the Rust-side broadcast that
@@ -313,47 +319,13 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     @Suppress("unused", "UNUSED_PARAMETER")
     fun setProgrammingExtrasRowEnabled(enabled: Boolean) {}
 
-    private fun setImeManuallyDismissed(dismissed: Boolean) {
-        if (imeManuallyDismissed != dismissed) {
-            Log.i(TAG_IME, "imeManuallyDismissed[w=$extraWindowId]: $imeManuallyDismissed -> $dismissed")
-            imeManuallyDismissed = dismissed
-        }
-    }
-
-    /// Bring up the soft keyboard for this window. Called from Rust
-    /// via JNI when gpui's `set_input_handler` fires on a text-input
-    /// focus inside this Activity's gpui window. Suppressed while the
-    /// user has manually dismissed the IME in this window.
-    @Suppress("unused")
-    fun showIme() {
-        runOnUiThread {
-            val host = imeHostView ?: run {
-                Log.w(TAG_IME, "showIme[w=$extraWindowId]: imeHostView is null, skipping")
-                return@runOnUiThread
-            }
-            if (imeManuallyDismissed) {
-                Log.i(TAG_IME, "showIme[w=$extraWindowId] suppressed (user dismissed)")
-                return@runOnUiThread
-            }
-            Log.i(
-                TAG_IME,
-                "showIme[w=$extraWindowId] imeShown=$imeShown hostFocused=${host.isFocused}"
-            )
-            if (imeShown) return@runOnUiThread
-            if (!host.isFocused) host.requestFocus()
-            programmaticShowPending = true
-            WindowInsetsControllerCompat(window, window.decorView)
-                .show(WindowInsetsCompat.Type.ime())
-            setImeShown(true)
-        }
-    }
-
     /// Dismiss the soft keyboard.
     @Suppress("unused")
     fun hideIme() {
         runOnUiThread {
             Log.i(TAG_IME, "hideIme[w=$extraWindowId] imeShown=$imeShown")
             if (!imeShown) return@runOnUiThread
+            imeRequestGeneration++
             programmaticHidePending = true
             WindowInsetsControllerCompat(window, window.decorView)
                 .hide(WindowInsetsCompat.Type.ime())
@@ -381,31 +353,30 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         runOnUiThread { title = windowTitle }
     }
 
-    /// Show or hide the IME on the user's request; see
-    /// `MainActivity.requestIme`.
+    /// Show or hide the IME on request; see `MainActivity.requestIme`.
     @Suppress("unused")
     fun requestIme(show: Boolean) {
         runOnUiThread {
             val host = imeHostView ?: return@runOnUiThread
             if (show) {
-                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: showing (clearing manual-dismiss)")
+                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: showing imeShown=$imeShown")
                 if (!imeShown) {
                     val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
                         as android.view.inputmethod.InputMethodManager
                     if (!host.isFocused) host.requestFocus()
                     imm.showSoftInput(host, 0)
                     setImeShown(true)
+                    confirmImeShown(host)
                 }
-                setImeManuallyDismissed(false)
             } else {
-                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: hiding (manual dismiss)")
+                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: hiding imeShown=$imeShown")
                 if (imeShown) {
+                    imeRequestGeneration++
                     programmaticHidePending = true
                     WindowInsetsControllerCompat(window, window.decorView)
                         .hide(WindowInsetsCompat.Type.ime())
                     setImeShown(false)
                 }
-                setImeManuallyDismissed(true)
             }
         }
     }
@@ -428,7 +399,6 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 "restartImeForTarget[w=$extraWindowId]: $currentImeMode -> $modeId"
             )
             currentImeMode = modeId
-            setImeManuallyDismissed(false)
             val host = imeHostView ?: return@runOnUiThread
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
                 as android.view.inputmethod.InputMethodManager

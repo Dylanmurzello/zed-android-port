@@ -8992,6 +8992,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // As the mouse path, which doesn't offer the drag while a panel is
+        // zoomed.
+        if self.zoomed.is_some() {
+            return;
+        }
         if self.previous_dock_drag_coordinates == Some(position) {
             return;
         }
