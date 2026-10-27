@@ -641,10 +641,9 @@ fn android_main(app: AndroidApp) {
     gpui_android::dns_bridge::populate_resolv_conf(&app);
 
     // Install zd-exec into <data>/files/bin/ from the APK-bundled
-    // asset. Idempotent (skipped when on-disk byte length matches the
-    // asset's), so it runs every boot but is essentially free past
-    // the first launch. Without this, fresh installs land with no
-    // zd-exec and `terminal.shell` (which the chroot adapter sets to
+    // asset. Idempotent (skipped when the installed copy matches the
+    // asset byte for byte), so it runs every boot. Without this, fresh
+    // installs land with no zd-exec and `terminal.shell` (which the chroot adapter sets to
     // `<data>/files/bin/zd-exec`) fails with ENOENT. Phase 4 of the
     // Termux-divestment refactor moved this off `$PREFIX/bin/`.
     if let Err(err) =

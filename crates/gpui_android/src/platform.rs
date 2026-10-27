@@ -133,7 +133,7 @@ static FRAME_CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
 
 /// Wakes the run loop from Java threads. JNI callbacks queue input and
 /// window events, or set flags, that the loop only reads on its next tick,
-/// and an idle loop otherwise sleeps until its 100ms poll timeout.
+/// and an idle loop otherwise sleeps until something wakes it.
 static RUN_LOOP_WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
 
 thread_local! {
@@ -197,6 +197,7 @@ fn post_frame_callback(continues_run: bool) {
             // No vsync source: refresh on the run loop's next tick instead.
             FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
             FRAME_PENDING.store(true, Ordering::Release);
+            wake_run_loop();
             return;
         }
         AChoreographer_postFrameCallback64(c, frame_callback, std::ptr::null_mut());
@@ -209,7 +210,7 @@ fn install_choreographer_callback() {
     if unsafe { AChoreographer_getInstance() }.is_null() {
         log::warn!(
             "AChoreographer_getInstance returned null; vsync sync \
-             disabled, falling back to poll-timeout-driven refresh"
+             disabled, refreshing on every run loop tick"
         );
     } else {
         log::info!("AndroidPlatform: Choreographer frame callbacks enabled");
@@ -295,6 +296,10 @@ pub(crate) struct AndroidCommon {
     /// therefore stops auto-showing Gboard on focus) when the user
     /// has the setting off.
     pub(crate) last_soft_keyboard_setting: Option<bool>,
+    /// Main window events that arrived while an extra window was opening,
+    /// for the run loop to apply: gpui can't take callbacks then.
+    pub(crate) deferred_primary_resync: bool,
+    pub(crate) deferred_primary_focus: Option<bool>,
     pub(crate) running: bool,
     /// Set by `quit()` so `run()` exits the process once the event loop ends.
     pub(crate) exit_requested: bool,
@@ -339,6 +344,8 @@ impl AndroidCommon {
             last_trackpad_mode_enabled: false,
             last_extras_row_enabled: None,
             last_soft_keyboard_setting: None,
+            deferred_primary_resync: false,
+            deferred_primary_focus: None,
             running: true,
             exit_requested: false,
         }
@@ -444,7 +451,7 @@ impl AndroidPlatform {
 
     /// Branch of [`open_window`](Self::open_window) for the second-and-beyond
     /// `cx.open_window` call. Launches an `ExtraWindowActivity` via JNI Intent,
-    /// waits up to 500ms for its `surfaceCreated` callback, then wraps the
+    /// waits for its `surfaceCreated` callback, then wraps the
     /// resulting `ANativeWindow` in a new `AndroidWindow`. The OS owns the
     /// chrome and routes touch/lifecycle events to that Activity's
     /// `SurfaceView`; events flow through `drain_extra_window_events`.
@@ -472,11 +479,23 @@ impl AndroidPlatform {
         // failure paths.
         crate::multi_window::mark_window_registered(window_id);
 
-        let native_window = match crate::multi_window::create_extra_window_blocking(
+        let native_window = crate::multi_window::create_extra_window_blocking(
             &self.android_app,
             window_id,
             launch_bounds,
-        ) {
+            |timeout| {
+                self.android_app.poll_events(Some(timeout), |event| {
+                    if let android_activity::PollEvent::Main(main_event) = event {
+                        self.handle_main_event_while_opening_window(main_event);
+                    }
+                });
+                self.common.borrow().running
+            },
+        );
+        // The waits above consumed wakes meant for the run loop (runnables,
+        // JNI events, vsync, input), which won't be sent again.
+        wake_run_loop();
+        let native_window = match native_window {
             Ok(nw) => nw,
             Err(err) => {
                 crate::multi_window::unmark_window_registered(window_id);
@@ -499,6 +518,7 @@ impl AndroidPlatform {
             .extra_window_id = Some(window_id);
         if let Err(err) = window.ptr().attach_surface(native_window, scale_factor) {
             crate::multi_window::unmark_window_registered(window_id);
+            crate::multi_window::finish_extra_activity(&self.android_app, window_id);
             return Err(err);
         }
 
@@ -606,6 +626,28 @@ impl AndroidPlatform {
                     let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
                     if let Some(state) = entry {
                         state.detach_surface();
+                    }
+                }
+                ExtraWindowEvent::SurfaceCreated {
+                    window_id,
+                    native_window,
+                } => {
+                    let entry = self.common.borrow().extra_windows.get(&window_id).cloned();
+                    if let Some(state) = entry {
+                        if let Err(error) =
+                            state.attach_surface(native_window, self.compute_scale_factor())
+                        {
+                            log::error!(
+                                "drain_extra_window_events: attach_surface for windowId={window_id} failed: {error:#}"
+                            );
+                        }
+                    } else {
+                        // Its window was never opened: the wait for its first
+                        // surface timed out.
+                        log::info!(
+                            "drain_extra_window_events: SurfaceCreated for unknown windowId={window_id}; finishing its Activity"
+                        );
+                        crate::multi_window::finish_extra_activity(&self.android_app, window_id);
                     }
                 }
                 ExtraWindowEvent::OsClosed { window_id } => {
@@ -1184,21 +1226,7 @@ impl AndroidPlatform {
                     self.compute_scale_factor(),
                 );
             }
-            MainEvent::ConfigChanged { .. } => {
-                // Density may have changed (rotation, dock/scaling). Refresh
-                // scale_factor and re-emit a resize so layout picks it up.
-                let window_ptr = self.common.borrow().window.clone();
-                let Some(window_ptr) = window_ptr else { return };
-                let Some(native_window) = self.android_app.native_window() else { return };
-                window_ptr.resize_surface(
-                    native_window.width() as u32,
-                    native_window.height() as u32,
-                    self.compute_scale_factor(),
-                );
-                let new_appearance = appearance_from_config(&self.android_app);
-                self.common.borrow_mut().appearance = new_appearance;
-                window_ptr.set_appearance(new_appearance);
-            }
+            MainEvent::ConfigChanged { .. } => self.resync_primary_window(),
             MainEvent::RedrawNeeded { .. } => {
                 if let Some(window_ptr) = self.common.borrow().window.clone() {
                     window_ptr.refresh();
@@ -1215,6 +1243,79 @@ impl AndroidPlatform {
                 self.common.borrow_mut().running = false;
             }
             _ => {}
+        }
+    }
+
+    /// Density may have changed (rotation, dock/scaling). Refresh
+    /// scale_factor and re-emit a resize so layout picks it up.
+    fn resync_primary_window(&self) {
+        let window_ptr = self.common.borrow().window.clone();
+        let Some(window_ptr) = window_ptr else { return };
+        let new_appearance = appearance_from_config(&self.android_app);
+        self.common.borrow_mut().appearance = new_appearance;
+        window_ptr.set_appearance(new_appearance);
+        // Light/dark switches arrive only through the main Activity's
+        // configuration, so extra windows follow it.
+        let extra_windows: Vec<_> = self
+            .common
+            .borrow()
+            .extra_windows
+            .values()
+            .cloned()
+            .collect();
+        for extra_window in extra_windows {
+            extra_window.set_appearance(new_appearance);
+        }
+        let Some(native_window) = self.android_app.native_window() else {
+            return;
+        };
+        window_ptr.resize_surface(
+            native_window.width() as u32,
+            native_window.height() as u32,
+            self.compute_scale_factor(),
+        );
+    }
+
+    /// `handle_main_event` while `open_extra_window` waits for the new
+    /// Activity's surface. gpui is in the middle of an update then, so
+    /// events that call back into gpui wait for the run loop. Surface
+    /// changes can't wait: Android releases the old surface as soon as this
+    /// returns.
+    fn handle_main_event_while_opening_window(&self, event: android_activity::MainEvent<'_>) {
+        use android_activity::MainEvent;
+        match event {
+            MainEvent::InitWindow { .. }
+            | MainEvent::TerminateWindow { .. }
+            | MainEvent::Destroy => self.handle_main_event(event),
+            MainEvent::WindowResized { .. }
+            | MainEvent::ConfigChanged { .. }
+            | MainEvent::RedrawNeeded { .. } => {
+                self.common.borrow_mut().deferred_primary_resync = true;
+            }
+            MainEvent::GainedFocus | MainEvent::LostFocus => {
+                self.common.borrow_mut().deferred_primary_focus =
+                    Some(matches!(event, MainEvent::GainedFocus));
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_deferred_main_events(&self) {
+        let (resync, focus) = {
+            let mut common = self.common.borrow_mut();
+            (
+                std::mem::take(&mut common.deferred_primary_resync),
+                common.deferred_primary_focus.take(),
+            )
+        };
+        if resync {
+            self.resync_primary_window();
+        }
+        if let Some(focused) = focus {
+            let primary = self.common.borrow().window.clone();
+            if let Some(window_ptr) = primary {
+                self.window_focus_changed(&window_ptr, focused);
+            }
         }
     }
 }
@@ -1250,27 +1351,25 @@ impl Platform for AndroidPlatform {
         install_choreographer_callback();
 
         while self.common.borrow().running {
-            // 100ms is the upper bound (idle / unfocused). Any of:
-            //   - input event
-            //   - vsync (`frame_callback` runs as a looper task, sets
-            //     FRAME_PENDING)
-            //   - an enqueued waker (background-thread runnable)
-            //   - main-thread event from android-activity
-            // returns earlier. With the Choreographer driving us, this
-            // loop ticks at the panel's refresh rate (60Hz / 90Hz /
-            // 120Hz / etc.) when active and falls to ~10Hz idle.
-            self.android_app.poll_events(
-                Some(std::time::Duration::from_millis(100)),
-                |event| match event {
-                    android_activity::PollEvent::Wake => {}
-                    android_activity::PollEvent::Timeout => {}
-                    android_activity::PollEvent::Main(main_event) => {
-                        log::trace!("MainEvent: {main_event:?}");
-                        self.handle_main_event(main_event);
-                    }
-                    _ => {}
-                },
-            );
+            // Before sleeping, so events deferred while a window opened
+            // during the last iteration aren't left waiting.
+            self.apply_deferred_main_events();
+            // Sleeps until there is work: an input event, a vsync
+            // (`frame_callback` runs as a looper task and sets
+            // FRAME_PENDING), a runnable from another thread (the dispatcher
+            // wakes the looper), a main-thread event from android-activity,
+            // or a JNI event (`wake_run_loop`). With the Choreographer
+            // driving us, this loop ticks at the panel's refresh rate while
+            // frames run and not at all while idle.
+            self.android_app.poll_events(None, |event| match event {
+                android_activity::PollEvent::Wake => {}
+                android_activity::PollEvent::Timeout => {}
+                android_activity::PollEvent::Main(main_event) => {
+                    log::trace!("MainEvent: {main_event:?}");
+                    self.handle_main_event(main_event);
+                }
+                _ => {}
+            });
 
             // Drain main-thread runnables enqueued from background threads. The
             // AndroidAppWaker wakes poll_events above when there's work; we drain

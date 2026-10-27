@@ -109,7 +109,7 @@ patches.
 | [Android 16 freeform configChanges (exhaustive)](android16-config-changes-resize.md) | Active | Drag-resize destroys Activity by default; declare every config to handle ourselves |
 | [`appCategory="productivity"`](android16-app-category-productivity.md) | Active | Defang Android 16 games carve-out from desktop windowing — GameActivity inheritance could trip the heuristic |
 | [`documentLaunchMode="always"` implies Intent flags](document-launch-mode-implies-flags.md) | Active | Setting both manifest mode AND explicit flags caused MainActivity to background under DeX |
-| [Cold Activity launch timeout (4s)](activity-launch-cold-timeout.md) | Active | Cold ExtraWindowActivity start ~2s; cap synchronous wait below ANR threshold |
+| [Cold Activity launch timeout (4s)](activity-launch-cold-timeout.md) | Active | Cap the wait for an extra window's surface below the ANR threshold, and acknowledge the main Activity's pause while waiting (it caused 2 s freezes) |
 | [Process-death recovery for extra windows](process-death-recovery-extra-windows.md) | Active | Activities resurrected from Recents after process kill must self-`finish()` if Rust runtime doesn't know their windowId |
 | [`ActivityOptions.setLaunchBounds`](activity-options-launch-bounds.md) | Active | Pass gpui's `WindowParams.bounds` to the OS so freeform windows open at the requested size |
 | [`with_active_or_new_workspace` falls back to existing on Android](with-active-or-new-workspace-android-fallback.md) | Active | When Settings is the active window, theme picker / command palette / recent projects routed through `with_active_or_new_workspace` were spawning duplicate Workspace ExtraWindowActivities; redirect to the existing primary instead |

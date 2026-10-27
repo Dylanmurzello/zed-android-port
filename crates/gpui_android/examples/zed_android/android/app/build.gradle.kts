@@ -82,6 +82,11 @@ tasks.register<Exec>("buildZdExec") {
         "zdroid_runtime",
         "--bin",
         "zd-exec",
+        // Zed's release profile keeps limited debug info, which made up
+        // about 15 MB of this 18.7 MB helper. The app copies it out of the
+        // APK and compares it with the installed copy on every launch.
+        "--config",
+        "profile.release.strip=\"debuginfo\"",
     )
 
     // Honor whatever the developer's `cargo ndk` lib build uses.
@@ -204,8 +209,8 @@ android {
         // denied — the entire L2 plan stops working. Skipping Play Store
         // eligibility is the explicit trade.
         targetSdk = 28
-        versionCode = 42
-        versionName = "0.9.1"
+        versionCode = 43
+        versionName = "0.9.2"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -275,7 +280,12 @@ android {
 }
 
 dependencies {
-    implementation("androidx.games:games-activity:3.0.5")
+    // android-activity's native GameActivity code is version 4.4 and
+    // supports the 4.0 Java side. 4.4.0's Java side attaches input listeners
+    // to its SurfaceView, which send captured mouse and trackpad events
+    // through native code that leaks them, and it focuses that SurfaceView
+    // on every window focus change, away from the IME host.
+    implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
     // ActivityResultLauncher / ActivityResultContracts for SAF picker.
