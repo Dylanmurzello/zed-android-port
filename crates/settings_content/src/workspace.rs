@@ -19,6 +19,10 @@ pub struct WorkspaceSettingsContent {
     ///
     /// Default: platform_default
     pub text_rendering_mode: Option<TextRenderingMode>,
+    /// Whether to render windows using the Display P3 color space (macOS only).
+    ///
+    /// Default: false
+    pub use_display_p3: Option<bool>,
     /// Layout mode for the bottom dock
     ///
     /// Default: contained
@@ -559,14 +563,14 @@ pub struct TabBarSettingsContent {
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, PartialEq, Eq)]
 pub struct AndroidInputSettingsContent {
     /// Whether to enable the on-screen IME (soft keyboard) and the
-    /// pane keyboard toggle button. Disable when relying on a
+    /// status bar keyboard button. Disable when relying on a
     /// hardware keyboard, so the IME stops auto-showing on
-    /// text-input focus and the pane button is hidden.
+    /// text-input focus and the button is hidden.
     ///
     /// Default: true
     pub on_screen_keyboard: Option<bool>,
     /// MASTER toggle for the virtual trackpad feature. When true,
-    /// the pane tab bar exposes a trackpad-mode icon and the user
+    /// the status bar exposes a trackpad-mode icon and the user
     /// can switch the screen between direct touch and a VNC-style
     /// virtual mouse via that icon. When false, the icon is hidden
     /// and the whole module is inert regardless of
@@ -579,7 +583,7 @@ pub struct AndroidInputSettingsContent {
     /// (one-finger drag moves an on-screen cursor; tap clicks at
     /// the cursor; two-finger tap right-clicks; two-finger drag
     /// scrolls). Only honored when [`trackpad_mode`] (master) is
-    /// also true. Mutated by the pane tab-bar icon so the state
+    /// also true. Mutated by the status bar icon so the state
     /// survives across launches, not edited directly through the
     /// settings UI.
     ///
@@ -594,7 +598,7 @@ pub struct AndroidInputSettingsContent {
     /// floating mode (the row stays anchored to the editor and
     /// can't follow a floating keyboard).
     ///
-    /// Default: true
+    /// Default: false
     pub programming_extras_row: Option<bool>,
     /// Invert scroll direction (macOS-style natural vs traditional)
     /// for the trackpad two-finger scroll and the mouse wheel. Affects
@@ -1104,6 +1108,11 @@ pub enum ProjectPanelSortOrder {
     /// Pure Unicode codepoint comparison. No case folding, no natural number sorting.
     /// Uppercase ASCII sorts before lowercase. Accented characters sort after ASCII.
     Unicode,
+    /// Files are grouped by their last extension (case-insensitive) in ascending order,
+    /// with extensionless files, including dotfiles such as `.gitignore`, first.
+    /// Dotfiles with a further suffix, such as `.config.json`, keep that extension.
+    /// Within a group, names use the default natural sort.
+    Extension,
 }
 
 impl From<ProjectPanelSortMode> for util::paths::SortMode {
@@ -1123,6 +1132,7 @@ impl From<ProjectPanelSortOrder> for util::paths::SortOrder {
             ProjectPanelSortOrder::Upper => Self::Upper,
             ProjectPanelSortOrder::Lower => Self::Lower,
             ProjectPanelSortOrder::Unicode => Self::Unicode,
+            ProjectPanelSortOrder::Extension => Self::Extension,
         }
     }
 }

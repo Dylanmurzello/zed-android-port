@@ -1223,7 +1223,7 @@ mod element {
 
         fn compute_resize(
             flexes: &Arc<Mutex<Vec<f32>>>,
-            e: &MouseMoveEvent,
+            position: Point<Pixels>,
             ix: usize,
             axis: Axis,
             child_start: Point<Pixels>,
@@ -1252,7 +1252,7 @@ mod element {
             // This is basically a "bucket" of pixel changes that need to be applied in response to this
             // mouse event. Probably a small, fractional number like 0.5 or 1.5 pixels
             let mut proposed_current_pixel_change =
-                (e.position - child_start).along(axis) - size(ix, flexes.as_slice());
+                (position - child_start).along(axis) - size(ix, flexes.as_slice());
 
             // This takes a pixel change, and computes the flex changes that correspond to this pixel change
             // as well as the next one, for some reason
@@ -1317,6 +1317,14 @@ mod element {
                 .log_err();
             cx.stop_propagation();
             window.refresh();
+        }
+
+        /// Touch has no hover, so a finger gets a wider area around the
+        /// divider than the mouse does.
+        fn handle_hit(hitbox: &Hitbox, position: Point<Pixels>, window: &Window) -> bool {
+            hitbox.is_hovered(window)
+                || (window.last_input_was_touch()
+                    && hitbox.bounds.dilate(px(16.0)).contains(&position))
         }
 
         fn layout_handle(
@@ -1543,50 +1551,38 @@ mod element {
                         window.set_cursor_style(cursor_style, &handle.hitbox);
                     }
 
-                    // Divider line. Highlight color while dragging so
-                    // the user gets visual feedback that they've
-                    // grabbed it.
-                    let divider_color = if is_dragging {
+                    // Android draws a grabber pill on the divider and lights
+                    // both while it's being dragged.
+                    let show_grabber = cfg!(target_os = "android");
+                    let divider_color = if show_grabber && is_dragging {
                         cx.theme().colors().border_focused
                     } else {
                         cx.theme().colors().pane_group_border
                     };
                     window.paint_quad(gpui::fill(handle.divider_bounds, divider_color));
 
-                    // Visible grabber pill at the center of the
-                    // divider so touch users can see where to grab.
-                    // Material 3 pattern: small pill perpendicular to
-                    // the divider axis. 32 logical pixels long on the
-                    // perpendicular, 4 thick. The divider itself is
-                    // 1px, so the pill extrudes ~1.5px from the
-                    // divider visually.
-                    let pill_long = px(32.0);
-                    let pill_short = px(4.0);
-                    let divider_bounds = handle.divider_bounds;
-                    let pill_origin = match self.axis {
-                        // Horizontal axis = vertical divider line.
-                        // Pill extrudes horizontally from the line.
-                        Axis::Horizontal => Point::new(
-                            divider_bounds.center().x - pill_short / 2.,
-                            divider_bounds.center().y - pill_long / 2.,
-                        ),
-                        // Vertical axis = horizontal divider line.
-                        Axis::Vertical => Point::new(
-                            divider_bounds.center().x - pill_long / 2.,
-                            divider_bounds.center().y - pill_short / 2.,
-                        ),
-                    };
-                    let pill_size = match self.axis {
-                        Axis::Horizontal => Size::new(pill_short, pill_long),
-                        Axis::Vertical => Size::new(pill_long, pill_short),
-                    };
-                    let pill_bounds = Bounds::new(pill_origin, pill_size);
-                    let pill_color = if is_dragging {
-                        cx.theme().colors().border_focused
-                    } else {
-                        cx.theme().colors().border_variant
-                    };
-                    window.paint_quad(gpui::fill(pill_bounds, pill_color));
+                    if show_grabber {
+                        let pill_long = px(32.0);
+                        let pill_short = px(4.0);
+                        let center = handle.divider_bounds.center();
+                        let pill_size = match self.axis {
+                            Axis::Horizontal => Size::new(pill_short, pill_long),
+                            Axis::Vertical => Size::new(pill_long, pill_short),
+                        };
+                        let pill_origin = Point::new(
+                            center.x - pill_size.width / 2.,
+                            center.y - pill_size.height / 2.,
+                        );
+                        let pill_color = if is_dragging {
+                            cx.theme().colors().border_focused
+                        } else {
+                            cx.theme().colors().border_variant
+                        };
+                        window.paint_quad(gpui::fill(
+                            Bounds::new(pill_origin, pill_size),
+                            pill_color,
+                        ));
+                    }
 
                     window.on_mouse_event({
                         let dragged_handle = layout.dragged_handle.clone();
@@ -1597,20 +1593,7 @@ mod element {
                             if !phase.bubble() {
                                 return;
                             }
-                            // Mouse uses the precise 4px hitbox via
-                            // is_hovered (no false positives near tab
-                            // close buttons etc.). Touch has no hover
-                            // state, so when the last input on this
-                            // window was touch, fall back to a dilated
-                            // position check so a fingertip lands on
-                            // the splitter without pixel precision.
-                            let hit = handle_hitbox.is_hovered(window)
-                                || (window.last_platform_input_was_touch()
-                                    && handle_hitbox
-                                        .bounds
-                                        .dilate(px(16.0))
-                                        .contains(&e.position));
-                            if hit {
+                            if Self::handle_hit(&handle_hitbox, e.position, window) {
                                 dragged_handle.replace(Some(ix));
                                 if e.click_count >= 2 {
                                     let mut borrow = flexes.lock();
@@ -1621,7 +1604,6 @@ mod element {
 
                                     window.refresh();
                                 }
-                                window.set_drag_active(true);
                                 cx.stop_propagation();
                             }
                         }
@@ -1637,7 +1619,7 @@ mod element {
                             if phase.bubble() && *dragged_handle == Some(ix) {
                                 Self::compute_resize(
                                     &flexes,
-                                    e,
+                                    e.position,
                                     ix,
                                     axis,
                                     child_bounds.origin,
@@ -1649,19 +1631,65 @@ mod element {
                             }
                         }
                     });
+                    // gpui_android sends finger input to gpui's touch gestures,
+                    // which scroll the content under a dragging finger unless
+                    // an element claims the drag when the finger lands.
+                    #[cfg(target_os = "android")]
+                    window.on_mouse_event({
+                        let workspace = self.workspace.clone();
+                        let dragged_handle = layout.dragged_handle.clone();
+                        let flexes = self.flexes.clone();
+                        let handle_hitbox = handle.hitbox.clone();
+                        let child_bounds = child.bounds;
+                        let axis = self.axis;
+                        move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                            if !phase.bubble() {
+                                return;
+                            }
+                            match event.phase {
+                                gpui::TouchPhase::Started => {
+                                    if Self::handle_hit(
+                                        &handle_hitbox,
+                                        event.start_position,
+                                        window,
+                                    ) {
+                                        dragged_handle.replace(Some(ix));
+                                        window.prevent_default();
+                                        cx.stop_propagation();
+                                    }
+                                }
+                                gpui::TouchPhase::Moved => {
+                                    if *dragged_handle.borrow() == Some(ix) {
+                                        Self::compute_resize(
+                                            &flexes,
+                                            event.position,
+                                            ix,
+                                            axis,
+                                            child_bounds.origin,
+                                            bounds.size,
+                                            workspace.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    }
+                                }
+                                gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
+                                    if *dragged_handle.borrow() == Some(ix) {
+                                        dragged_handle.replace(None);
+                                        window.refresh();
+                                    }
+                                }
+                            }
+                        }
+                    });
                 }
             }
 
             window.on_mouse_event({
                 let dragged_handle = layout.dragged_handle.clone();
-                move |_: &MouseUpEvent, phase, window, _cx| {
+                move |_: &MouseUpEvent, phase, _window, _cx| {
                     if phase.bubble() {
                         dragged_handle.replace(None);
-                        // Pairs with set_drag_active(true) in the
-                        // matching MouseDown. Unconditional clear is
-                        // safe — a stray MouseUp when no resize was
-                        // active just no-ops the flag.
-                        window.set_drag_active(false);
                     }
                 }
             });

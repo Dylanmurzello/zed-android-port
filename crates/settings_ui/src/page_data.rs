@@ -123,21 +123,15 @@ fn android_runtime_page() -> SettingsPage {
                 ),
                 button_text: "Open picker".into(),
                 on_click: Arc::new(|_settings_window, _window, cx| {
-                    workspace::with_active_or_new_workspace(
-                        cx,
-                        |_workspace, window, cx| {
-                            match cx.build_action(
-                                "zdroid_runtime::PickRuntime",
-                                None,
-                            ) {
-                                Ok(action) => window.dispatch_action(action, cx),
-                                Err(err) => log::warn!(
-                                    "settings_ui::android_runtime_page: \
+                    workspace::with_active_or_new_workspace(cx, |_workspace, window, cx| match cx
+                        .build_action("zdroid_runtime::PickRuntime", None)
+                    {
+                        Ok(action) => window.dispatch_action(action, cx),
+                        Err(err) => log::warn!(
+                            "settings_ui::android_runtime_page: \
                                      zdroid_runtime::PickRuntime not registered: {err}"
-                                ),
-                            }
-                        },
-                    );
+                        ),
+                    });
                 }),
                 files: USER,
             }),
@@ -209,14 +203,14 @@ fn android_input_page() -> SettingsPage {
             SettingsPageItem::SectionHeader("Touch Behavior"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Enable Virtual Trackpad",
-                description: "Add a tab-bar toggle that switches \
+                description: "Add a status bar toggle that switches \
                     the screen into VNC-style trackpad mode: drag \
                     moves an on-screen cursor, tap clicks, \
                     two-finger tap is right-click, two-finger drag \
                     scrolls. While trackpad mode is active, standard \
                     Android touch (direct-tap on UI elements, scroll, \
                     splitter drag) is disabled; toggle off from the \
-                    tab-bar icon to go back.",
+                    status bar icon to go back.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.trackpad_mode"),
@@ -1589,7 +1583,7 @@ fn appearance_page() -> SettingsPage {
         ]
     }
 
-    fn text_rendering_section() -> [SettingsPageItem; 2] {
+    fn text_rendering_section() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SectionHeader("Text Rendering"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -1603,6 +1597,20 @@ fn appearance_page() -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.workspace.text_rendering_mode = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Display P3",
+                description: "(macOS only) render windows using the Display P3 color space.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("use_display_p3"),
+                    pick: |settings_content| settings_content.workspace.use_display_p3.as_ref(),
+                    write: |settings_content, value, _| {
+                        settings_content.workspace.use_display_p3 = value;
                     },
                 }),
                 metadata: None,

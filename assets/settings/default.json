@@ -240,6 +240,8 @@
   //  3. Use grayscale text rendering:
   //         "text_rendering_mode": "grayscale"
   "text_rendering_mode": "platform_default",
+  // Whether to render windows using the Display P3 color space (macOS only).
+  "use_display_p3": false,
   // Whether to show padding for zoomed panels.
   // When enabled, zoomed center panels (e.g. code editor) will have padding all around,
   // while zoomed bottom/left/right panels will have padding to the top/right/left (respectively).
@@ -965,7 +967,7 @@
     //    "files_first"
     "sort_mode": "directories_first",
     // Whether to sort file and folder names case-sensitively in the project panel.
-    // This setting can take four values:
+    // This setting can take five values:
     //
     // 1. Case-insensitive natural sort with lowercase preferred in ties (default):
     //    "default"
@@ -978,6 +980,10 @@
     // 4. Pure Unicode codepoint comparison.
     //    No case folding, no natural number sorting:
     //    "unicode"
+    // 5. Files are grouped by extension, with extensionless files (including
+    //    dotfiles such as ".gitignore") first and natural sort by name within
+    //    each group:
+    //    "extension"
     "sort_order": "default",
     // Whether to show error and warning count badges next to file names in the project panel.
     "diagnostic_badges": false,
@@ -1474,34 +1480,6 @@
     // When enabled, pinned tabs appear in a top row and unpinned tabs in a bottom row.
     // When disabled, all tabs appear in a single row (default behavior).
     "show_pinned_tabs_in_separate_row": false,
-  },
-  // Android-only: behavior of the on-screen IME (soft keyboard).
-  // Ignored on other platforms.
-  "android_input": {
-    // Enable the on-screen keyboard and the pane keyboard-toggle
-    // button. Disable when relying on a hardware keyboard, so the
-    // IME stops auto-showing on text-input focus and the pane
-    // button is hidden from the tab bar.
-    "on_screen_keyboard": true,
-    // Master toggle for the VNC-style virtual trackpad feature.
-    // When true, the pane tab bar gains a trackpad-mode toggle
-    // icon so the user can switch the screen between direct
-    // touch and a virtual mouse at runtime. When false the icon
-    // is hidden and the whole module is inert.
-    "trackpad_mode": false,
-    // Runtime state of the virtual trackpad: true means the
-    // screen is currently acting as a virtual trackpad (one-
-    // finger drag moves an on-screen cursor; tap clicks at the
-    // cursor; two-finger tap right-clicks; two-finger drag
-    // scrolls). Only honored when "trackpad_mode" above is also
-    // true. Toggled by the pane tab-bar icon, not edited here
-    // directly.
-    "trackpad_mode_active": false,
-    // Invert scroll direction (macOS-style natural vs traditional) for
-    // the trackpad two-finger scroll and the mouse wheel. Affects the
-    // hardware/Book Cover trackpad, the wheel, and the virtual trackpad.
-    // Direct-touch finger scrolling is never inverted.
-    "invert_scroll": false,
   },
   // Settings related to the tab switcher (Ctrl-Tab).
   "tab_switcher": {

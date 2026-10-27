@@ -55,24 +55,31 @@ object NativeBridge {
     /// synchronously inside this callback.
     external fun nativeOnExtraSurfaceDestroyed(windowId: Long)
 
+    /// Posted from `ExtraWindowActivity.onWindowFocusChanged`, so gpui knows
+    /// which window is active. Zed closes the active window for Ctrl+W.
+    external fun nativeOnExtraFocusChanged(windowId: Long, hasFocus: Boolean)
+
     /// MotionEvent fields marshaled into primitive arrays (we can't share
     /// `MotionEvent` across the JNI boundary). Pointer indices are
     /// `0..pointerCount-1`. `vscroll`/`hscroll` carry the
     /// `MotionEvent.AXIS_VSCROLL`/`AXIS_HSCROLL` values for `ACTION_SCROLL`
     /// events (mouse wheel, trackpad two-finger scroll); zero on touch /
-    /// hover / button events.
+    /// hover / button events. `flags` is `MotionEvent.getFlags()` and
+    /// `toolTypes` each pointer's `MotionEvent.getToolType`.
     external fun nativeOnExtraTouchEvent(
         windowId: Long,
         actionMasked: Int,
         actionIndex: Int,
         metaState: Int,
         buttonState: Int,
+        flags: Int,
         eventTimeMillis: Long,
         vscroll: Float,
         hscroll: Float,
         xs: FloatArray,
         ys: FloatArray,
         pointerIds: IntArray,
+        toolTypes: IntArray,
     )
 
     /// Hardware key event forwarder. Called from `ExtraWindowActivity.
@@ -103,34 +110,6 @@ object NativeBridge {
     /// extra window's id for spawned windows.
     external fun isHoldDragActive(windowId: Long): Boolean
 
-    /// Structured captured-pointer sink for spawned
-    /// `ExtraWindowActivity` windows. Same fields as
-    /// `nativeOnCapturedPointer` plus a `windowId` so the Rust-side
-    /// per-window state machine routes correctly. Extra activities
-    /// call this from their `onGenericMotionEvent` override; gesture
-    /// behavior (tap, scroll, hold-drag, drag-lock, cursor follow)
-    /// is identical per window.
-    external fun nativeOnExtraCapturedPointer(
-        windowId: Long,
-        actionMasked: Int,
-        source: Int,
-        buttonState: Int,
-        pointerCount: Int,
-        xs: FloatArray,
-        ys: FloatArray,
-        rxs: FloatArray,
-        rys: FloatArray,
-        vscroll: Float,
-        hscroll: Float,
-        cursorPhysicalX: Float,
-        cursorPhysicalY: Float,
-    )
-
-    /// Probe sink kept for diagnostic use; the structured sink below
-    /// is the real path. The probe just logs a stringified summary
-    /// when the synthesis layer is suspect on a given device.
-    external fun nativeOnCapturedPointerProbe(summary: String)
-
     /// Polled every frame by the SplashScreen's
     /// `setKeepOnScreenCondition`. Returns true once gpui has run at
     /// least one paint cycle; the splash then exits with its
@@ -140,20 +119,19 @@ object NativeBridge {
     /// `frame_timing::paint_finished` call.
     external fun nativeIsZedReady(): Boolean
 
-    /// Structured captured-pointer sink. Marshals the relevant
-    /// `MotionEvent` fields per event so the Rust side can synthesize
-    /// `MouseMove` / `MouseDown` / `MouseUp` / `ScrollWheel` from the
-    /// raw stream. `xs`/`ys` are absolute pointer positions in the
-    /// touchpad's coordinate space; `rxs`/`rys` are
-    /// `AXIS_RELATIVE_X` / `AXIS_RELATIVE_Y` per pointer (the deltas
-    /// that drive cursor motion + scroll synthesis). `vscroll`/
-    /// `hscroll` are zero for trackpad on Samsung — included for
-    /// completeness so a hardware mouse routed through the same
-    /// capture path can still scroll via `ACTION_SCROLL`.
+    /// Captured-pointer sink, called only by [forwardCapturedPointer].
+    /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
+    /// window's id. `xs`/`ys` are absolute pointer positions in the
+    /// touchpad's coordinate space; `rxs`/`rys` are `AXIS_RELATIVE_X` /
+    /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
+    /// motion and scroll synthesis). `vscroll`/`hscroll` carry a
+    /// mouse wheel's `ACTION_SCROLL`.
     external fun nativeOnCapturedPointer(
+        windowId: Long,
         actionMasked: Int,
         source: Int,
         buttonState: Int,
+        metaState: Int,
         pointerCount: Int,
         xs: FloatArray,
         ys: FloatArray,
@@ -207,20 +185,32 @@ object NativeBridge {
     /// target window.
     external fun nativeImePerformEditorAction(windowId: Long, actionId: Int)
 
-    /// Query the global vim-mode routing gate. True when the focused
-    /// editor is in a vim command mode, in which case soft-keyboard
-    /// text has to be re-delivered as key events (so vim reads `j`/`d`/
-    /// `w` as motions/operators) rather than inserted as literal text.
-    /// Driven Rust-side by the app's vim observer; no `windowId`
-    /// because only one editor is focused app-wide. False when vim is
-    /// off or the mode is Insert/Replace (plain text entry).
-    external fun nativeImeRouteAsKeys(): Boolean
+    /// Whether soft-keyboard text for this window has to be re-delivered
+    /// as key events rather than inserted as literal text: true when its
+    /// focused field doesn't accept typed text, as gpui reports, such as
+    /// an editor in vim's normal or visual mode (so vim reads `j`/`d`/`w`
+    /// as motions and operators).
+    external fun nativeImeRouteAsKeys(windowId: Long): Boolean
 
     /// Mirror Kotlin's `imeShown` flag into the Rust-side global
     /// `SOFT_KEYBOARD_VISIBLE` atomic. Pushed on every transition
     /// (showSoftInput / hideSoftInputFromWindow / WindowInsetsListener
-    /// edge). The pane keyboard button reads this via
-    /// `Window::soft_keyboard_visible()` to render its lit-up
+    /// edge). The status bar keyboard button reads this via
+    /// `gpui_android::soft_keyboard_visible()` to render its lit-up
     /// `toggle_state`.
     external fun nativeSetSoftKeyboardVisible(visible: Boolean)
+
+    /// Posted by `MainActivity` at startup and whenever an input device or
+    /// Android's "show on-screen keyboard with a physical keyboard" setting
+    /// changes: [PhysicalKeyboard.blocksIme]. Read through
+    /// `gpui_android::physical_keyboard_blocks_ime()`.
+    external fun nativeSetPhysicalKeyboardBlocksIme(blocksIme: Boolean)
+
+    /// Posted by [UpdateInstallReceiver] when an update session ends
+    /// without installing: cancelled in Android's prompt or failed.
+    external fun nativeOnUpdateInstallResult(status: Int, message: String?)
+
+    /// Posted when the user returns from Zdroid's "Install unknown apps"
+    /// settings page, which [MainActivity.requestInstallPermission] opens.
+    external fun nativeOnInstallPermissionResult(granted: Boolean)
 }

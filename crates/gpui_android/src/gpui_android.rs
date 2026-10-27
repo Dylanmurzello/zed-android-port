@@ -8,20 +8,21 @@ mod clipboard;
 mod credentials;
 mod cursor;
 mod dispatcher;
-pub(crate) mod splash;
-pub mod updater;
 mod display;
 pub mod dns_bridge;
 mod events;
 mod frame_timing;
 mod ime;
+mod jni_env;
 mod keyboard;
 mod multi_window;
 mod platform;
 mod saf;
+pub(crate) mod splash;
 pub mod storage;
 pub mod termux_bootstrap;
 mod touch;
+pub mod updater;
 mod window;
 pub mod zd_exec_install;
 
@@ -76,13 +77,18 @@ pub fn set_invert_scroll(enabled: bool) {
     ime::INVERT_SCROLL.store(enabled, std::sync::atomic::Ordering::Release);
 }
 
-/// Push the focused editor's vim "command mode" decision to the runtime
-/// atomic that Kotlin's `commitText` reads via the `nativeImeRouteAsKeys`
-/// JNI query. True means soft-keyboard text is converted to key events so
-/// vim's keymap sees `j`/`d`/`w` as commands; false means normal text
-/// insertion. Called from the app-side vim observer in `zed_android::lib`.
-pub fn set_ime_route_as_keys(route_as_keys: bool) {
-    ime::IME_ROUTE_AS_KEYS.store(route_as_keys, std::sync::atomic::Ordering::Release);
+/// Whether the on-screen keyboard is showing, as Kotlin last reported it
+/// (or as just requested, until Kotlin confirms).
+pub fn soft_keyboard_visible() -> bool {
+    ime::soft_keyboard_visible()
+}
+
+/// Whether a connected physical keyboard blocks the on-screen one: mice
+/// that also report a keyboard don't count, and neither does any keyboard
+/// while Android's "show on-screen keyboard while a physical keyboard is
+/// connected" setting is on.
+pub fn physical_keyboard_blocks_ime() -> bool {
+    ime::physical_keyboard_blocks_ime()
 }
 
 use std::rc::Rc;

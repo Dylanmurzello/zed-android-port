@@ -6,12 +6,10 @@
 //! returns `[u32 username length][username][password]`.
 
 use android_activity::AndroidApp;
-use anyhow::{Context as _, Result, anyhow};
-use jni::{
-    JNIEnv, JavaVM,
-    objects::{JByteArray, JObject, JValue},
-};
-use util::ResultExt as _;
+use anyhow::{Result, anyhow};
+use jni::objects::{JByteArray, JValue};
+
+use crate::jni_env::with_activity;
 
 pub(crate) fn write(
     android_app: &AndroidApp,
@@ -90,35 +88,4 @@ pub(crate) fn delete(android_app: &AndroidApp, url: &str) -> Result<()> {
             Err(anyhow!("failed to delete Android credential"))
         }
     })
-}
-
-/// Runs `callback` with an attached JNI env and the activity, clearing any
-/// pending Java exception before and after.
-pub(crate) fn with_activity<T>(
-    android_app: &AndroidApp,
-    callback: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T>,
-) -> Result<T> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach current thread for Android credentials")?;
-    // A Java exception left pending by an earlier JNI call on this thread
-    // makes every following call fail, so clear it first; and clear any
-    // exception our own call raises so it can't break the next caller.
-    clear_pending_exception(&mut env);
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let result = callback(&mut env, &activity);
-    if clear_pending_exception(&mut env) {
-        return Err(anyhow!("Java exception during Android credential JNI call"));
-    }
-    result
-}
-
-fn clear_pending_exception(env: &mut JNIEnv<'_>) -> bool {
-    if !env.exception_check().unwrap_or(false) {
-        return false;
-    }
-    env.exception_describe().log_err();
-    env.exception_clear().log_err();
-    true
 }

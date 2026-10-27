@@ -409,6 +409,10 @@ impl EditorElement {
         register_action(editor, window, Editor::select_page_up);
         register_action(editor, window, Editor::cancel);
         register_action(editor, window, Editor::blame_hover);
+        register_action(editor, window, Editor::debugger_hover_expand_selected);
+        register_action(editor, window, Editor::debugger_hover_collapse_selected);
+        register_action(editor, window, Editor::debugger_hover_select_next);
+        register_action(editor, window, Editor::debugger_hover_select_previous);
         register_action(editor, window, Editor::next_snippet_tabstop);
         register_action(editor, window, Editor::previous_snippet_tabstop);
         register_action(editor, window, Editor::copy);
@@ -3235,7 +3239,7 @@ impl EditorElement {
                 || snapshot.use_tree_sitter_for_syntax(rows.start, cx);
             let language_aware = LanguageAwareStyling {
                 tree_sitter: use_tree_sitter,
-                diagnostics: true,
+                diagnostics: snapshot.display_snapshot.diagnostics_visible(),
             };
             let chunks = snapshot.highlighted_chunks(rows.clone(), language_aware, style);
             LineWithInvisibles::from_chunks(
@@ -4455,7 +4459,7 @@ impl EditorElement {
             horizontal_offset: Pixels,
         }
 
-        let max_size = size(
+        let mut max_size = size(
             (120. * em_width) // Default size
                 .min(hitbox.size.width / 2.) // Shrink to half of the editor width
                 .max(MIN_POPOVER_CHARACTER_WIDTH * em_width), // Apply minimum width of 20 characters
@@ -4463,6 +4467,31 @@ impl EditorElement {
                 .min(hitbox.size.height / 2.) // Shrink to half of the editor height
                 .max(MIN_POPOVER_LINE_HEIGHT * line_height), // Apply minimum height of 4 lines
         );
+
+        let (is_single_debugger_hover, stable_debugger_hover_origin) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.hover_state.is_single_debugger_hover(),
+                editor.hover_state.stable_debugger_hover_origin(),
+            )
+        };
+        if is_single_debugger_hover {
+            let available_height = stable_debugger_hover_origin
+                .map(|origin| {
+                    // Prefer scrolling below the existing origin to moving a row under the mouse.
+                    // After a resize, leave enough room for at least one row and its padding.
+                    (hitbox.bottom() - origin.y).max(line_height + px(10.))
+                })
+                .unwrap_or(hitbox.size.height)
+                .min(hitbox.size.height);
+            // The content container's limits exclude the popover's one-pixel border.
+            max_size.width = max_size
+                .width
+                .min((hitbox.size.width - px(2.)).max(Pixels::ZERO));
+            max_size.height = max_size
+                .height
+                .min((available_height - px(2.)).max(Pixels::ZERO));
+        }
 
         // Don't show hover popovers when context menu is open to avoid overlap
         let has_context_menu = self.editor.read(cx).mouse_context_menu.is_some();
@@ -4501,7 +4530,7 @@ impl EditorElement {
 
         let mut overall_height = Pixels::ZERO;
 
-        let measured_hover_popovers = hover_popovers
+        let mut measured_hover_popovers = hover_popovers
             .into_iter()
             .with_position()
             .map(|(position, mut hover_popover)| {
@@ -4605,9 +4634,9 @@ impl EditorElement {
             })
         };
 
-        let can_place_below = || {
+        let can_place_below = |popovers: &[MeasuredHoverPopover]| {
             let mut current_y = hovered_point.y + line_height;
-            measured_hover_popovers.iter().all(|popover| {
+            popovers.iter().all(|popover| {
                 let size = popover.size;
                 let popover_origin = point(hovered_point.x + popover.horizontal_offset, current_y);
                 let bounds = Bounds::new(popover_origin, size);
@@ -4616,10 +4645,45 @@ impl EditorElement {
             })
         };
 
+        if is_single_debugger_hover
+            && measured_hover_popovers.len() == 1
+            && let Some(popover) = measured_hover_popovers.pop()
+        {
+            let mut popover_origin = stable_debugger_hover_origin.unwrap_or_else(|| {
+                if can_place_below(std::slice::from_ref(&popover)) {
+                    point(
+                        hovered_point.x + popover.horizontal_offset,
+                        hovered_point.y + line_height,
+                    )
+                } else {
+                    point(
+                        hovered_point.x + popover.horizontal_offset,
+                        hovered_point.y - popover.size.height,
+                    )
+                }
+            });
+
+            // Preserve the origin while it fits, but keep expanded or resized hovers reachable.
+            popover_origin.x = popover_origin.x.clamp(
+                hitbox.left(),
+                (hitbox.right() - popover.size.width).max(hitbox.left()),
+            );
+            popover_origin.y = popover_origin.y.clamp(
+                hitbox.top(),
+                (hitbox.bottom() - popover.size.height).max(hitbox.top()),
+            );
+
+            window.defer_draw(popover.element, popover_origin, 2, None);
+            self.editor.update(cx, |editor, _| {
+                editor.hover_state.stable_debugger_hover_origin = Some(popover_origin);
+            });
+            return;
+        }
+
         if can_place_above {
             // try placing above hovered point
             place_popovers_above(hovered_point, measured_hover_popovers, window, cx);
-        } else if can_place_below() {
+        } else if can_place_below(&measured_hover_popovers) {
             // try placing below hovered point
             place_popovers_below(
                 hovered_point,
@@ -5678,7 +5742,7 @@ impl EditorElement {
         visible_rows: Range<DisplayRow>,
         line_layouts: &mut [LineWithInvisibles],
     ) {
-        if visible_rows.is_empty() {
+        if !snapshot.display_snapshot.diagnostics_visible() || visible_rows.is_empty() {
             return;
         }
 
@@ -6186,28 +6250,15 @@ impl EditorElement {
                                 .find(|(_, a)| *a == axis)
                         })
                     {
-                        let ScrollbarLayout {
-                            hitbox,
-                            text_unit_size,
-                            ..
-                        } = scrollbar_layout;
-
-                        let old_position = mouse_position.along(axis);
-                        let new_position = event.position.along(axis);
-                        if (hitbox.origin.along(axis)..hitbox.bottom_right().along(axis))
-                            .contains(&old_position)
-                        {
-                            let position = editor.scroll_position(cx).apply_along(axis, |p| {
-                                (p + ScrollOffset::from(
-                                    (new_position - old_position) / *text_unit_size,
-                                ))
-                                .max(0.)
-                            });
-                            editor.set_scroll_position(position, window, cx);
-                        }
-
-                        editor.scroll_manager.show_scrollbars(window, cx);
-                        cx.stop_propagation();
+                        Self::drag_scrollbar(
+                            editor,
+                            scrollbar_layout,
+                            axis,
+                            mouse_position,
+                            event.position,
+                            window,
+                            cx,
+                        );
                     } else if let Some((layout, axis)) = scrollbars_layout
                         .get_hovered_axis(window)
                         .filter(|_| !event.dragging())
@@ -6230,6 +6281,74 @@ impl EditorElement {
             }
         });
 
+        // gpui_android sends finger input to gpui's touch gestures, which
+        // scroll the content under a dragging finger unless an element claims
+        // the drag when the finger lands. A claimed touch never becomes a tap,
+        // so this goes by hover, which a menu over the scrollbar blocks.
+        #[cfg(target_os = "android")]
+        window.on_mouse_event({
+            let editor = self.editor.clone();
+            let scrollbars_layout = scrollbars_layout.clone();
+            move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture {
+                    return;
+                }
+                editor.update(cx, |editor, cx| match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if let Some((scrollbar_layout, axis)) =
+                            scrollbars_layout.get_hovered_axis(window)
+                            && Self::press_scrollbar(
+                                editor,
+                                scrollbar_layout,
+                                axis,
+                                event.start_position,
+                                window,
+                                cx,
+                            )
+                        {
+                            editor.scroll_manager.scrollbar_touch_position =
+                                Some(event.start_position);
+                            window.prevent_default();
+                        }
+                    }
+                    gpui::TouchPhase::Moved => {
+                        if let Some(last_position) = editor.scroll_manager.scrollbar_touch_position
+                            && let Some((scrollbar_layout, axis)) = editor
+                                .scroll_manager
+                                .dragging_scrollbar_axis()
+                                .and_then(|axis| {
+                                    scrollbars_layout
+                                        .iter_scrollbars()
+                                        .find(|(_, a)| *a == axis)
+                                })
+                        {
+                            Self::drag_scrollbar(
+                                editor,
+                                scrollbar_layout,
+                                axis,
+                                last_position,
+                                event.position,
+                                window,
+                                cx,
+                            );
+                            editor.scroll_manager.scrollbar_touch_position = Some(event.position);
+                        }
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled => {
+                        if editor
+                            .scroll_manager
+                            .scrollbar_touch_position
+                            .take()
+                            .is_some()
+                        {
+                            editor.scroll_manager.reset_scrollbar_state(cx);
+                            cx.stop_propagation();
+                        }
+                    }
+                })
+            }
+        });
+
         if any_scrollbar_dragged {
             window.on_mouse_event({
                 let editor = self.editor.clone();
@@ -6248,11 +6367,6 @@ impl EditorElement {
                         }
                         cx.stop_propagation();
                     });
-                    // Pairs with set_drag_active(true) in the
-                    // MouseDown branch below. Cleared unconditionally:
-                    // a stray MouseUp when no scrollbar drag is active
-                    // just no-ops the flag.
-                    window.set_drag_active(false);
                 }
             });
         } else {
@@ -6263,19 +6377,13 @@ impl EditorElement {
                     if phase == DispatchPhase::Capture {
                         return;
                     }
-                    // Hover-based detection covers mouse / trackpad
-                    // (which fire MouseMove(pressed_button=None) before
-                    // every click and set hover state). Touch has no
-                    // hover concept — finger DOWN is the first event —
-                    // so fall back to a position-based hit-test against
-                    // each scrollbar's bounds. Without this fallback,
-                    // touch on the editor's scrollbar gets dropped here
-                    // and falls through to the touch SM's scroll
-                    // synthesis, which is exactly the "whole column
-                    // acts like one big drag" bug.
-                    let Some((scrollbar_layout, axis)) = scrollbars_layout
-                        .get_hovered_axis(window)
-                        .or_else(|| {
+                    // Touch has no hover, so a finger on a scrollbar is
+                    // found by position.
+                    let Some((scrollbar_layout, axis)) =
+                        scrollbars_layout.get_hovered_axis(window).or_else(|| {
+                            if !window.last_input_was_touch() {
+                                return None;
+                            }
                             scrollbars_layout
                                 .iter_scrollbars()
                                 .find(|(layout, _)| layout.hitbox.bounds.contains(&event.position))
@@ -6284,57 +6392,95 @@ impl EditorElement {
                         return;
                     };
 
-                    let ScrollbarLayout {
-                        hitbox,
-                        visible_range,
-                        text_unit_size,
-                        thumb_bounds,
-                        ..
-                    } = scrollbar_layout;
-
-                    let Some(thumb_bounds) = thumb_bounds else {
-                        return;
-                    };
-
                     editor.update(cx, |editor, cx| {
-                        editor
-                            .scroll_manager
-                            .set_dragged_scroll_thumb_axis(axis, cx);
-
-                        let event_position = event.position.along(axis);
-
-                        if event_position < thumb_bounds.origin.along(axis)
-                            || thumb_bounds.bottom_right().along(axis) < event_position
-                        {
-                            let center_position = ((event_position - hitbox.origin.along(axis))
-                                / *text_unit_size)
-                                .round() as u32;
-                            let start_position = center_position.saturating_sub(
-                                (visible_range.end - visible_range.start) as u32 / 2,
-                            );
-
-                            let position = editor
-                                .scroll_position(cx)
-                                .apply_along(axis, |_| start_position as ScrollOffset);
-
-                            editor.set_scroll_position(position, window, cx);
-                        } else {
-                            editor.scroll_manager.show_scrollbars(window, cx);
-                        }
-
-                        cx.stop_propagation();
+                        Self::press_scrollbar(
+                            editor,
+                            scrollbar_layout,
+                            axis,
+                            event.position,
+                            window,
+                            cx,
+                        );
                     });
-                    // Tell the platform we're driving a direct-
-                    // manipulation drag. On touch backends this gates
-                    // the gesture-recognizer's scroll-synthesis so the
-                    // thumb actually tracks the finger through
-                    // subsequent MouseMove(Left held) events. The
-                    // MouseUp handler at element.rs around line 7119
-                    // clears the flag on release.
-                    window.set_drag_active(true);
                 }
             });
         }
+    }
+
+    /// Returns whether the scrollbar has a thumb to drag.
+    fn press_scrollbar(
+        editor: &mut Editor,
+        scrollbar_layout: &ScrollbarLayout,
+        axis: ScrollbarAxis,
+        position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Editor>,
+    ) -> bool {
+        let ScrollbarLayout {
+            hitbox,
+            visible_range,
+            text_unit_size,
+            thumb_bounds,
+            ..
+        } = scrollbar_layout;
+
+        let Some(thumb_bounds) = thumb_bounds else {
+            return false;
+        };
+
+        editor
+            .scroll_manager
+            .set_dragged_scroll_thumb_axis(axis, cx);
+
+        let event_position = position.along(axis);
+
+        if event_position < thumb_bounds.origin.along(axis)
+            || thumb_bounds.bottom_right().along(axis) < event_position
+        {
+            let center_position =
+                ((event_position - hitbox.origin.along(axis)) / *text_unit_size).round() as u32;
+            let start_position = center_position
+                .saturating_sub((visible_range.end - visible_range.start) as u32 / 2);
+
+            let position = editor
+                .scroll_position(cx)
+                .apply_along(axis, |_| start_position as ScrollOffset);
+
+            editor.set_scroll_position(position, window, cx);
+        } else {
+            editor.scroll_manager.show_scrollbars(window, cx);
+        }
+
+        cx.stop_propagation();
+        true
+    }
+
+    fn drag_scrollbar(
+        editor: &mut Editor,
+        scrollbar_layout: &ScrollbarLayout,
+        axis: ScrollbarAxis,
+        old_position: gpui::Point<Pixels>,
+        new_position: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Editor>,
+    ) {
+        let ScrollbarLayout {
+            hitbox,
+            text_unit_size,
+            ..
+        } = scrollbar_layout;
+
+        let old_position = old_position.along(axis);
+        let new_position = new_position.along(axis);
+        if (hitbox.origin.along(axis)..hitbox.bottom_right().along(axis)).contains(&old_position) {
+            let position = editor.scroll_position(cx).apply_along(axis, |p| {
+                (p + ScrollOffset::from((new_position - old_position) / *text_unit_size)).max(0.)
+            });
+            editor.set_scroll_position(position, window, cx);
+        }
+
+        editor.scroll_manager.show_scrollbars(window, cx);
+        cx.stop_propagation();
     }
 
     fn collect_fast_scrollbar_markers(
@@ -10939,7 +11085,7 @@ pub fn layout_line(
         !snapshot.semantic_tokens_enabled || snapshot.use_tree_sitter_for_syntax(row, cx);
     let language_aware = LanguageAwareStyling {
         tree_sitter: use_tree_sitter,
-        diagnostics: true,
+        diagnostics: snapshot.display_snapshot.diagnostics_visible(),
     };
     let chunks = snapshot.highlighted_chunks(row..row + DisplayRow(1), language_aware, style);
     LineWithInvisibles::from_chunks(
@@ -11418,7 +11564,8 @@ mod tests {
     };
     use buffer_diff::BufferDiff;
     use gpui::{
-        Render, TestAppContext, Underline, UpdateGlobal, VisualTestContext, WindowHandle, font,
+        EntityInputHandler, Render, TestAppContext, Underline, UpdateGlobal, VisualTestContext,
+        WindowHandle, font,
     };
     use language::{
         Buffer, Capability, Diagnostic, DiagnosticEntry, DiagnosticSet, SelectionGoal,
@@ -11431,6 +11578,53 @@ mod tests {
     use std::num::NonZeroU32;
     use text::PointUtf16;
     use util::test::sample_text;
+
+    // Regression test for https://github.com/zed-industries/zed/issues/65453.
+    #[gpui::test]
+    fn test_highlight_underlines_are_only_hidden_in_minimap(cx: &mut TestAppContext) {
+        init_test(cx, |_| {});
+
+        fn has_highlight_underline(editor: &Editor, style: &EditorStyle, cx: &mut App) -> bool {
+            editor
+                .display_snapshot(cx)
+                .highlighted_chunks(
+                    DisplayRow(0)..DisplayRow(1),
+                    LanguageAwareStyling {
+                        tree_sitter: false,
+                        diagnostics: false,
+                    },
+                    style,
+                )
+                .any(|chunk| chunk.style.is_some_and(|style| style.underline.is_some()))
+        }
+
+        let single_line = cx.add_window(|window, cx| Editor::single_line(window, cx));
+        single_line
+            .update(cx, |editor, window, cx| {
+                editor.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+                let style = editor.create_style(cx);
+                assert!(has_highlight_underline(editor, &style, cx));
+            })
+            .expect("checked single line editor");
+
+        let full = cx.add_window(|window, cx| {
+            let buffer = MultiBuffer::build_simple("", cx);
+            let mut editor = Editor::new(EditorMode::full(), buffer, None, window, cx);
+            editor.disable_diagnostics(cx);
+            editor
+        });
+        full.update(cx, |editor, window, cx| {
+            editor.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+            let style = editor.create_style(cx);
+            assert!(has_highlight_underline(editor, &style, cx));
+
+            let minimap =
+                editor.initialize_new_minimap(EditorSettings::get_global(cx).minimap, window, cx);
+            let minimap_style = minimap.read(cx).create_style(cx);
+            assert!(!has_highlight_underline(editor, &minimap_style, cx));
+        })
+        .expect("checked full editor and minimap");
+    }
 
     struct MinimapGeometry {
         document_lines: f64,

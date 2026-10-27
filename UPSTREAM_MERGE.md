@@ -45,28 +45,18 @@ git diff --name-only $(git merge-base origin/main upstream/main)..origin/main \
 
 These use normal 3-way merge. Expect occasional conflicts when upstream refactors them; resolve case-by-case.
 
-### Helpers the fork extracted (silent-staleness class)
+### Startup code the app copies (silent-staleness class)
 
-Some functions were MOVED out of `crates/zed` so the Android entry point can reach them without linking the desktop binary crate: `editor::open_local_file`, `editor::open_bundled_file`, `editor::init_bundled_file_actions`, `workspace::open_settings_file`, `workspace::init_settings_file_actions`. Upstream keeps evolving its originals inside `crates/zed`, and because our copies live at different paths the merge produces NO conflict there — the extracted copies silently freeze. On every merge, diff each extracted helper against upstream's version of the original and port body/signature changes by hand (2026-08: `open_local_file` gained a `Option<Task<Result<Entity<Editor>>>>` return; `open_settings_file` was made sequential).
-
-### Action namespace rule
-
-`actions!(zed, [...])` is declared in BOTH `crates/zed/src/zed.rs` and `crates/zed_actions`. One home per action name, ever: an action referenced outside `crates/zed` (workspace/editor registrations, the Android app) must live in `zed_actions`, and `zed.rs` must not re-declare it. Keep-both compiles and then breaks action dispatch at runtime (the registry keys on name strings).
+The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/zed/migrate.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand (see "Syncing a Zed release" in FORK.md).
 
 When you resolve a conflict in one of these, ALSO check if a workaround doc under `crates/gpui_android/docs/workarounds/` covers the affected file: the doc explains why the patch is there, which makes the resolution obvious.
 
-## Merge driver setup (one-time, per clone)
+## Merge driver
 
-`.gitattributes` declares `merge=ours` for owned files. Git needs the `ours` driver registered in your local config:
-
-```sh
-git config merge.ours.driver true
-```
-
-Without that, `merge=ours` is silently ignored and conflicts on identity files re-appear. Verify with:
+`.gitattributes` declares `merge=ours` for owned files. Enable the `ours` driver only for the upstream merge command itself, never in your git config: with it on, rebases, cherry-picks and other merges silently keep one side of those files (see "The `ours` merge driver" in FORK.md):
 
 ```sh
-git config --get merge.ours.driver  # should print: true
+git -c merge.ours.driver=true merge vX.Y.Z
 ```
 
 ## Performing an upstream merge
@@ -74,14 +64,15 @@ git config --get merge.ours.driver  # should print: true
 ```sh
 git fetch upstream main
 git checkout -b upstream-sync-$(date +%Y%m%d)
-git merge upstream/main
+git -c merge.ours.driver=true merge upstream/main
 # expected:
 #   - automatic merges on most files
 #   - automatic ours-merge on identity files (no prompt)
-#   - modify/delete conflicts on upstream CI/legal/nix we deleted: `git rm` them in bulk.
-#     ALSO sweep for files upstream ADDED under .github/workflows, .cloudflare/, nix/,
-#     legal/ since the merge-base — they merge cleanly as additions and must be removed
-#     by hand (merge=ours can't help; git never invokes merge drivers for adds/deletes).
+#   - modify/delete conflicts on upstream GitHub workflows we deleted: `git rm` them in bulk.
+#     ALSO sweep for files upstream ADDED under .github/ (workflows, actions, renovate.json)
+#     since the merge-base — they merge cleanly as additions and must be removed by hand
+#     (merge=ours can't help; git never invokes merge drivers for adds/deletes). The fork
+#     keeps every other upstream file, even ones the Android build doesn't use.
 #   - 3-way conflicts on the modified upstream files, resolve manually
 
 cargo check --workspace          # gate 1: desktop

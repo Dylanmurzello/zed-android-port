@@ -78,10 +78,16 @@ tasks.register<Exec>("buildZdExec") {
         "26",
         "build",
         "--release",
+        "--locked",
         "-p",
         "zdroid_runtime",
         "--bin",
         "zd-exec",
+        // Zed's release profile keeps limited debug info, which made up
+        // about 15 MB of this 18.7 MB helper. The app copies it out of the
+        // APK and compares it with the installed copy on every launch.
+        "--config",
+        "profile.release.strip=\"debuginfo\"",
     )
 
     // Honor whatever the developer's `cargo ndk` lib build uses.
@@ -151,6 +157,7 @@ tasks.register<Exec>("buildAskpassHelper") {
         "26",
         "build",
         "--release",
+        "--locked",
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
@@ -261,6 +268,12 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
+            // Strip the native libraries in the APK, but keep their symbol
+            // tables in build/outputs/native-debug-symbols for symbolizing
+            // profiles and crashes. CI publishes the file with each build.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -269,7 +282,12 @@ android {
 }
 
 dependencies {
-    implementation("androidx.games:games-activity:3.0.5")
+    // android-activity's native GameActivity code is version 4.4 and
+    // supports the 4.0 Java side. 4.4.0's Java side attaches input listeners
+    // to its SurfaceView, which send captured mouse and trackpad events
+    // through native code that leaks them, and it focuses that SurfaceView
+    // on every window focus change, away from the IME host.
+    implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
     // ActivityResultLauncher / ActivityResultContracts for SAF picker.

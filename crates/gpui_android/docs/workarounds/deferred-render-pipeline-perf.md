@@ -38,9 +38,10 @@ without CPU compositing.
 - **Item 4 (FrameMetrics-class instrumentation)**: New
   `crates/gpui_android/src/frame_timing.rs` records per-frame
   `vsync_interval` / `vsync_to_paint` / `paint_duration`, logs
-  P50/P95/P99/max every 240 frames (~2-4 seconds). Cheaper than the
-  Java `Window.addOnFrameMetricsAvailableListener` JNI bridge that
-  this doc originally sketched, because our renderer bypasses the
+  P50/P95/P99/max every 240 frames (~2-4 seconds) at debug level;
+  turn it on with `"log": {"gpui_android": "debug"}` in settings.
+  Cheaper than the Java `Window.addOnFrameMetricsAvailableListener` JNI
+  bridge that this doc originally sketched, because our renderer bypasses the
   View tree anyway so Java FrameMetrics wouldn't capture our actual
   draw — Choreographer-callback-relative timing measures what we
   actually want. Sample baseline on Tab S9 at 120Hz active state:
@@ -52,10 +53,10 @@ without CPU compositing.
   `ALOOPER_POLL_CALLBACK` (which it documents shouldn't happen)
   whenever our Choreographer FD callback dispatches — i.e. every
   vsync, by design. It's not an extra wake-up, it's the one we want.
-  Silenced via `env_logger` filter in `lib.rs`:
-  `"info,android_activity::activity_impl=off"`. Saves ~12ms/sec of
-  CPU spent in the logcat write path and removes 120 lines/sec of
-  log spam. Real frame-pacing tail (p99=20ms+) comes from occasional
+  Silenced in `examples/zed_android/src/logging.rs`
+  (`SPURIOUS_VSYNC_LOG_MODULE`), before both logcat and `Zed.log`.
+  Saves ~12ms/sec of CPU spent in the logcat write path and removes
+  120 lines/sec of log spam. Real frame-pacing tail (p99=20ms+) comes from occasional
   long paints, not wakes — see the frame_timing samples above.
 
 ## I/O integration started (2026-05-13)
@@ -82,10 +83,12 @@ mouse / stylus / trackpad should feel desktop-class, not VNC-tier.
   6px. Double-click in the editor on a hardware mouse should now
   feel ~200ms faster.
 - **Verification log**: `touch::next_click_count` logs
-  `multi_click: source=… count=N window=… slop=…` whenever count > 1.
-  Plug in a Bluetooth mouse, double-click a word in the editor, then
-  `adb logcat -s zed_android | grep multi_click`. Expected output
-  for mouse: `source=Mouse count=2 window=300ms slop=3 button=Left`.
+  `multi_click: source=… count=N window=… slop=…` at debug level
+  whenever count > 1. Turn on `"log": {"gpui_android": "debug"}`,
+  plug in a Bluetooth mouse, double-click a word in the editor, then
+  look for `multi_click` in `zed: open log`; logcat stops at info.
+  Expected output for mouse:
+  `source=Mouse count=2 window=300ms slop=3 button=Left`.
   Synthetic `adb shell input mouse tap` works but the device must be
   unlocked + Zdroid focused; locked-device synthetic taps go to the
   lockscreen window, not us. Real-mouse verification on device still

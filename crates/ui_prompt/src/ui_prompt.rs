@@ -19,7 +19,15 @@ pub fn init(cx: &mut App) {
 
 fn process_settings(cx: &mut App) {
     let settings = WorkspaceSettings::get_global(cx);
-    if settings.use_system_prompts && cfg!(not(any(target_os = "linux", target_os = "freebsd"))) {
+    // gpui_android has no native dialogs, so like Linux, Android always
+    // uses Zed's.
+    if settings.use_system_prompts
+        && cfg!(not(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "android"
+        )))
+    {
         cx.reset_prompt_builder();
     } else {
         cx.set_prompt_builder(zed_prompt_renderer);

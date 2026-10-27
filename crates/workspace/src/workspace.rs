@@ -159,9 +159,9 @@ use util::{
 };
 use uuid::Uuid;
 pub use workspace_settings::{
-    AccessibleMode, AndroidInputSettings, AutosaveSetting, BottomDockLayout,
-    EncodingDisplayOptions, FocusFollowsMouse, RestoreOnStartupBehavior, StatusBarSettings,
-    TabBarSettings, WorkspaceSettings, closing_last_window_quits_app, observe_accessible_mode,
+    AccessibleMode, AutosaveSetting, BottomDockLayout, EncodingDisplayOptions, FocusFollowsMouse,
+    RestoreOnStartupBehavior, StatusBarSettings, TabBarSettings, WorkspaceSettings,
+    closing_last_window_quits_app, observe_accessible_mode,
 };
 use zed_actions::{Spawn, feedback::FileBugReport, theme::ToggleMode};
 
@@ -478,13 +478,6 @@ actions!(
         ToggleRightDock,
         /// Toggles zoom on the active pane.
         ToggleZoom,
-        /// Toggles the Android on-screen keyboard. No-op on other
-        /// platforms. The pane tab bar exposes this as a button on
-        /// Android because the IME auto-show logic suppresses
-        /// further auto-shows once the user dismisses the keyboard,
-        /// so a manual toggle is needed to bring it back without
-        /// re-focusing a different text target.
-        ToggleSoftKeyboard,
         /// Toggles maximizing the active editor pane within the center area,
         /// hiding other split panes but leaving docks/panels unaffected.
         ToggleEditorZoom,
@@ -5980,9 +5973,9 @@ impl Workspace {
                 return;
             };
             match dock.position() {
-                DockPosition::Left => self.resize_left_dock(panel_size + amount, false, window, cx),
-                DockPosition::Bottom => self.resize_bottom_dock(panel_size + amount, false, window, cx),
-                DockPosition::Right => self.resize_right_dock(panel_size + amount, false, window, cx),
+                DockPosition::Left => self.resize_left_dock(panel_size + amount, window, cx),
+                DockPosition::Bottom => self.resize_bottom_dock(panel_size + amount, window, cx),
+                DockPosition::Right => self.resize_right_dock(panel_size + amount, window, cx),
             }
         } else {
             self.center
@@ -8984,19 +8977,46 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match dock_pos {
-            DockPosition::Left => self.resize_left_dock(new_size, false, window, cx),
-            DockPosition::Right => self.resize_right_dock(new_size, false, window, cx),
-            DockPosition::Bottom => self.resize_bottom_dock(new_size, false, window, cx),
+            DockPosition::Left => self.resize_left_dock(new_size, window, cx),
+            DockPosition::Right => self.resize_right_dock(new_size, window, cx),
+            DockPosition::Bottom => self.resize_bottom_dock(new_size, window, cx),
         }
     }
 
-    fn resize_left_dock(
+    /// Android's touch drag on a dock edge calls this too, because gpui's
+    /// drag and drop, which calls it for the mouse, doesn't follow touches.
+    pub(crate) fn drag_dock_edge(
         &mut self,
-        new_size: Pixels,
-        during_drag: bool,
+        dock: DockPosition,
+        position: Point<Pixels>,
         window: &mut Window,
-        cx: &mut App,
+        cx: &mut Context<Self>,
     ) {
+        // As the mouse path, which doesn't offer the drag while a panel is
+        // zoomed.
+        if self.zoomed.is_some() {
+            return;
+        }
+        if self.previous_dock_drag_coordinates == Some(position) {
+            return;
+        }
+        self.previous_dock_drag_coordinates = Some(position);
+
+        match dock {
+            DockPosition::Left => {
+                self.resize_left_dock(position.x - self.bounds.left(), window, cx);
+            }
+            DockPosition::Right => {
+                self.resize_right_dock(self.bounds.right() - position.x, window, cx);
+            }
+            DockPosition::Bottom => {
+                self.resize_bottom_dock(self.bounds.bottom() - position.y, window, cx);
+            }
+        };
+        self.serialize_workspace(window, cx);
+    }
+
+    fn resize_left_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let workspace_width = self.bounds.size.width;
         let mut size = new_size.min(workspace_width - RESIZE_HANDLE_SIZE);
 
@@ -9011,17 +9031,11 @@ impl Workspace {
 
         let flex_grow = self.dock_flex_for_size(DockPosition::Left, size, window, cx);
         self.left_dock.update(cx, |left_dock, cx| {
-            left_dock.resize_panel_sizes(Some(size), flex_grow, during_drag, window, cx);
+            left_dock.resize_panel_sizes(Some(size), flex_grow, window, cx);
         });
     }
 
-    fn resize_right_dock(
-        &mut self,
-        new_size: Pixels,
-        during_drag: bool,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn resize_right_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let workspace_width = self.bounds.size.width;
         let mut size = new_size.min(workspace_width - RESIZE_HANDLE_SIZE);
         self.left_dock.read_with(cx, |left_dock, cx| {
@@ -9034,20 +9048,14 @@ impl Workspace {
         });
         let flex_grow = self.dock_flex_for_size(DockPosition::Right, size, window, cx);
         self.right_dock.update(cx, |right_dock, cx| {
-            right_dock.resize_panel_sizes(Some(size), flex_grow, during_drag, window, cx);
+            right_dock.resize_panel_sizes(Some(size), flex_grow, window, cx);
         });
     }
 
-    fn resize_bottom_dock(
-        &mut self,
-        new_size: Pixels,
-        during_drag: bool,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn resize_bottom_dock(&mut self, new_size: Pixels, window: &mut Window, cx: &mut App) {
         let size = new_size.min(self.bounds.bottom() - RESIZE_HANDLE_SIZE - self.bounds.top());
         self.bottom_dock.update(cx, |bottom_dock, cx| {
-            bottom_dock.resize_panel_sizes(Some(size), None, during_drag, window, cx);
+            bottom_dock.resize_panel_sizes(Some(size), None, window, cx);
         });
     }
 
@@ -9114,8 +9122,20 @@ impl Workspace {
                     .remote_connection_options(cx)
                     .map(RemoteHostLocation::from);
                 let worktree_store = project.worktree_store().downgrade();
+                let home_dir_task = if project.is_local() {
+                    Task::ready(std::env::home_dir())
+                } else {
+                    let resolve_task = project.resolve_abs_path("~", cx);
+                    cx.spawn(async |_, _| {
+                        let resolved_path = resolve_task
+                            .await
+                            .and_then(|path| path.into_abs_path())
+                            .map(PathBuf::from);
+                        resolved_path
+                    })
+                };
                 self.toggle_modal(window, cx, |window, cx| {
-                    SecurityModal::new(worktree_store, remote_host, window, cx)
+                    SecurityModal::new(worktree_store, remote_host, home_dir_task, window, cx)
                 });
             }
         }
@@ -9755,43 +9775,13 @@ impl Render for Workspace {
                             .when(self.zoomed.is_none(), |this| {
                                 this.on_drag_move(cx.listener(
                                     move |workspace, e: &DragMoveEvent<DraggedDock>, window, cx| {
-                                        if workspace.previous_dock_drag_coordinates
-                                            != Some(e.event.position)
-                                        {
-                                            workspace.previous_dock_drag_coordinates =
-                                                Some(e.event.position);
-
-                                            match e.drag(cx).0 {
-                                                DockPosition::Left => {
-                                                    workspace.resize_left_dock(
-                                                        e.event.position.x
-                                                            - workspace.bounds.left(),
-                                                        true,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                                DockPosition::Right => {
-                                                    workspace.resize_right_dock(
-                                                        workspace.bounds.right()
-                                                            - e.event.position.x,
-                                                        true,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                                DockPosition::Bottom => {
-                                                    workspace.resize_bottom_dock(
-                                                        workspace.bounds.bottom()
-                                                            - e.event.position.y,
-                                                        true,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            };
-                                            workspace.serialize_workspace(window, cx);
-                                        }
+                                        let dock = e.drag(cx).0;
+                                        workspace.drag_dock_edge(
+                                            dock,
+                                            e.event.position,
+                                            window,
+                                            cx,
+                                        );
                                     },
                                 ))
                             })
@@ -12518,97 +12508,6 @@ fn load_legacy_panel_size(
         .detach_and_log_err(cx);
 
     Some(size)
-}
-
-/// Open one of the user-config JSON files in the active workspace,
-/// creating it with `default_content` if it doesn't yet exist on disk.
-/// Used for `OpenSettingsFile` (`paths::settings_file()`) and
-/// `OpenKeymapFile` (`paths::keymap_file()`) — both follow the same
-/// shape: a known absolute path, a default-content thunk for the
-/// first-time-creation case, and a worktree-creation step that
-/// dedicates one worktree to the config dir so LSP servers don't
-/// thrash on every settings/keymap close+open.
-///
-/// Moved here from `crates/zed/src/zed.rs` so other entrypoints (like
-/// the Android port at `crates/gpui_android/examples/zed_android`) can
-/// reach it without pulling the full `zed` binary crate as a dep
-/// (which transitively brings livekit / call / agent_ui — all
-/// Android-incompatible).
-pub fn open_settings_file(
-    abs_path: &'static std::path::Path,
-    default_content: impl FnOnce() -> Rope + Send + 'static,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) {
-    cx.spawn_in(window, async move |workspace, cx| {
-        workspace
-            .update_in(cx, |workspace, window, cx| {
-                workspace.with_local_or_wsl_workspace(window, cx, move |workspace, window, cx| {
-                    let project = workspace.project().clone();
-
-                    cx.spawn_in(window, async move |workspace, cx| {
-                        let config_dir = project
-                            .update(cx, |project, cx| {
-                                project.try_windows_path_to_wsl(paths::config_dir().as_path(), cx)
-                            })
-                            .await?;
-                        // Set up a dedicated worktree for settings, since
-                        // otherwise we're dropping and re-starting LSP servers
-                        // for each file inside on every settings file
-                        // close/open
-
-                        // TODO: Do note that all other external files (e.g.
-                        // drag and drop from OS) still have their worktrees
-                        // released on file close, causing LSP servers'
-                        // restarts.
-                        let (_worktree, _) = project
-                            .update(cx, |project, cx| {
-                                project.find_or_create_worktree(&config_dir, false, cx)
-                            })
-                            .await?;
-
-                        workspace
-                            .update_in(cx, |_, window, cx| {
-                                create_and_open_local_file(abs_path, window, cx, default_content)
-                            })?
-                            .await?;
-                        anyhow::Ok(())
-                    })
-                })
-            })?
-            .await?
-            .await?;
-        anyhow::Ok(())
-    })
-    .detach_and_log_err(cx);
-}
-
-/// Register handlers for the file-variant settings actions (Open Settings
-/// File, Open Keymap File). Both production zed::init and any
-/// alternative entrypoint (Android port) call this so the dispatch
-/// surface stays identical. Idempotent at the cx.on_action level —
-/// re-registering replaces the previous handler.
-pub fn init_settings_file_actions(cx: &mut App) {
-    cx.on_action(|_: &zed_actions::OpenKeymapFile, cx| {
-        with_active_or_new_workspace(cx, |_, window, cx| {
-            open_settings_file(
-                paths::keymap_file(),
-                || settings::initial_keymap_content().as_ref().into(),
-                window,
-                cx,
-            );
-        });
-    });
-    cx.on_action(|_: &zed_actions::OpenSettingsFile, cx| {
-        with_active_or_new_workspace(cx, |_, window, cx| {
-            open_settings_file(
-                paths::settings_file(),
-                || settings::initial_user_settings_content().as_ref().into(),
-                window,
-                cx,
-            );
-        });
-    });
 }
 
 #[cfg(test)]
@@ -16078,7 +15977,7 @@ mod tests {
             });
 
             workspace.update_in(cx, |workspace, window, cx| {
-                workspace.resize_left_dock(px(350.), false, window, cx);
+                workspace.resize_left_dock(px(350.), window, cx);
             });
 
             cx.run_until_parked();
@@ -16139,7 +16038,7 @@ mod tests {
             });
 
             workspace.update_in(cx, |workspace, window, cx| {
-                workspace.resize_right_dock(px(300.), false, window, cx);
+                workspace.resize_right_dock(px(300.), window, cx);
             });
 
             cx.run_until_parked();
@@ -16205,7 +16104,7 @@ mod tests {
         });
 
         workspace.update_in(cx, |workspace, window, cx| {
-            workspace.resize_left_dock(px(350.), false, window, cx);
+            workspace.resize_left_dock(px(350.), window, cx);
         });
 
         cx.run_until_parked();
@@ -16285,7 +16184,7 @@ mod tests {
                 dock.activate_panel(0, window, cx);
                 dock.set_open(true, window, cx);
             });
-            workspace.resize_left_dock(px(400.), false, window, cx);
+            workspace.resize_left_dock(px(400.), window, cx);
             (first_panel, second_panel)
         });
 
@@ -16304,7 +16203,7 @@ mod tests {
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.activate_panel(1, window, cx);
             });
-            workspace.resize_left_dock(px(450.), false, window, cx);
+            workspace.resize_left_dock(px(450.), window, cx);
         });
         cx.dispatch_action(ResetOpenDocksSize);
 
@@ -16320,7 +16219,7 @@ mod tests {
         first_panel.update(cx, |panel, _| panel.flexible = true);
         second_panel.update(cx, |panel, _| panel.flexible = true);
         workspace.update_in(cx, |workspace, window, cx| {
-            workspace.resize_left_dock(px(350.), false, window, cx);
+            workspace.resize_left_dock(px(350.), window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.reset_panel_sizes(window, cx);
             });
@@ -16351,7 +16250,7 @@ mod tests {
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.activate_panel(0, window, cx);
             });
-            workspace.resize_left_dock(px(400.), false, window, cx);
+            workspace.resize_left_dock(px(400.), window, cx);
             workspace.left_dock().update(cx, |dock, cx| {
                 dock.reset_panel_sizes(window, cx);
             });
@@ -16428,7 +16327,7 @@ mod tests {
                 dock.set_open(true, window, cx);
             });
 
-            workspace.resize_left_dock(px(450.0), false, window, cx);
+            workspace.resize_left_dock(px(450.0), window, cx);
 
             let dock = workspace.left_dock().read(cx);
             let fixed_panel_a_size = dock.stored_panel_size(&fixed_panel_a, window, cx);
@@ -16474,7 +16373,7 @@ mod tests {
                 dock.activate_panel(0, window, cx);
             });
 
-            workspace.resize_left_dock(px(450.), false, window, cx);
+            workspace.resize_left_dock(px(450.), window, cx);
         });
 
         cx.dispatch_action(ResetOpenDocksSize);
@@ -16916,7 +16815,7 @@ mod tests {
                 Some(px(300.))
             );
 
-            workspace.resize_left_dock(px(1337.), false, window, cx);
+            workspace.resize_left_dock(px(1337.), window, cx);
             assert_eq!(
                 workspace
                     .right_dock()

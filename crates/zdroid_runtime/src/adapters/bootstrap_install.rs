@@ -16,8 +16,10 @@ use std::fs;
 use std::io::{Cursor, Read, Write as _};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -60,35 +62,67 @@ const SYMLINKS_DELIM: &str = "←";
 /// the latest release tag at download time.
 const VERSION_FILE: &str = ".bootstrap-version";
 
+/// Set while an install runs. Two installs at once would extract into the
+/// same staging directory, and the runtime picker can start a second one
+/// from a reopened window while the first is still downloading.
+static INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct InstallRunning;
+
+impl Drop for InstallRunning {
+    fn drop(&mut self) {
+        INSTALL_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+/// Without these, a dropped connection hangs the install. The read timeout
+/// applies to each read, so a slow download of the whole archive is fine.
+fn http_agent(redirects: u32) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .redirects(redirects)
+        .timeout_connect(Duration::from_secs(30))
+        .timeout_read(Duration::from_secs(60))
+        .build()
+}
+
+/// ureq's default.
+const MAX_REDIRECTS: u32 = 5;
+
 /// Download the latest release zip + extract into `<prefix>` atomically.
 /// Idempotent against `<prefix>/.bootstrap-version` — if the on-disk
-/// sentinel matches the latest tag, the function returns Ok without
-/// touching the network or filesystem beyond a tag resolve.
+/// sentinel matches the latest tag and the prefix still has its shell, the
+/// function returns Ok without touching the network or filesystem beyond a
+/// tag resolve.
 pub fn install_latest(
     prefix: &Path,
     release_repo: &str,
     progress: &mut dyn ProgressSink,
 ) -> Result<()> {
+    if INSTALL_RUNNING.swap(true, Ordering::AcqRel) {
+        bail!("a bootstrap install is already running");
+    }
+    let _install_running = InstallRunning;
+
     progress.step("Resolving latest bootstrap release");
     let tag_name = resolve_latest_tag(release_repo)
         .with_context(|| format!("resolve latest release tag for {release_repo}"))?;
     log::info!("bootstrap_install: latest release tag = {tag_name}");
 
     let version_file = prefix.join(VERSION_FILE);
+    // The sentinel is a dotfile, so clearing the prefix with `rm -rf *`
+    // leaves it behind.
     if let Ok(existing) = fs::read_to_string(&version_file)
         && existing.trim() == tag_name
+        && prefix.join("bin/bash").is_file()
     {
-        log::info!(
-            "bootstrap_install: $PREFIX already at {tag_name}, skipping extract"
-        );
+        log::info!("bootstrap_install: $PREFIX already at {tag_name}, skipping extract");
         progress.step(&format!("Bootstrap {tag_name} already installed"));
         return Ok(());
     }
 
     progress.step(&format!("Downloading bootstrap {tag_name}"));
-    let zip_bytes = download_bootstrap_asset(release_repo, &tag_name).with_context(|| {
-        format!("download bootstrap asset for {release_repo} tag {tag_name}")
-    })?;
+    let zip_bytes = download_bootstrap_asset(release_repo, &tag_name)
+        .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
     log::info!(
         "bootstrap_install: downloaded {} bytes for tag {}",
         zip_bytes.len(),
@@ -128,7 +162,7 @@ pub fn install_latest(
 /// works even when the release has zero assets uploaded.
 fn resolve_latest_tag(release_repo: &str) -> Result<String> {
     let url = format!("https://github.com/{release_repo}/releases/latest");
-    let agent_no_redirect = ureq::builder().redirects(0).build();
+    let agent_no_redirect = http_agent(0);
     let head = agent_no_redirect
         .get(&url)
         .set("User-Agent", "zdroid-bootstrap-installer")
@@ -138,19 +172,14 @@ fn resolve_latest_tag(release_repo: &str) -> Result<String> {
         Err(ureq::Error::Status(_, resp)) => resp,
         Err(e) => return Err(anyhow!("HTTP GET {url}: {e}")),
     };
-    let location = resp.header("Location").ok_or_else(|| {
-        anyhow!(
-            "no Location header on {url}; got status {}",
-            resp.status()
-        )
-    })?;
+    let location = resp
+        .header("Location")
+        .ok_or_else(|| anyhow!("no Location header on {url}; got status {}", resp.status()))?;
     let marker = "/releases/tag/";
     let after = location.find(marker).map(|i| &location[i + marker.len()..]);
     let tag = after
         .and_then(|s| s.split('/').next().filter(|t| !t.is_empty()))
-        .ok_or_else(|| {
-            anyhow!("expected `/releases/tag/<tag>` in Location {location}")
-        })?;
+        .ok_or_else(|| anyhow!("expected `/releases/tag/<tag>` in Location {location}"))?;
     Ok(tag.to_owned())
 }
 
@@ -216,7 +245,10 @@ fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
     };
     let actual = format!("{:x}", Sha256::digest(bytes));
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(anyhow!("bootstrap asset SHA-256 mismatch for {}", asset.name));
+        return Err(anyhow!(
+            "bootstrap asset SHA-256 mismatch for {}",
+            asset.name
+        ));
     }
     log::info!(
         "bootstrap_install: verified {} ({} bytes, sha256:{actual})",
@@ -227,7 +259,8 @@ fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
 }
 
 fn fetch_asset_bytes(url: &str) -> Result<Vec<u8>> {
-    let resp = ureq::get(url)
+    let resp = http_agent(MAX_REDIRECTS)
+        .get(url)
         .set("User-Agent", "zdroid-bootstrap-installer")
         .call()
         .map_err(|e| anyhow!("HTTP GET {url}: {e}"))?;
@@ -269,7 +302,8 @@ struct GitHubAsset {
 
 fn find_release_asset(release_repo: &str, tag: &str) -> Result<GitHubAsset> {
     let url = format!("https://api.github.com/repos/{release_repo}/releases/tags/{tag}");
-    let release: GitHubRelease = ureq::get(&url)
+    let release: GitHubRelease = http_agent(MAX_REDIRECTS)
+        .get(&url)
         .set("User-Agent", "zdroid-bootstrap-installer")
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -313,14 +347,34 @@ fn extract_into_staging(zip_bytes: &[u8], staging: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Files in the prefix that hold the user's settings rather than
+/// bootstrap content. The swap replaces the whole prefix, so they're
+/// copied into the staging tree first.
+const PRESERVED_PREFIX_FILES: &[&str] = &["etc/zd-runtime.toml"];
+
 fn swap_staging_into_prefix(staging: &Path, prefix: &Path) -> Result<()> {
+    for relative_path in PRESERVED_PREFIX_FILES {
+        let source = prefix.join(relative_path);
+        if !source.is_file() {
+            continue;
+        }
+        let destination = staging.join(relative_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        fs::copy(&source, &destination)
+            .with_context(|| format!("keep {} across the bootstrap install", source.display()))?;
+    }
     if prefix.exists() {
         fs::remove_dir_all(prefix)
             .with_context(|| format!("wipe old prefix at {}", prefix.display()))?;
     }
-    fs::rename(staging, prefix).with_context(|| {
-        format!("rename {} -> {}", staging.display(), prefix.display())
-    })?;
+    fs::rename(staging, prefix)
+        .with_context(|| format!("rename {} -> {}", staging.display(), prefix.display()))?;
+    // TMPDIR for this runtime: SSH's askpass socket and other temp files go
+    // there, and the app only creates it at startup.
+    let temp_dir = prefix.join("tmp");
+    fs::create_dir_all(&temp_dir).with_context(|| format!("create {}", temp_dir.display()))?;
     Ok(())
 }
 
@@ -394,8 +448,7 @@ fn extract_entries<R: Read + std::io::Seek>(
         std::io::copy(&mut entry, &mut out)?;
 
         if let Some(mode) = entry_mode {
-            let owner_only =
-                (mode & 0o700) | if mode & 0o100 != 0 { 0o700 } else { 0o600 };
+            let owner_only = (mode & 0o700) | if mode & 0o100 != 0 { 0o700 } else { 0o600 };
             let mut perms = fs::metadata(&dest)?.permissions();
             perms.set_mode(owner_only);
             fs::set_permissions(&dest, perms)?;
@@ -525,6 +578,32 @@ mod tests {
         let symlinks = vec![("target".to_owned(), "./usr/bin/link".to_owned())];
         assert!(replay_symlinks(staging.path(), &symlinks).is_err());
         assert!(!outside.path().join("bin").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn swapping_in_a_new_prefix_keeps_the_runtime_choice() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let prefix = root.path().join("usr");
+        let staging = root.path().join("staging");
+        fs::create_dir_all(prefix.join("etc"))?;
+        fs::write(
+            prefix.join("etc/zd-runtime.toml"),
+            "[runtime]\nkind = \"chroot\"\n",
+        )?;
+        fs::write(prefix.join("old-file"), "old")?;
+        fs::create_dir_all(staging.join("bin"))?;
+        fs::write(staging.join("bin/sh"), "new")?;
+
+        swap_staging_into_prefix(&staging, &prefix)?;
+
+        assert_eq!(
+            fs::read_to_string(prefix.join("etc/zd-runtime.toml"))?,
+            "[runtime]\nkind = \"chroot\"\n"
+        );
+        assert_eq!(fs::read_to_string(prefix.join("bin/sh"))?, "new");
+        assert!(!prefix.join("old-file").exists());
+        assert!(!staging.exists());
         Ok(())
     }
 

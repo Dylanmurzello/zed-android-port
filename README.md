@@ -193,7 +193,7 @@ You'll need:
 - [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) (`cargo install cargo-ndk`)
 - Android NDK r27 (`sdkmanager "ndk;27.0.12077973"`)
 - Gradle 8+, `adb` on `$PATH`
-- A device with USB debugging on
+- A device with USB or wireless debugging on (see "Debugging on the tablet" in [FORK.md](FORK.md))
 
 ```sh
 cd crates/gpui_android/examples/zed_android
@@ -215,7 +215,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 ## <img src="https://api.iconify.design/lucide:tablet-smartphone.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Tested on
 
-Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver. Compiles for any aarch64 Android 9+ with Vulkan 1.1, but only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
+Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver, and release builds are compiled for its CPU. Other high-end devices from 2022 on should run them too (Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later), but older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Android 9+ and Vulkan 1.1 are required too, and only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
 
 A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized; see [`docs/workarounds/deferred-phone-form-factor-polish.md`](crates/gpui_android/docs/workarounds/deferred-phone-form-factor-polish.md).
 

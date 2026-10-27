@@ -79,7 +79,7 @@ The chroot adapter already has health-check hints in `RuntimeProvider::health_ch
 **Related tasks already in the live list:**
 
 - #33 — wire settings UI for adapter selection
-- #34 — first-launch onboarding modal (now landed as the inline basics_page section, but install-state UX is still TBD)
+- #34 — first-launch onboarding modal (now landed as the onboarding page's runtime section, `runtime_picker::render_onboarding_section`, but install-state UX is still TBD)
 - #36 — JNI Intent bridge for external Termux adapter
 - #37 — bootstrap install/uninstall (GitHub releases download)
 
@@ -153,57 +153,63 @@ Visible workaround for users today: there isn't one — search filter is effecti
 
 **Scope estimate:** rough 2-3 days end-to-end. Cargo dep additions and `agent_ui::init` are short. The real time sink is debugging the side effects of bringing the agent surface online for the first time on Android (focus / window routing, settings store observers that assume desktop platforms, the LLM provider registration path on a platform that has historically been mock-only). Pair with [[project-zed-android-port]] phase planning when picking this up.
 
-## Soft keyboard / IME bridge (touch-only users blocked)
-
-**Repro:** open Zdroid on a device without a hardware keyboard. Open a project, tap into an editor. Nothing happens. No keyboard appears, no way to type. Hardware-keyboard flow works fully; touch-only flow is blocked at "I cannot enter text." First organic external feature request was about this.
-
-**Diagnosis:** hardware key path is wired end-to-end in `crates/gpui_android/src/events/keyboard.rs` (translates Android `KeyEvent` to gpui `PlatformInput::KeyDown`). The hook for IME exists on the gpui side: `crates/gpui_android/src/window.rs` already implements `set_input_handler` / `take_input_handler` (lines 524-530) and a route at line 376-382 inserts text into the active `PlatformInputHandler` for any `PlatformInput::KeyDown` with `key_char` set. Missing is the Android side: nothing calls `InputMethodManager.showSoftInput()`, nothing provides an `InputConnection`, nothing routes IME callbacks back to gpui.
-
-**Failed approach (2026-05-16, reverted at commit-level, captured here so the next attempt does not repeat):**
-
-Tried wiring a `BaseInputConnection` on a 1×1 invisible `View` subclass (`ZdroidInputView`) attached as a sibling to GameActivity's SurfaceView under `decorView`. The view overrode `onCheckIsTextEditor()` to return true and `onCreateInputConnection(EditorInfo)` to return a custom `BaseInputConnection` with `IME_FLAG_NO_EXTRACT_UI | IME_FLAG_NO_FULLSCREEN | TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_MULTI_LINE | TYPE_TEXT_FLAG_NO_SUGGESTIONS`. JNI bridge in a `crates/gpui_android/src/ime.rs` module called `MainActivity.showSoftKeyboard()` / `hideSoftKeyboard()` from `set_input_handler` / `take_input_handler`. Manifest got `android:windowSoftInputMode="adjustNothing"` to stop resize-on-IME.
-
-Failure modes observed on device:
-
-1. **Launcher dock visibly flashed through the SurfaceView during IME slide-in.** Still happened with `adjustNothing`. Suggests the SurfaceView is being detached or its visibility briefly compromised by the IME's window-level effects, not by manifest resize behavior. Root cause was not the resize.
-2. **Wild glitching in DeX freeform / windowed mode.** The IME window placement conflicts with the app's freeform window placement; layout shifts incoherently. The IME wants the bottom edge of the screen, the app wants the bottom edge of its freeform window, and the system arbitrates badly.
-3. **Samsung Keyboard's floating-keyboard option crashed or closed when activated.** The IME's floating-window anchor became unstable, suggesting the InputConnection view was being attached / re-attached during the IME show cycle.
-4. **Critical: `commitText` / `sendKeyEvent` callbacks never fired** even though the keyboard was visible and the IME's predictive bar showed the typed characters (so the IME was registering keystrokes internally). This means the IME was not routing to our `BaseInputConnection` at all. Possible cause: GameActivity's SurfaceView is the actual focus target the IME picks, and our 1×1 sibling view's `requestFocus` is overridden / lost by the time the IME negotiates `InputConnection`.
-
-The architectural mistake was treating GameActivity's SurfaceView as opaque and adding a sibling view in parallel. GameActivity owns the focus and input model end-to-end; bolting on a parallel `InputConnection` provider does not compose. The IME ends up targeting either GameActivity's default fallback connection or no connection at all.
-
-**Recommended path forward: use AGDK's `GameTextInput`.**
-
-The `androidx.games:games-activity:3.0.5` dependency we already declare ships `GameTextInput`, an official Google-supported native IME bridge specifically designed for GameActivity. It manages the `InputConnection` internally against GameActivity's actual focused view, exposes a native callback API (no Kotlin `BaseInputConnection` subclass needed), and coordinates with GameActivity's surface lifecycle correctly so the symptoms above go away by construction.
-
-Key APIs:
-- `GameActivity_setInputConnection()`: install the IME connection against GameActivity's real focus target
-- `GameTextInputState`: struct populated by IME callbacks (commit, composing, selection)
-- `GameActivity_setTextInputState()`: push current cursor / surrounding text to the IME for predictive accuracy
-- `GameActivity_setSoftKeyboardVisibility(bool)`: show / hide
-
-The `android-activity` crate (which we use) wraps a subset of GameActivity APIs. Verify whether it exposes these IME-related symbols; if not, either upstream a wrapper or call via JNI to the GameActivity `getJavaInstance()` object. Avoid building anything that adds a second focusable view to the hierarchy.
-
-**Phasing once the right primitive is picked:**
-
-1. **Phase 1: `GameActivity_setSoftKeyboardVisibility(true)` works.** Editor focus → keyboard appears reliably, no glitch, no dock flash, no freeform incoherence. The InputConnection is managed by AGDK against GameActivity's real SurfaceView focus target. Tests on phone + tablet + DeX.
-2. **Phase 2: GameTextInputState → gpui's PlatformInputHandler.** Subscribe to text-state-change callbacks; on every committed character, call `state.input_handler.replace_text_in_range(None, text)` on the active window. Typing works end-to-end.
-3. **Phase 3: Composing text** for Pinyin / Japanese / Korean IMEs. Wire `GameTextInputState`'s composing region into gpui's marked-text APIs (`replace_and_mark_text_in_range`).
-4. **Phase 4: Selection sync.** Push current Editor cursor / surrounding-text via `GameActivity_setTextInputState` so soft-keyboard predictive suggestions are accurate. Requires gpui Editor to expose surrounding-text-at-cursor.
-
-**Scope estimate:** 3-5 days end-to-end for phases 1+2 (the user-visible v1: "soft keyboard appears, typing works"). Phases 3-4 are polish, can ship in a follow-up.
-
-**Why deferred:** unblocks the touch-only demographic but hardware-keyboard users (the daily-driver case so far) are unaffected. First external feature request named this. Adjacent: see [README's "What doesn't work yet"](README.md) which already lists this as a known gap; the README + this entry need to stay in sync.
-
 ## Other deferred concerns
 
 (add new sections here as they come up; keep each one self-contained with what / why / what's-needed-to-resolve)
+
+## Input review of 2026-10-26: open findings
+
+An audit of `crates/gpui_android`'s input code found 22 problems. These are the ones still open when rechecked on 2026-10-27 (after #41). The first, captured trackpad and mouse events dropping the modifier keys, sat unrecorded until it showed up as "Ctrl+click on a link does nothing"; that is why the rest are listed here. The touch rewrite planned under "Post-2026-08 upstream-merge follow-ups" would fix the touch items (6 to 8) as a side effect.
+
+**Mouse and trackpad**
+
+1. **Double- and triple-click don't work.** `events/mouse.rs::button_up` always reports `click_count: 1`, and Zed reads the click count from the up event (`ClickEvent::click_count`), so double-clicking a project-panel file or a tab does nothing. Under pointer capture, `captured_pointer.rs` also sends 1 on every down. Fix: put the count `ClickTrackState` already tracks on the up event, and have `captured_pointer` call `next_click_count`. Tablet check: with the mouse, double-click a word in the editor and a file in the project panel.
+2. **The wheel scrolls 1 line per notch on the uncaptured path and 3 under capture** (`events/mouse.rs::wheel_scroll` vs `MOUSE_WHEEL_LINES_PER_NOTCH` in `captured_pointer.rs`). Pick one.
+3. **Two-finger trackpad tap under capture has no time limit and checks motion per event.** `TWO_FINGER_TAP_WINDOW` in `captured_pointer.rs` is never read, and the 6 px check compares each move rather than the total, so a slow two-finger scroll can right-click when the fingers lift.
+4. **Gpui is never told when the pointer leaves a window.** `HOVER_EXIT` is dropped (`events.rs`), the hover-status callback is stored but never called, and `is_hovered` returns false, so hover highlights can stay after the pointer leaves.
+5. **S Pen buttons aren't mapped.** `button_from_state` ignores the stylus button bits, so the pen's side button doesn't right-click.
+
+**Touch**
+
+Fingers go to gpui's touch gestures since step 2 of the touch plan below, and step 4 deleted `touch.rs`'s finger state machine, so 6 and 7 are fixed and the finger long press in 8 fires from a timer. A long press outside the editor and the terminal, which claim it, still ends as a tap when the finger lifts.
+
+6. ~~**Starting a scroll or long press can click.** Touch-down sends a mouse down at once, and the gesture ends with a `click_count: 0` mouse up, which gpui still treats as a click. Starting a scroll on a project-panel file can open it, and every scroll moves the editor's caret to where the finger landed. Fix: send the mouse down only once a tap is decided, as `TrackpadTouchState` already does.~~ Fixed: gpui's recognizer sends the mouse down only once a tap is decided.
+7. ~~**A two-finger swipe right-clicks.** `touch.rs` fires the right-click as soon as a second finger lands within 800 ms and 250 px, so most two-finger swipes open the context menu. Fix: fire on lift if the fingers barely moved.~~ Fixed: `TouchFeed` fires on lift if the fingers barely moved.
+8. **Trackpad-mode hold-to-drag fires only on the next move event**, and capture's drag lock releases only on the next finger down; a perfectly still finger never promotes to hold-to-drag. Losing pointer capture isn't reported to Rust either. (The finger long press, which had the same problem, now fires from gpui's timer.)
+
+**Extra windows (Settings and other pop-ups)**
+
+9. **Mouse and stylus input is treated as a finger** when not captured. `ExtraWindowActivity.forwardTouchEvent` sends no source, and `translate_extra_motion_event` sends every touch action to gpui's touch recognizer through `TouchFeed`, so a mouse click there is a tap and a mouse drag scrolls.
+
+**Keyboard and IME**
+
+10. **Hardware keyboards are read with a fixed US table** (`events/keyboard.rs::build_keystroke`, layout `"us"`, `DummyKeyboardMapper`). On a Turkish layout, ğ types `[`. AltGr characters, dead keys and numpad digits don't work. Fix: `AndroidApp::device_key_character_map(device_id)` (`get` with the meta state, `get_dead_char`) in the main window, and `KeyEvent.getUnicodeChar(metaState)` from Kotlin for extra windows. Tablet check: switch the keyboard cover's layout to Turkish and type ğüşıöç.
+11. **The IME doesn't know where the caret is.** `update_ime_position` is empty and `ZdroidInputConnection` doesn't implement `requestCursorUpdates`, so floating keyboards and handwriting input can't position themselves.
+12. **InputConnection contract gaps:** `setSelection`, `setComposingRegion` and `performContextMenuAction` aren't implemented, `deleteSurroundingText` also deletes the selection, and `newCursorPosition` is ignored.
+13. **The keyboard still hides by polling** `input_handler.is_some()`, with a `text_for_range(0..1)` probe and a selection poll, instead of reacting to gpui's `text_input_state_changed`. (Text fields now show it through `request_virtual_keyboard`; see `crates/gpui_android/docs/ahead-of-upstream.md`.)
+14. **IME callbacks call into the editor while holding a mutable borrow of the window state** (`ime.rs`, `platform.rs`). Nothing triggers it today, but a re-entrant call would panic.
+
+**Code health**
+
+15. Constants duplicated between `events/mouse.rs` and `captured_pointer.rs`; unchecked indexing in `touch.rs`; `lock().unwrap()` in `ime.rs`, `captured_pointer.rs` and `multi_window.rs`; `expect()` in `ime.rs`; stale comments across `events.rs`, `events/*.rs`, `touch.rs`, `window.rs` and `ime.rs`; dead `Finger` arms in `events/source.rs` and unused arguments in `touch.rs`.
+16. Per-event work on the trackpad path: a view-tree search and array allocations per event in `MainActivity`, the relative delta computed twice, four float arrays per captured event, and a JNI call plus `runOnUiThread` per trackpad-mode move.
 
 ## Post-2026-08 upstream-merge follow-ups
 
 The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parallel APIs and deferred cleanups. None block shipping; all shrink future merge cost or unlock upstream features.
 
-**Converge onto upstream's official mobile API surface.** Upstream gpui now ships `PlatformWindow::show_soft_keyboard`/`hide_soft_keyboard`/`insets()`/`on_insets_changed`/`set_back_handler`, `Platform::on_app_lifecycle`/`on_memory_warning`, `PlatformInput::Touch` + `gestures()`, and `text_input_state_changed`. The fork's private inventions (`toggle_soft_keyboard`, `soft_keyboard_visible`, `last_input_was_touch`, `trackpad_mode_enabled`, `set_drag_active`, the touch.rs mouse-synthesis) coexist with them today with zero name collisions. Re-expressing ours on top of theirs deletes fork hunks in ~20 upstream-hot call sites (ui/scrollbar, workspace panes/docks, editor element, terminal_view) that will otherwise re-conflict every merge. Also evaluate `Application::run_embedded` as a replacement for the custom android run-loop shim, and upstream's `ThreadedDispatcher` as a replacement for the hand-rolled calloop worker pool in `gpui_android/src/dispatcher.rs`.
+**Converge onto upstream's official mobile API surface.** Done (2026-10): the soft keyboard uses `show_soft_keyboard`/`hide_soft_keyboard` and `text_input_state_changed` (which also drives vim's key-vs-text routing), the platform reports `on_app_lifecycle`, `on_memory_warning` and window visibility, and the keyboard and trackpad buttons are app-owned status bar items. Left: `insets()`/`on_insets_changed` (Kotlin would push the IME and system-bar insets) and `set_back_handler`. Touch was the big one; its plan, one pull request per step, each tested on the tablet:
+
+1. gpui_android sends `PlatformInput::Touch` for finger input in the main and extra windows instead of `touch.rs`'s synthesized mouse and scroll events. gpui's recognizer (`crates/gpui/src/gestures.rs`) then provides taps with tap counts, pans with momentum, long presses, touch drags and `Window::last_input_was_touch`. The virtual trackpad (`TrackpadTouchState`) and the captured pointer stay as they are.
+2. Upstream doesn't claim touch drags anywhere yet, so add claims (`prevent_default` on a started `TouchDragEvent`) to the scrollbar thumb, the editor scrollbar, the pane splitter and the dock resize handle, replacing the fork's `set_drag_active` calls. Add a `LongPressEvent` claim to the editor for word selection with drag-to-extend, and move the terminal's long-press menu onto it. These are small, platform-neutral edits that could go upstream.
+3. gpui's recognizer has no two-finger tap: detect it in gpui_android before forwarding (cancel the touches, then send a secondary click), or propose it upstream.
+4. Remove `set_drag_active`, `last_input_was_touch` and `last_platform_input_was_touch` from gpui and the finger state machine from `touch.rs`.
+
+All four steps are done (2026-10). Step 1 landed behind an `android_input.legacy_touch` setting (on kept `touch.rs`'s state machine; off sent fingers to gpui's recognizer through `touch::TouchFeed`) and folded in step 3: `TouchFeed` turns a two-finger tap into a secondary click when the fingers lift, and a two-finger drag into one touch at the fingers' centroid. Step 2 claimed touch drags for the scrollbar thumb, the editor scrollbar, the pane splitter and the dock resize handle (the dock resizes through `Workspace::drag_dock_edge`, since gpui's drag and drop doesn't follow touches), long presses for the editor (word selection, drag to extend) and the terminal (selection, then the context menu on release), and made taps carry the keyboard's modifiers. Step 4 deleted the legacy path: `touch.rs`'s finger state machine, `set_drag_active`, `last_platform_input_was_touch` with `PlatformWindow::last_input_was_touch` behind it, and the `legacy_touch` setting; the touch-widened hit areas (splitter, dock handle, a scrollbar track press grabbing the thumb) read gpui's `Window::last_input_was_touch` instead.
+
+**Finger drag and drop of tabs and project panel entries.** gpui's drag and drop (`on_drag`, `DragMoveEvent`) has no touch source, so a finger can't reorder tabs or move project panel entries; the release caveats list it. (The deleted legacy path started gpui's drag and drop from a long press, then a drag.) Native Android and iOS reorder with a long press, then a drag. Either start gpui's drag from a `LongPressEvent` on Android, or propose touch support for gpui's drag system upstream.
+
+Also evaluate `Application::run_embedded` as a replacement for the custom android run-loop shim, and upstream's `ThreadedDispatcher` as a replacement for the hand-rolled calloop worker pool in `gpui_android/src/dispatcher.rs`.
 
 **Accessibility tree.** `PlatformWindow::a11y_init`/`a11y_tree_update` defaults mean Android currently reports nothing to AccessKit. Wire it to Android's accessibility APIs (upstream: `crates/gpui/src/window/a11y.rs`).
 

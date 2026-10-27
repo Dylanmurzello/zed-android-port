@@ -17,6 +17,7 @@ mod bracket_colorization;
 mod clangd_ext;
 pub mod code_context_menus;
 mod code_lens;
+mod debugger_hover;
 pub mod display_map;
 mod document_colors;
 mod document_links;
@@ -965,6 +966,11 @@ struct SettledScrollRange {
 pub struct Editor {
     focus_handle: FocusHandle,
     last_focused_descendant: Option<WeakFocusHandle>,
+    /// Whether the last blur came from the window going inactive, so the
+    /// focus it regains on reactivation doesn't request the on-screen
+    /// keyboard: Android restores the keyboard's previous state on return.
+    #[cfg(target_os = "android")]
+    blurred_by_window_deactivation: bool,
     /// The text buffer being edited
     buffer: Entity<MultiBuffer>,
     /// Map of how text in the buffer should be displayed.
@@ -2363,6 +2369,8 @@ impl Editor {
             focus_handle,
             show_cursor_when_unfocused: false,
             last_focused_descendant: None,
+            #[cfg(target_os = "android")]
+            blurred_by_window_deactivation: false,
             buffer: multi_buffer.clone(),
             display_map: display_map.clone(),
             placeholder_display_map: None,
@@ -2837,6 +2845,10 @@ impl Editor {
 
         if self.signature_help_state.has_multiple_signatures() {
             key_context.add("showing_signature_help");
+        }
+
+        if self.hover_state.keyboard_debugger_hover_active() {
+            key_context.add("DebuggerHover");
         }
 
         // Disable vim contexts when a sub-editor (e.g. rename/inline assistant) is focused.
@@ -8693,7 +8705,6 @@ impl Editor {
                     project.restart_language_servers_for_buffers(
                         multi_buffer.all_buffers().into_iter().collect(),
                         HashSet::default(),
-                        true,
                         cx,
                     );
                 });
@@ -10981,6 +10992,17 @@ impl Editor {
         {
             window.focus(&descendant, cx);
         } else {
+            // Per gpui's `EntityInputHandler` docs, focus alone doesn't show the
+            // keyboard; a single-line field (a picker or search bar) asks for it
+            // as it opens, like a search screen on Android.
+            #[cfg(target_os = "android")]
+            if self.mode.is_single_line()
+                && !self.read_only(cx)
+                && !mem::take(&mut self.blurred_by_window_deactivation)
+            {
+                window.request_virtual_keyboard();
+            }
+
             if let Some(blame) = self.blame.as_ref() {
                 blame.update(cx, GitBlame::focus)
             }
@@ -11036,6 +11058,10 @@ impl Editor {
     }
 
     pub fn handle_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "android")]
+        {
+            self.blurred_by_window_deactivation = !window.is_window_active();
+        }
         self.cursor_animations.clear();
         self.blink_manager.update(cx, BlinkManager::disable);
         self.buffer
@@ -11551,7 +11577,7 @@ impl Editor {
             inlay_hints_style: make_inlay_hints_style(cx),
             edit_prediction_styles: make_suggestion_styles(cx),
             unnecessary_code_fade: settings.unnecessary_code_fade,
-            show_underlines: self.diagnostics_enabled(),
+            show_underlines: !self.mode.is_minimap(),
         }
     }
 
@@ -11865,6 +11891,15 @@ pub trait SemanticsProvider {
         cx: &mut App,
     ) -> Option<Task<Option<Vec<project::Hover>>>>;
 
+    fn debugger_hover(
+        &self,
+        _buffer: &Entity<Buffer>,
+        _position: text::Anchor,
+        _cx: &mut App,
+    ) -> Option<Task<Option<project::DebuggerHover>>> {
+        None
+    }
+
     fn inline_values(
         &self,
         buffer_handle: Entity<Buffer>,
@@ -11941,6 +11976,18 @@ impl SemanticsProvider for WeakEntity<Project> {
     ) -> Option<Task<Option<Vec<project::Hover>>>> {
         self.update(cx, |project, cx| project.hover(buffer, position, cx))
             .ok()
+    }
+
+    fn debugger_hover(
+        &self,
+        buffer: &Entity<Buffer>,
+        position: text::Anchor,
+        cx: &mut App,
+    ) -> Option<Task<Option<project::DebuggerHover>>> {
+        self.update(cx, |project, cx| {
+            project.debugger_hover(buffer, position, cx)
+        })
+        .ok()
     }
 
     fn document_highlights(
@@ -13299,216 +13346,4 @@ pub fn multibuffer_context_lines(cx: &App) -> u32 {
         .map(|settings| settings.excerpt_context_lines)
         .unwrap_or(2)
         .min(32)
-}
-
-/// Open a workspace-relative config file (project settings, project
-/// tasks, debug tasks), creating it from `initial_contents` if it
-/// doesn't yet exist.
-///
-/// Moved here from `crates/zed/src/zed.rs` so other entrypoints (the
-/// Android port at `crates/gpui_android/examples/zed_android`) can
-/// reuse it without pulling the full `zed` binary crate as a dep.
-pub fn open_local_file(
-    workspace: &mut Workspace,
-    settings_relative_path: &'static util::rel_path::RelPath,
-    initial_contents: Cow<'static, str>,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) -> Option<gpui::Task<anyhow::Result<Entity<Editor>>>> {
-    let project = workspace.project().clone();
-    let worktree = project
-        .read(cx)
-        .visible_worktrees(cx)
-        .find_map(|tree| tree.read(cx).root_entry()?.is_dir().then_some(tree));
-    if let Some(worktree) = worktree {
-        let tree_id = worktree.read(cx).id();
-        Some(cx.spawn_in(window, async move |workspace, cx| {
-            let file_exists = {
-                let full_path = worktree.read_with(cx, |tree, _| {
-                    tree.abs_path().join(settings_relative_path.as_std_path())
-                });
-                let fs = project.read_with(cx, |project, _| project.fs().clone());
-                fs.metadata(&full_path)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|metadata| !metadata.is_dir && !metadata.is_fifo)
-            };
-            if !file_exists {
-                if let Some(dir_path) = settings_relative_path.parent()
-                    && worktree.read_with(cx, |tree, _| tree.entry_for_path(dir_path).is_none())
-                {
-                    project
-                        .update(cx, |project, cx| {
-                            project.create_entry((tree_id, dir_path), true, cx)
-                        })
-                        .await
-                        .context("worktree was removed")?;
-                }
-                if worktree.read_with(cx, |tree, _| {
-                    tree.entry_for_path(settings_relative_path).is_none()
-                }) {
-                    project
-                        .update(cx, |project, cx| {
-                            project.create_entry((tree_id, settings_relative_path), false, cx)
-                        })
-                        .await
-                        .context("worktree was removed")?;
-                }
-            }
-            let editor = workspace
-                .update_in(cx, |workspace, window, cx| {
-                    workspace.open_path((tree_id, settings_relative_path), None, true, window, cx)
-                })?
-                .await?
-                .downcast::<Editor>()
-                .context("unexpected item type: expected editor item")?;
-            editor.update(cx, |editor, cx| {
-                if let Some(buffer) = editor.buffer().read(cx).as_singleton()
-                    && buffer.read(cx).is_empty()
-                {
-                    buffer.update(cx, |buffer, cx| {
-                        buffer.edit([(0..0, initial_contents)], None, cx)
-                    });
-                }
-            });
-
-            anyhow::Ok(editor)
-        }))
-    } else {
-        struct NoOpenFolders;
-        workspace.show_notification(NotificationId::unique::<NoOpenFolders>(), cx, |cx| {
-            cx.new(|cx| {
-                workspace::notifications::simple_message_notification::MessageNotification::new(
-                    "This project has no folders open.",
-                    cx,
-                )
-            })
-        });
-        None
-    }
-}
-
-/// Open a read-only buffer with the given bundled-text contents (e.g.
-/// default settings, default keymap, license attribution). Reuses the
-/// existing buffer if one with the same title is already open.
-pub fn open_bundled_file(
-    workspace: &mut Workspace,
-    text: Cow<'static, str>,
-    title: &'static str,
-    language: &'static str,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) {
-    let existing = workspace.items_of_type::<Editor>(cx).find(|editor| {
-        editor.read_with(cx, |editor, cx| {
-            editor.read_only(cx)
-                && editor.title(cx).as_ref() == title
-                && editor
-                    .buffer()
-                    .read(cx)
-                    .as_singleton()
-                    .is_some_and(|buffer| buffer.read(cx).file().is_none())
-        })
-    });
-    if let Some(existing) = existing {
-        workspace.activate_item(&existing, true, true, window, cx);
-        return;
-    }
-    let language = workspace.app_state().languages.language_for_name(language);
-    cx.spawn_in(window, async move |workspace, cx| {
-        let language = language.await.log_err();
-        workspace
-            .update_in(cx, move |workspace, window, cx| {
-                let project = workspace.project().clone();
-                let buffer = project.update(cx, move |project, cx| {
-                    project.create_buffer(language, false, cx)
-                });
-                cx.spawn_in(window, async move |workspace, cx| {
-                    let buffer = buffer.await?;
-                    buffer.update(cx, |buffer, cx| {
-                        buffer.set_text(text.into_owned(), cx);
-                        buffer.set_capability(language::Capability::ReadOnly, cx);
-                    });
-                    let buffer = cx.new(|cx| {
-                        multi_buffer::MultiBuffer::singleton(buffer, cx).with_title(title.into())
-                    });
-                    workspace.update_in(cx, |workspace, window, cx| {
-                        workspace.add_item_to_active_pane(
-                            Box::new(cx.new(|cx| {
-                                let mut editor = Editor::for_multibuffer(
-                                    buffer,
-                                    Some(project.clone()),
-                                    window,
-                                    cx,
-                                );
-                                editor.set_read_only(true);
-                                editor.set_should_serialize(false, cx);
-                                editor.set_breadcrumb_header(title.into());
-                                editor
-                            })),
-                            None,
-                            true,
-                            window,
-                            cx,
-                        )
-                    })
-                })
-            })?
-            .await
-            .map(|_| ())
-    })
-    .detach_and_log_err(cx);
-}
-
-/// `Workspace::register_action` handler for `OpenProjectSettingsFile`.
-/// Opens the project-relative settings file, creating it from defaults
-/// if missing.
-pub fn open_project_settings_file(
-    workspace: &mut Workspace,
-    _: &zed_actions::OpenProjectSettingsFile,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) {
-    if let Some(task) = open_local_file(
-        workspace,
-        paths::local_settings_file_relative_path(),
-        settings::initial_project_settings_content(),
-        window,
-        cx,
-    ) {
-        task.detach_and_log_err(cx);
-    }
-}
-
-/// Register global handlers for `OpenDefaultSettings` and
-/// `OpenDefaultKeymap`. Both production `zed::init` and any alternative
-/// entrypoint (Android port) call this so the dispatch surface stays
-/// identical. Idempotent at the `cx.on_action` level — re-registering
-/// replaces the previous handler.
-pub fn init_bundled_file_actions(cx: &mut App) {
-    cx.on_action(|_: &zed_actions::OpenDefaultSettings, cx| {
-        workspace::with_active_or_new_workspace(cx, |workspace, window, cx| {
-            open_bundled_file(
-                workspace,
-                settings::default_settings(),
-                "Default Settings",
-                "JSON",
-                window,
-                cx,
-            );
-        });
-    });
-    cx.on_action(|_: &zed_actions::OpenDefaultKeymap, cx| {
-        workspace::with_active_or_new_workspace(cx, |workspace, window, cx| {
-            open_bundled_file(
-                workspace,
-                settings::default_keymap(),
-                "Default Key Bindings",
-                "JSON",
-                window,
-                cx,
-            );
-        });
-    });
 }

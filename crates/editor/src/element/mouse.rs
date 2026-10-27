@@ -6,8 +6,8 @@ use feature_flags::{DiffReviewFeatureFlag, FeatureFlagAppExt as _};
 use gpui::{
     AnyElement, App, AvailableSpace, ClickEvent, Context, DispatchPhase, Element, MouseButton,
     MouseClickEvent, MouseDownEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
-    ParentElement, Pixels, PressureStage, ScrollDelta, ScrollWheelEvent, Window, anchored,
-    deferred, point, px,
+    ParentElement, Pixels, PressureStage, ScrollDelta, ScrollEvent, Window, anchored, deferred,
+    point, px,
 };
 use multi_buffer::MultiBufferRow;
 use project::DisableAiSettings;
@@ -383,6 +383,16 @@ impl EditorElement {
                                 window,
                                 cx,
                             );
+
+                            // gpui's `EntityInputHandler` docs: a click on the field
+                            // requests the keyboard, which reopens it after a dismissal.
+                            #[cfg(target_os = "android")]
+                            if !window.default_prevented()
+                                && !editor.read_only(cx)
+                                && position_map.text_hitbox.is_hovered(window)
+                            {
+                                window.request_virtual_keyboard();
+                            }
                         }),
                         MouseButton::Right => editor.update(cx, |editor, cx| {
                             Self::mouse_right_down(editor, event, &position_map, window, cx);
@@ -403,7 +413,7 @@ impl EditorElement {
             move |event: &MouseUpEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble {
                     editor.update(cx, |editor, cx| {
-                        Self::mouse_up(editor, event, &position_map, window, cx)
+                        Self::mouse_up(editor, event, &position_map, window, cx);
                     });
                 }
             }
@@ -478,6 +488,78 @@ impl EditorElement {
                 }
             }
         });
+
+        // On Android, a long press selects the word under the finger and the
+        // finger's moves extend the selection.
+        #[cfg(target_os = "android")]
+        window.on_mouse_event({
+            let position_map = layout.position_map.clone();
+            let editor = self.editor.clone();
+            let line_numbers = layout.line_numbers.clone();
+
+            move |event: &gpui::LongPressEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                let modifiers = window.modifiers();
+                match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if window.default_prevented()
+                            || !(position_map.text_hitbox.is_hovered(window)
+                                || position_map.gutter_hitbox.is_hovered(window))
+                        {
+                            return;
+                        }
+                        let mouse_down = MouseDownEvent {
+                            button: MouseButton::Left,
+                            position: event.start_position,
+                            modifiers,
+                            click_count: 2,
+                            first_mouse: false,
+                        };
+                        editor.update(cx, |editor, cx| {
+                            Self::mouse_left_down(
+                                editor,
+                                &mouse_down,
+                                &position_map,
+                                line_numbers.as_ref(),
+                                window,
+                                cx,
+                            );
+                        });
+                        window.capture_long_press(&editor);
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Moved if window.has_long_press_capture(&editor) => {
+                        let mouse_move = MouseMoveEvent {
+                            position: event.position,
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers,
+                        };
+                        editor.update(cx, |editor, cx| {
+                            Self::mouse_dragged(editor, &mouse_move, &position_map, window, cx);
+                        });
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled
+                        if window.has_long_press_capture(&editor) =>
+                    {
+                        let mouse_up = MouseUpEvent {
+                            button: MouseButton::Left,
+                            position: event.position,
+                            modifiers,
+                            click_count: 2,
+                        };
+                        editor.update(cx, |editor, cx| {
+                            Self::mouse_up(editor, &mouse_up, &position_map, window, cx);
+                        });
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }
+        });
     }
 
     fn paint_scroll_wheel_listener(
@@ -502,7 +584,7 @@ impl EditorElement {
                 .fast_scroll_sensitivity
                 .max(0.01);
 
-            move |event: &ScrollWheelEvent, phase, window, cx| {
+            move |event: &ScrollEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                     delta = delta.coalesce(event.delta);
 
@@ -906,35 +988,7 @@ impl EditorElement {
                     cx.stop_propagation();
                     return;
                 } else {
-                    // The mouse-move handler normally transitions
-                    // ReadyToDrag → Dragging once the cursor moves AND the
-                    // drag-delay has elapsed. On Android the touch-to-mouse
-                    // translation can deliver mouse-up at a different
-                    // position without ever firing the mouse-move events
-                    // that drive that transition, so the
-                    // selection_drag_state is still ReadyToDrag here even
-                    // though `event.position != *click_position`. Treat
-                    // this as a non-drag click — clear the state, start a
-                    // new selection at the release position, and return.
-                    // Used to be a `debug_panic!` ("drag state can never
-                    // be in ready state after drag"); production release
-                    // builds always no-op'd that branch, this matches it.
-                    log::warn!(
-                        "selection_drag_state still ReadyToDrag at mouse-up \
-                         with moved position; treating as click"
-                    );
-                    editor.select(
-                        SelectPhase::Begin {
-                            position: point_for_position.nearest_valid,
-                            add: false,
-                            click_count: 1,
-                        },
-                        window,
-                        cx,
-                    );
-                    editor.selection_drag_state = SelectionDragState::None;
-                    cx.stop_propagation();
-                    return;
+                    debug_panic!("drag state can never be in ready state after drag")
                 }
             }
             SelectionDragState::Dragging { ref selection, .. } => {

@@ -50,7 +50,6 @@ menu.workspace = true
 markdown.workspace = true
 node_runtime.workspace = true
 parking_lot.workspace = true
-paths.workspace = true
 postage.workspace = true
 project.workspace = true
 release_channel.workspace = true

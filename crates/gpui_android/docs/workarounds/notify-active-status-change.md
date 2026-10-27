@@ -3,8 +3,10 @@
 **Status:** Active
 **Phase / Commit:** L7 (post-shipping fix)
 **Files:**
-- `crates/gpui_android/src/window.rs` (`notify_active_status_change`)
-- `crates/gpui_android/src/platform.rs` (`open_extra_window` deferred spawn)
+- `crates/gpui_android/src/window.rs` (`notify_active_status_change`, `set_active`)
+- `crates/gpui_android/src/platform.rs` (`open_extra_window` deferred spawn, `window_focus_changed`)
+- `crates/gpui_android/src/multi_window.rs` (`nativeOnExtraFocusChanged`)
+- `ExtraWindowActivity.onWindowFocusChanged` in the Android app
 
 ## Problem
 
@@ -65,7 +67,8 @@ let executor = self.common.borrow().foreground_executor.clone();
 let window_ptr = window.ptr();
 executor
     .spawn(async move {
-        window_ptr.notify_active_status_change(true);
+        let active = window_ptr.state.borrow().active;
+        window_ptr.notify_active_status_change(active);
     })
     .detach();
 ```
@@ -102,14 +105,32 @@ construction flow.
   never runs because the callback slot is empty at our call site.
 - Forgetting to fire entirely (revert): same as the original bug.
 
-## Why not also wire this for primary
+## Focus
 
-Primary GameActivity could plausibly have the same issue, but in practice
-the welcome page has no focus-on-init text input — there's nothing to
-visibly miscarry. Wiring `on_active_status_change` for primary would
-require bridging GameActivity's `onWindowFocusChanged` JNI events into our
-NDK loop, which is more work for a less observable benefit. Defer until
-something user-facing demands it.
+`is_active()` used to return true for every window, and the deferred spawn
+always sent `true`. Zed's handler for `workspace::CloseWindow`
+(`Workspace::close_global`) closes the first window that reports active,
+which was always the main window. Ctrl+W or Ctrl+Shift+W in Settings closed
+the main window instead of Settings, and Zdroid quit. One UI's close button
+on the pop-up wasn't affected: it finishes the Activity, and the `OsClosed`
+event closes that window directly.
+
+Each window now reports its Activity's input focus, as Zed's Linux and
+Windows backends report keyboard focus:
+
+- the main window from GameActivity's `MainEvent::GainedFocus` and
+  `MainEvent::LostFocus`;
+- extra windows from `ExtraWindowActivity.onWindowFocusChanged`, through
+  `nativeOnExtraFocusChanged` and `ExtraWindowEvent::FocusChanged`.
+
+A window starts active because it opens in front, and the deferred spawn
+sends the current state because focus may have changed before it runs.
+Gaining focus also makes the window the platform's `active_window`. Losing
+focus keeps it, because focus also moves to system UI such as the
+notification shade, and Zed opens things in the active window.
+
+Zed now hides the text cursor, and stops other activation-gated work such
+as animated images, in windows that don't have focus.
 
 ## See also
 

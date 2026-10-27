@@ -56,7 +56,7 @@ pub use vte::ansi::{Color, NamedColor, Rgb};
 use gpui::{
     App, AppContext as _, BackgroundExecutor, Bounds, ClipboardItem, Context, EventEmitter, Hsla,
     Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point as GpuiPoint, Rgba, ScrollWheelEvent, Size, Task, TouchPhase, Window, actions, black, px,
+    Point as GpuiPoint, Rgba, ScrollEvent, Size, Task, TouchPhase, Window, actions, black, px,
 };
 
 #[cfg(not(windows))]
@@ -662,32 +662,28 @@ pub fn insert_zed_terminal_env(
     env.insert("TERM".to_string(), "xterm-256color".to_string());
     env.insert("COLORTERM".to_string(), "truecolor".to_string());
     env.insert("TERM_PROGRAM_VERSION".to_string(), version.to_string());
+}
 
-    // Android: alacritty's pty spawn replaces the inherited env
-    // entirely with the explicit map, so we copy a small universal
-    // subset (HOME / PATH / SHELL / TMPDIR / LANG) over from the
-    // Zed-Rust process env. Anything adapter-flavored — Termux vars,
-    // libtermux-exec preload, CA bundle paths, HOME=TERMUX__HOME
-    // override — comes from the active runtime adapter's
-    // `env_for_terminal` registered into `util::env` at android_main.
-    // For chroot mode the overlay is empty (the zd-exec wrapper
-    // handles env at the chroot boundary). For bootstrap mode it
-    // carries the historical Termux-flavored shape.
-    #[cfg(target_os = "android")]
-    {
-        for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {
-            if let Ok(value) = std::env::var(key) {
-                env.entry(key.to_string()).or_insert(value);
-            }
+/// Alacritty's pty spawn replaces the inherited env with this map, so the
+/// local shell needs the process's HOME, PATH, SHELL, TMPDIR and LANG plus
+/// the active runtime's overlay (Termux variables, the exec preload, CA
+/// bundle paths, HOME pointing at the runtime's home). This is not part of
+/// `insert_zed_terminal_env` because that one also builds the environment
+/// sent to SSH remotes, where these paths don't exist.
+#[cfg(target_os = "android")]
+fn insert_android_terminal_env(env: &mut HashMap<String, String>) {
+    for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            env.entry(key.to_string()).or_insert(value);
         }
-        for (key, op) in util::env::terminal_env_overlay() {
-            match op {
-                util::env::EnvOp::Set(value) => {
-                    env.insert(key.clone(), value.to_string_lossy().into_owned());
-                }
-                util::env::EnvOp::Remove => {
-                    env.remove(key);
-                }
+    }
+    for (key, op) in util::env::terminal_env_overlay() {
+        match op {
+            util::env::EnvOp::Set(value) => {
+                env.insert(key.clone(), value.to_string_lossy().into_owned());
+            }
+            util::env::EnvOp::Remove => {
+                env.remove(key);
             }
         }
     }
@@ -1176,6 +1172,8 @@ impl TerminalBuilder {
             }
 
             insert_zed_terminal_env(&mut env, &version);
+            #[cfg(target_os = "android")]
+            insert_android_terminal_env(&mut env);
 
             #[derive(Default)]
             struct ShellParams {
@@ -2919,12 +2917,7 @@ impl Terminal {
     }
 
     ///Scroll the terminal
-    pub fn scroll_wheel(
-        &mut self,
-        e: &ScrollWheelEvent,
-        scroll_multiplier: f32,
-        mode: MouseInputMode,
-    ) {
+    pub fn scroll_wheel(&mut self, e: &ScrollEvent, scroll_multiplier: f32, mode: MouseInputMode) {
         let mouse_mode = self.mouse_mode(e.shift, mode);
         let scroll_multiplier = if mouse_mode { 1. } else { scroll_multiplier };
 
@@ -2963,49 +2956,30 @@ impl Terminal {
         self.schedule_find_hyperlink(window.modifiers(), window.mouse_position(), cx);
     }
 
-    fn determine_scroll_lines(
-        &mut self,
-        e: &ScrollWheelEvent,
-        scroll_multiplier: f32,
-    ) -> Option<i32> {
+    fn determine_scroll_lines(&mut self, e: &ScrollEvent, scroll_multiplier: f32) -> Option<i32> {
         let line_height = self.last_content.terminal_bounds.line_height;
         match e.touch_phase {
-            // Don't zero the accumulator on touch-down: it holds the absolute
-            // scroll-up distance, so the sub-row remainder used for smooth
-            // rendering (`scroll_fract_px`) stays continuous across gestures
-            // instead of snapping to a row boundary when a new drag begins.
-            TouchPhase::Started => None,
+            /* Reset scroll state on started */
+            TouchPhase::Started => {
+                self.scroll_px = px(0.);
+                None
+            }
+            /* Calculate the appropriate scroll lines */
             TouchPhase::Moved => {
                 let old_offset = (self.scroll_px / line_height) as i32;
 
                 self.scroll_px += e.delta.pixel_delta(line_height).y * scroll_multiplier;
 
-                // Clamp at the bottom (newest line). The accumulator is an
-                // absolute up-scroll distance, so it can't go negative; this
-                // keeps `scroll_px % line_height` a valid sub-row offset and
-                // stops a spurious shift when already pinned to the bottom.
-                self.scroll_px = cmp::max(self.scroll_px, px(0.));
-
                 let new_offset = (self.scroll_px / line_height) as i32;
+
+                // Whenever we hit the edges, reset our stored scroll to 0
+                // so we can respond to changes in direction quickly
+                self.scroll_px %= self.last_content.terminal_bounds.height();
 
                 Some(new_offset - old_offset)
             }
             // Cancellation does not commit a scroll, same as a plain end.
             TouchPhase::Ended | TouchPhase::Cancelled => None,
-        }
-    }
-
-    /// Sub-row vertical scroll remainder in `[0, line_height)`. The renderer
-    /// shifts the grid origin down by this so precise (touch / trackpad)
-    /// scrollback moves smoothly instead of snapping to whole rows; the mouse
-    /// handlers subtract it back before mapping a pixel position to a cell.
-    /// Returns zero on the alternate screen, where the running program owns the
-    /// grid and a sub-row shift would only misalign it.
-    pub fn scroll_fract_px(&self) -> Pixels {
-        if self.last_content.mode.contains(Modes::ALT_SCREEN) {
-            Pixels::ZERO
-        } else {
-            self.scroll_px % self.last_content.terminal_bounds.line_height
         }
     }
 
@@ -4198,7 +4172,7 @@ mod tests {
             assert!(terminal.last_content.mode.intersects(Modes::MOUSE_MODE));
             assert_eq!(display_offset(&terminal.term.lock()), 0);
 
-            let scroll_event = ScrollWheelEvent {
+            let scroll_event = ScrollEvent {
                 position: point(px(50.0), px(10.0)),
                 delta: ScrollDelta::Lines(point(0.0, 1.0)),
                 ..Default::default()
@@ -4227,7 +4201,7 @@ mod tests {
             );
             assert_eq!(display_offset(&terminal.term.lock()), 0);
 
-            let scroll_event = ScrollWheelEvent {
+            let scroll_event = ScrollEvent {
                 position: point(px(50.0), px(10.0)),
                 delta: ScrollDelta::Lines(point(0.0, 1.0)),
                 ..Default::default()
@@ -6260,7 +6234,7 @@ mod tests {
 
     mod perf {
         use super::{super::*, init_terminal_test_with_window};
-        use gpui::{ScrollDelta, ScrollWheelEvent, TestAppContext, VisualContext, point};
+        use gpui::{ScrollDelta, ScrollEvent, TestAppContext, VisualContext, point};
         use util::default;
         use util_macros::perf;
 
@@ -6286,7 +6260,7 @@ mod tests {
                     );
 
                     terminal.scroll_wheel(
-                        &ScrollWheelEvent {
+                        &ScrollEvent {
                             position,
                             delta: ScrollDelta::Lines(GpuiPoint::new(0.0, lines as f32)),
                             ..default()

@@ -235,18 +235,21 @@ impl RuntimeFile {
                 .chroot
                 .map(ResolvedConfig::Chroot)
                 .ok_or_else(|| anyhow::anyhow!("runtime.type = chroot but no [chroot] section")),
-            RuntimeId::Bootstrap => self.bootstrap.map(ResolvedConfig::Bootstrap).ok_or_else(
-                || anyhow::anyhow!("runtime.type = bootstrap but no [bootstrap] section"),
-            ),
-            RuntimeId::ExternalTermux => {
-                self.external_termux
-                    .map(ResolvedConfig::ExternalTermux)
+            RuntimeId::Bootstrap => {
+                self.bootstrap
+                    .map(ResolvedConfig::Bootstrap)
                     .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "runtime.type = external_termux but no [external_termux] section"
-                        )
+                        anyhow::anyhow!("runtime.type = bootstrap but no [bootstrap] section")
                     })
             }
+            RuntimeId::ExternalTermux => self
+                .external_termux
+                .map(ResolvedConfig::ExternalTermux)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "runtime.type = external_termux but no [external_termux] section"
+                    )
+                }),
         }
     }
 }

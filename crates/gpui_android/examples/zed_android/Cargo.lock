@@ -61,6 +61,7 @@ dependencies = [
 name = "acp_tools"
 version = "0.1.0"
 dependencies = [
+ "acp_thread",
  "agent-client-protocol",
  "agent_servers",
  "agent_ui",
@@ -227,9 +228,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol"
-version = "3.3.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02898d848a20eb09b8a392e85bb3a4c79dba01d369758185d102b001362a60da"
+checksum = "72adac0ce6b0d0390df9b7a498392b24ebcf9c65c3451e5d618d936f50256289"
 dependencies = [
  "agent-client-protocol-derive",
  "agent-client-protocol-schema",
@@ -245,9 +246,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-derive"
-version = "3.3.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26b57a6a7fae5ebd4368712bfcd0a366a20e1370ac3f3fcd83379b37637501c9"
+checksum = "532fa6f1870bb7cb0bfe91fbcb5166393f7046e186bc590d1aa037d306d48716"
 dependencies = [
  "quote",
  "syn 3.0.3",
@@ -255,9 +256,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d9a84a76a4f44721e0d8dabcd85b219893c43d6171a4a033d84844d85880823"
+checksum = "430e900fdb40a811c1a3e0d85b1134e485d96699f8b90889a15c1da6a0b26c3f"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -281,6 +282,7 @@ dependencies = [
  "chrono",
  "client",
  "collections",
+ "feature_flags",
  "fs",
  "futures",
  "gpui",
@@ -375,6 +377,7 @@ dependencies = [
  "fs",
  "futures",
  "fuzzy",
+ "fuzzy_nucleo",
  "git",
  "git_ui_core",
  "gpui",
@@ -3858,7 +3861,6 @@ dependencies = [
  "multi_buffer",
  "ordered-float",
  "parking_lot",
- "paths",
  "project",
  "rand 0.9.4",
  "regex",
@@ -4581,7 +4583,6 @@ dependencies = [
  "log",
  "notify",
  "parking_lot",
- "path",
  "paths",
  "proto",
  "rope",
@@ -5221,6 +5222,7 @@ dependencies = [
  "slotmap",
  "smallvec",
  "spin 0.10.0",
+ "stacksafe",
  "strum",
  "sum_tree",
  "taffy",
@@ -5253,7 +5255,7 @@ dependencies = [
  "ureq",
  "util",
  "uuid",
- "zip 2.4.2",
+ "zip 2.6.1",
 ]
 
 [[package]]
@@ -5689,7 +5691,9 @@ dependencies = [
 name = "http_client_tls"
 version = "0.1.0"
 dependencies = [
+ "log",
  "rustls",
+ "rustls-platform-verifier",
  "webpki-roots 1.0.10",
 ]
 
@@ -6839,6 +6843,18 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+]
+
+[[package]]
+name = "language_onboarding"
+version = "0.1.0"
+dependencies = [
+ "db",
+ "editor",
+ "gpui",
+ "project",
+ "ui",
+ "workspace",
 ]
 
 [[package]]
@@ -8582,7 +8598,6 @@ dependencies = [
  "util",
  "vim_mode_setting",
  "workspace",
- "zdroid_runtime",
  "zed_actions",
  "zlog",
 ]
@@ -8677,11 +8692,14 @@ dependencies = [
 name = "opencode"
 version = "0.1.0"
 dependencies = [
+ "anthropic",
  "anyhow",
  "futures",
  "google_ai",
  "http_client",
  "language_model_core",
+ "log",
+ "open_ai",
  "schemars 1.0.4",
  "serde",
  "serde_json",
@@ -11204,6 +11222,33 @@ dependencies = [
  "web-time",
  "zeroize",
 ]
+
+[[package]]
+name = "rustls-platform-verifier"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26d1e2536ce4f35f4846aa13bff16bd0ff40157cdb14cc056c7b14ba41233ba0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
+ "jni 0.22.4",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-platform-verifier-android",
+ "rustls-webpki",
+ "security-framework",
+ "security-framework-sys",
+ "webpki-root-certs",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rustls-platform-verifier-android"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
@@ -13759,6 +13804,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_prompt"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "markdown",
+ "menu",
+ "settings",
+ "theme",
+ "theme_settings",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "unicase"
 version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14717,6 +14776,15 @@ dependencies = [
  "cloud_llm_client",
  "collections",
  "gpui",
+]
+
+[[package]]
+name = "webpki-root-certs"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -15790,7 +15858,6 @@ dependencies = [
  "menu",
  "node_runtime",
  "parking_lot",
- "paths",
  "postage",
  "project",
  "release_channel",
@@ -16061,7 +16128,7 @@ dependencies = [
  "toml 0.9.8",
  "ureq",
  "util",
- "zip 2.4.2",
+ "zip 2.6.1",
 ]
 
 [[package]]
@@ -16148,6 +16215,7 @@ version = "0.1.0"
 dependencies = [
  "acp_tools",
  "activity_indicator",
+ "agent_settings",
  "agent_ui",
  "android-activity",
  "android_logger",
@@ -16158,6 +16226,7 @@ dependencies = [
  "breadcrumbs",
  "call_hierarchy",
  "client",
+ "collections",
  "command_palette",
  "db",
  "debug_adapter_extension",
@@ -16167,6 +16236,7 @@ dependencies = [
  "extension",
  "extension_host",
  "extensions_ui",
+ "feature_flags",
  "feedback",
  "file_finder",
  "fs",
@@ -16187,6 +16257,7 @@ dependencies = [
  "language",
  "language_extension",
  "language_model",
+ "language_onboarding",
  "language_selector",
  "language_tools",
  "languages",
@@ -16194,24 +16265,29 @@ dependencies = [
  "log",
  "lsp_command_selector",
  "lsp_locations",
+ "markdown",
  "markdown_preview",
  "menu",
+ "migrator",
  "multi_buffer",
  "node_runtime",
  "notifications",
  "onboarding",
  "outline",
  "outline_panel",
+ "parking_lot",
  "paths",
  "platform_title_bar",
  "project",
  "project_panel",
  "project_symbols",
  "prompt_store",
+ "rayon",
  "recent_projects",
  "release_channel",
  "remote",
  "reqwest_client",
+ "rope",
  "rust-embed",
  "search",
  "semver",
@@ -16228,6 +16304,7 @@ dependencies = [
  "tab_switcher",
  "tabular_data_preview",
  "tasks_ui",
+ "telemetry",
  "terminal",
  "terminal_view",
  "theme",
@@ -16236,6 +16313,8 @@ dependencies = [
  "theme_settings",
  "toolchain_selector",
  "ui",
+ "ui_prompt",
+ "url",
  "util",
  "uuid",
  "vim",
@@ -16245,6 +16324,8 @@ dependencies = [
  "workspace",
  "zdroid_runtime",
  "zed_actions",
+ "zlog",
+ "zlog_settings",
 ]
 
 [[package]]
@@ -16401,9 +16482,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.4.2"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+checksum = "1dcb24d0152526ae49b9b96c1dcf71850ca1e0b882e4e28ed898a93c41334744"
 dependencies = [
  "aes",
  "arbitrary",
@@ -16412,7 +16493,6 @@ dependencies = [
  "crc32fast",
  "crossbeam-utils",
  "deflate64",
- "displaydoc",
  "flate2",
  "getrandom 0.3.4",
  "hmac",
@@ -16421,7 +16501,6 @@ dependencies = [
  "memchr",
  "pbkdf2 0.12.2",
  "sha1",
- "thiserror 2.0.17",
  "time",
  "xz2",
  "zeroize",
@@ -16437,6 +16516,16 @@ dependencies = [
  "chrono",
  "collections",
  "log",
+]
+
+[[package]]
+name = "zlog_settings"
+version = "0.1.0"
+dependencies = [
+ "collections",
+ "gpui",
+ "settings",
+ "zlog",
 ]
 
 [[package]]

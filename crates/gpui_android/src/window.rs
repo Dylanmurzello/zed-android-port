@@ -12,16 +12,16 @@ use ndk::native_window::NativeWindow;
 use raw_window_handle as rwh;
 
 use gpui::{
-    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, GpuSpecs, Modifiers,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Pixels,
-    FrameRequestSource, Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
-    WindowVisibility, point, px, size,
+    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, FrameRequestSource,
+    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    Scene, Size, TextInputStateChange, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControlArea, WindowParams, WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 use crate::display::AndroidDisplay;
-use crate::platform::set_native_window_frame_rate;
+use crate::platform::{frame_presented, request_frame_callback, set_native_window_frame_rate};
 
 /// Raw window handle wrapper for Android. Holds a `*mut ANativeWindow` pointer
 /// (obtained from `android_activity::AndroidApp::native_window()`), or null when
@@ -67,6 +67,7 @@ pub(crate) struct Callbacks {
     pub(crate) should_close: Option<Box<dyn FnMut() -> bool>>,
     pub(crate) close: Option<Box<dyn FnOnce()>>,
     pub(crate) appearance_changed: Option<Box<dyn FnMut()>>,
+    pub(crate) visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
 }
 
 pub(crate) struct AndroidWindowState {
@@ -90,6 +91,12 @@ pub(crate) struct AndroidWindowState {
     /// but gpui's invalidator doesn't know that. The next paint must be
     /// forced; consumed by `refresh()` via `std::mem::take`.
     pub(crate) force_render_after_recovery: bool,
+    /// Set when a present failed, so the next frame presents the last scene
+    /// again; consumed by `refresh()`.
+    pub(crate) present_on_next_frame: bool,
+    /// Whether the last `draw` failed to present, so a second failure in a
+    /// row isn't retried.
+    pub(crate) last_present_failed: bool,
     /// Set true by the platform's `OsClosed` drain handler when the
     /// underlying `ExtraWindowActivity` has already destroyed (user clicked
     /// the OS chrome X). `AndroidWindow::Drop` reads this to skip its
@@ -99,6 +106,27 @@ pub(crate) struct AndroidWindowState {
     /// survives the `Box<dyn PlatformWindow>` drop and is reachable from the
     /// drain handler via the platform's `extra_windows` map.
     pub(crate) os_closed: AtomicBool,
+    /// Set when gpui closes an extra window and drops its `AndroidWindow`.
+    /// The platform run loop then drops the window from `extra_windows`.
+    pub(crate) closed: bool,
+    /// Hidden while the window has no surface (the app or this Activity is
+    /// in the background, or the screen is off): gpui would lay out and
+    /// paint frames that can't be presented.
+    pub(crate) visibility: WindowVisibility,
+    /// The visibility last reported to gpui, which can't be called back
+    /// while it opens a window; see [`AndroidWindowStatePtr::sync_visibility`].
+    pub(crate) reported_visibility: WindowVisibility,
+    /// Whether the window's Activity has input focus. Starts true because
+    /// each window opens in front. Zed closes the active window for
+    /// `workspace::CloseWindow`, so with every window reporting active,
+    /// Ctrl+W in Settings closed the main window instead, and Zed quit.
+    pub(crate) active: bool,
+    /// The pointer state from the last input, recorded the way gpui records
+    /// it. gpui reads these back whenever the window is activated or
+    /// resized, so defaults would move its pointer to the top-left corner.
+    pub(crate) mouse_position: Point<Pixels>,
+    pub(crate) modifiers: Modifiers,
+    pub(crate) capslock: Capslock,
     /// Cheap clone (Arc internally) used by `AndroidWindow::Drop` to issue
     /// `multi_window::finish_extra_activity` for extra windows. Always set
     /// at construction time (both primary and extras carry it; primary just
@@ -115,32 +143,14 @@ pub(crate) struct AndroidWindowState {
     /// tap-tap-drag pending flags, etc. all live here so a gesture in
     /// one window doesn't leak into another's.
     pub(crate) captured: crate::captured_pointer::CapturedPointerState,
-    /// Per-window native-touch SM state. See `crate::touch`. Per-pointer-
-    /// ID tracking, multi-finger gesture classification, tap vs scroll
-    /// discrimination. Each window's touchscreen events are isolated.
-    pub(crate) touch: crate::touch::TouchState,
-    /// Trackpad-mode counterpart to `touch`. Receives the same
+    /// Trackpad-mode counterpart to `touch_feed`. Receives the same
     /// `TouchEvent` stream when `android_input.trackpad_mode` is on
     /// (the dispatcher branches via the
     /// `ime::TRACKPAD_MODE_ENABLED` atomic).
     pub(crate) trackpad_touch: crate::touch::TrackpadTouchState,
-    /// Set by elements (scrollbar thumb, splitter, resize handle) while
-    /// they're actively driving a direct-manipulation drag. Flips via
-    /// `PlatformWindow::set_drag_active` on this window's
-    /// `AndroidWindow`. The touch SM checks this in its `Move` handler:
-    /// while set, single-finger drag emits `MouseMove(Left held)` so
-    /// the dragging element receives motion instead of having the SM
-    /// auto-convert to `ScrollWheel`. Without this gate, a touch-drag
-    /// on a scrollbar thumb gets clobbered by the threshold-cross
-    /// `MouseUp(0)` cancel.
-    pub(crate) drag_active: AtomicBool,
-    /// True when the most recent pointer event on this window was
-    /// touch (Finger). Set in `events.rs` and `touch.rs` for Finger
-    /// dispatch; cleared for mouse / stylus / captured-trackpad. UI
-    /// components query via `Window::last_input_was_touch` and use it
-    /// to widen hit zones for touch without affecting mouse
-    /// precision (e.g. the pane splitter MouseDown handler).
-    pub(crate) last_input_was_touch: AtomicBool,
+    /// Feeds finger gestures to gpui's own touch gesture recognizer. Each
+    /// window's touchscreen events are isolated.
+    pub(crate) touch_feed: crate::touch::TouchFeed,
     /// Mirror of [`AndroidWindow::extra_window_id`] — set by
     /// `cx.open_window` after the wrapping `AndroidWindow` is
     /// built. None for the primary surface, `Some(id)` for
@@ -165,12 +175,10 @@ pub(crate) struct AndroidWindowState {
     pub(crate) ime_composition_text: Option<String>,
     /// Per-window mirror of whether the input handler was present at
     /// the last frame-boundary IME reconcile. Compared against the
-    /// current `input_handler.is_some()` to detect show/hide
-    /// transitions. Per-window so that an `ExtraWindowActivity`
-    /// (settings, picker) can drive its own IME independent of the
-    /// primary surface — without this, focusing a text input in a
-    /// spawned window wouldn't trigger show_keyboard because the
-    /// global was already true for MainActivity.
+    /// current `input_handler.is_some()` to detect focus gain and
+    /// loss. Per-window so that an `ExtraWindowActivity` (settings,
+    /// picker) can drive its own IME independent of the primary
+    /// surface.
     pub(crate) ime_currently_visible: bool,
     /// Per-window cache of the last classified IME target kind
     /// (terminal vs editor). On change we issue restartInput on this
@@ -228,7 +236,7 @@ impl AndroidWindowStatePtr {
             // Alpha-aware compositor mode (PreMultiplied with
             // Inherit fallback). The SurfaceView's pixel format is
             // what actually decides the compositor's alpha-awareness
-            // on Adreno+Samsung: MainActivity (GameActivity) ends up
+            // on Samsung: MainActivity (GameActivity) ends up
             // OPAQUE and ExtraWindowActivity's holder is explicitly
             // OPAQUE too, so the wgpu surface's alpha_mode falls back
             // to Inherit and behaves opaque regardless of this flag.
@@ -244,8 +252,7 @@ impl AndroidWindowStatePtr {
             // time when a newer one is ready, which under irregular paint
             // cadence (scroll bursts, typing flurries) feels ~1 frame
             // tighter than FIFO. Falls back to Fifo inside the renderer
-            // if the surface doesn't expose Mailbox; Adreno 740 (Tab S9)
-            // does.
+            // if the surface doesn't expose Mailbox.
             //
             // Triple-buffer (`Some(3)`) was tried and reverted: at 120Hz
             // the cost is +8.33ms of in-flight latency which is invisible,
@@ -254,7 +261,8 @@ impl AndroidWindowStatePtr {
             // rates the extra image adds 16-33ms of perceived input
             // latency that the user feels as overall sluggishness. Stay
             // at the wgpu default of 2 until we have a way to keep the
-            // panel pinned at 120Hz.
+            // panel pinned at 120Hz. See
+            // `docs/workarounds/deferred-render-pipeline-perf.md`.
             preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
         };
 
@@ -309,8 +317,8 @@ impl AndroidWindowStatePtr {
         }
 
         // Ask the system for the panel's maximum refresh rate. On API 30+
-        // capable devices this opts us into 120Hz on Tab S9 Ultra / Pixel
-        // Tablet (otherwise the compositor leaves us at 60Hz for "compat"
+        // capable devices this opts us into the panel's top rate, such as
+        // 120Hz (otherwise the compositor leaves us at 60Hz for "compat"
         // apps regardless of panel capability). No-op on API 26-29 — the
         // symbol is resolved via `dlsym` rather than direct-linked so
         // missing-symbol on older devices is silent, not a load-time
@@ -321,6 +329,7 @@ impl AndroidWindowStatePtr {
         // Replace the previous wrapper (if any). The drop releases the prior
         // ANativeWindow refcount; Vulkan's VkSurfaceKHR holds its own ref.
         state.native_window = Some(native_window);
+        state.visibility = WindowVisibility::Visible;
 
         // Force a paint on the next refresh tick. After a fresh `replace_surface`
         // the swapchain is uninitialized (presents black), and gpui's
@@ -329,7 +338,32 @@ impl AndroidWindowStatePtr {
         // `window.draw(cx)` inside open_window, but it's cheap and makes the
         // background→foreground path symmetric.
         state.force_render_after_recovery = true;
+        request_frame_callback();
         Ok(())
+    }
+
+    /// Whether frames drawn now can be presented.
+    pub(crate) fn is_visible(&self) -> bool {
+        self.state.borrow().visibility.is_visible()
+    }
+
+    /// Reports a visibility change to gpui. The run loop calls this rather
+    /// than `attach_surface`/`detach_surface`, which also run while gpui is
+    /// opening a window and can't take callbacks.
+    pub(crate) fn sync_visibility(&self) {
+        let visibility = {
+            let mut state = self.state.borrow_mut();
+            if state.visibility == state.reported_visibility {
+                return;
+            }
+            state.reported_visibility = state.visibility;
+            state.visibility
+        };
+        let callback = self.callbacks.borrow_mut().visibility_change.take();
+        if let Some(mut callback) = callback {
+            callback(visibility);
+            self.callbacks.borrow_mut().visibility_change = Some(callback);
+        }
     }
 
     /// Called from the platform run loop on `MainEvent::TerminateWindow`. The
@@ -352,6 +386,7 @@ impl AndroidWindowStatePtr {
             native_window: std::ptr::null_mut(),
         };
         state.native_window = None;
+        state.visibility = WindowVisibility::Hidden;
         log::info!("AndroidWindow::detach_surface: surface unconfigured");
     }
 
@@ -395,11 +430,17 @@ impl AndroidWindowStatePtr {
     /// calls during the callback's own paint side-effects would otherwise
     /// double-borrow the callback Box.
     pub(crate) fn refresh(&self) {
-        let force_render = std::mem::take(&mut self.state.borrow_mut().force_render_after_recovery);
+        let (force_render, require_presentation) = {
+            let mut state = self.state.borrow_mut();
+            (
+                std::mem::take(&mut state.force_render_after_recovery),
+                std::mem::take(&mut state.present_on_next_frame),
+            )
+        };
         let callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(mut callback) = callback {
             callback(RequestFrameOptions {
-                require_presentation: false,
+                require_presentation,
                 force_render,
                 signal_at: None,
                 signal_source: FrameRequestSource::NativeCallback,
@@ -437,11 +478,29 @@ impl AndroidWindowStatePtr {
         }
     }
 
+    /// Records the window's Activity gaining or losing input focus and tells
+    /// gpui when that changes.
+    pub(crate) fn set_active(&self, active: bool) {
+        let was_active = {
+            let mut state = self.state.borrow_mut();
+            // gpui has already removed a closed window, so its callback
+            // would only fail with "window not found".
+            if state.closed {
+                return;
+            }
+            std::mem::replace(&mut state.active, active)
+        };
+        if was_active != active {
+            self.notify_active_status_change(active);
+        }
+    }
+
     /// Dispatches a translated input event into gpui via the registered
     /// `on_input` callback, then routes printable `KeyDown`s through the
     /// active `PlatformInputHandler` (gpui's text-input path) when the
     /// callback didn't claim them.
     pub(crate) fn handle_input(&self, input: PlatformInput) {
+        self.record_pointer_state(&input);
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut callback) = callback {
             let result = callback(input.clone());
@@ -466,6 +525,41 @@ impl AndroidWindowStatePtr {
             }
         }
     }
+
+    /// Mirrors `Window::dispatch_event`'s bookkeeping.
+    fn record_pointer_state(&self, input: &PlatformInput) {
+        let mut state = self.state.borrow_mut();
+        match input {
+            PlatformInput::MouseMove(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::MouseDown(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::MouseUp(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::MouseExited(event) => {
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::ModifiersChanged(event) => {
+                state.modifiers = event.modifiers;
+                state.capslock = event.capslock;
+            }
+            PlatformInput::Scroll(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            PlatformInput::Pinch(event) => {
+                state.mouse_position = event.position;
+                state.modifiers = event.modifiers;
+            }
+            _ => {}
+        }
+    }
 }
 
 pub(crate) struct AndroidWindow {
@@ -482,12 +576,38 @@ pub(crate) struct AndroidWindow {
 }
 
 impl AndroidWindow {
+    /// An explicit request to show or hide the soft keyboard. A show does
+    /// nothing with `android_input.on_screen_keyboard` off or a physical
+    /// keyboard blocking the on-screen one, when the status bar hides its
+    /// keyboard button: One UI's Samsung Keyboard doesn't show then anyway.
+    fn request_soft_keyboard(&self, show: bool) {
+        if show
+            && (!crate::ime::on_screen_keyboard_enabled()
+                || crate::ime::physical_keyboard_blocks_ime())
+        {
+            return;
+        }
+        let (android_app, extra_window_id) = {
+            let state = self.ptr.state.borrow();
+            (state.android_app.clone(), state.extra_window_id)
+        };
+        // Set our view of the keyboard before the asynchronous JNI call:
+        // Kotlin confirms 100-500 ms later, after the IME animation, and a
+        // button showing the old state that long reads as a missed tap.
+        // Kotlin's insets listener corrects it if the request fails.
+        crate::ime::SOFT_KEYBOARD_VISIBLE.store(show, std::sync::atomic::Ordering::Release);
+        crate::ime::request_keyboard(&android_app, extra_window_id, show);
+    }
+
+    /// `touch_slop` is the one gpui's touch recognizer uses, in logical
+    /// pixels.
     pub(crate) fn new(
         handle: AnyWindowHandle,
         _params: WindowParams,
         gpu_context: GpuContext,
         appearance: WindowAppearance,
         android_app: AndroidApp,
+        touch_slop: Pixels,
     ) -> Self {
         let display: Rc<dyn PlatformDisplay> = Rc::new(AndroidDisplay::new());
         let bounds = display.bounds();
@@ -507,14 +627,21 @@ impl AndroidWindow {
             gpu_context,
             native_window: None,
             force_render_after_recovery: false,
+            present_on_next_frame: false,
+            last_present_failed: false,
             os_closed: AtomicBool::new(false),
+            closed: false,
+            visibility: WindowVisibility::Visible,
+            reported_visibility: WindowVisibility::Visible,
+            active: true,
+            mouse_position: Point::default(),
+            modifiers: Modifiers::default(),
+            capslock: Capslock::default(),
             android_app,
             clicks: crate::events::click_track::ClickTrackState::default(),
             captured: crate::captured_pointer::CapturedPointerState::default(),
-            touch: crate::touch::TouchState::default(),
             trackpad_touch: crate::touch::TrackpadTouchState::default(),
-            drag_active: AtomicBool::new(false),
-            last_input_was_touch: AtomicBool::new(false),
+            touch_feed: crate::touch::TouchFeed::new(touch_slop),
             extra_window_id: None,
             ime_composition_start: None,
             ime_composition_text: None,
@@ -542,6 +669,7 @@ impl Drop for AndroidWindow {
         let Some(window_id) = self.extra_window_id else {
             return;
         };
+        self.ptr.state.borrow_mut().closed = true;
         let state = self.ptr.state.borrow();
         if state.os_closed.load(std::sync::atomic::Ordering::SeqCst) {
             // OS-initiated close already happened — Activity is gone, no
@@ -604,23 +732,24 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
-        Point::default()
+        self.ptr.state.borrow().mouse_position
     }
 
     fn modifiers(&self) -> Modifiers {
-        Modifiers::default()
+        self.ptr.state.borrow().modifiers
     }
 
     fn capslock(&self) -> Capslock {
-        Capslock::default()
+        self.ptr.state.borrow().capslock
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
-        // No show_keyboard call here — gpui's paint cycle calls
+        // No keyboard call here — gpui's paint cycle calls
         // take_input_handler/set_input_handler every frame for state
         // shuffling (window.rs line 2497-2509), which would oscillate
-        // the IME visibly. Show/hide is driven by a frame-boundary
-        // diff in `AndroidPlatform::reconcile_ime_visibility` instead.
+        // the IME visibly. Hiding on focus loss is driven by a
+        // frame-boundary diff in `AndroidPlatform::reconcile_ime_visibility`
+        // instead.
         self.ptr.state.borrow_mut().input_handler = Some(input_handler);
     }
 
@@ -654,13 +783,11 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn is_active(&self) -> bool {
-        true
+        self.ptr.state.borrow().active
     }
 
     fn visibility(&self) -> WindowVisibility {
-        // Backgrounding tears down the Surface, which already stops
-        // painting, so gpui never needs to see a Hidden window.
-        WindowVisibility::Visible
+        self.ptr.state.borrow().reported_visibility
     }
 
     fn is_hovered(&self) -> bool {
@@ -694,6 +821,10 @@ impl PlatformWindow for AndroidWindow {
         true
     }
 
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        Some(Rc::new(request_frame_callback))
+    }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.ptr.callbacks.borrow_mut().request_frame = Some(callback);
     }
@@ -706,7 +837,9 @@ impl PlatformWindow for AndroidWindow {
         self.ptr.callbacks.borrow_mut().active_status_change = Some(callback);
     }
 
-    fn on_visibility_change(&self, _callback: Box<dyn FnMut(WindowVisibility)>) {}
+    fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>) {
+        self.ptr.callbacks.borrow_mut().visibility_change = Some(callback);
+    }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.ptr.callbacks.borrow_mut().hovered_status_change = Some(callback);
@@ -726,10 +859,7 @@ impl PlatformWindow for AndroidWindow {
         self.ptr.callbacks.borrow_mut().should_close = Some(callback);
     }
 
-    fn on_hit_test_window_control(
-        &self,
-        _callback: Box<dyn FnMut() -> Option<WindowControlArea>>,
-    ) {
+    fn on_hit_test_window_control(&self, _callback: Box<dyn FnMut() -> Option<WindowControlArea>>) {
     }
 
     fn on_close(&self, callback: Box<dyn FnOnce()>) {
@@ -740,48 +870,31 @@ impl PlatformWindow for AndroidWindow {
         self.ptr.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
-    fn set_drag_active(&self, active: bool) {
-        self.ptr
-            .state
-            .borrow()
-            .drag_active
-            .store(active, std::sync::atomic::Ordering::Relaxed);
+    fn show_soft_keyboard(&self) {
+        self.request_soft_keyboard(true);
     }
 
-    fn last_input_was_touch(&self) -> bool {
-        self.ptr
-            .state
-            .borrow()
-            .last_input_was_touch
-            .load(std::sync::atomic::Ordering::Relaxed)
+    fn hide_soft_keyboard(&self) {
+        self.request_soft_keyboard(false);
     }
 
-    fn toggle_soft_keyboard(&self) {
-        let (android_app, extra_window_id) = {
-            let state = self.ptr.state.borrow();
-            (state.android_app.clone(), state.extra_window_id)
-        };
-        // Optimistically flip our local view of IME visibility
-        // BEFORE the JNI roundtrip. The actual hide/show on Kotlin
-        // side is async (runOnUiThread + IME animation), so Kotlin's
-        // post-toggle `setImeShown` call can land 100-500ms after
-        // the user tapped the button. Without the optimistic flip
-        // the pane button's `toggle_state` lags by that much, the
-        // user perceives "first tap didn't work, second tap did"
-        // because by the time the visual catches up, they've already
-        // tapped again. Kotlin's WindowInsetsListener will correct
-        // if the OS-side toggle fails for any reason.
-        let new_visible = !crate::ime::soft_keyboard_visible();
-        crate::ime::SOFT_KEYBOARD_VISIBLE
-            .store(new_visible, std::sync::atomic::Ordering::Release);
-        crate::ime::toggle_keyboard(&android_app, extra_window_id);
-    }
-
-    fn soft_keyboard_visible(&self) -> bool {
-        crate::ime::soft_keyboard_visible()
+    fn text_input_state_changed(&self, change: TextInputStateChange) {
+        let ime_window_id = self.ptr.state.borrow().extra_window_id.unwrap_or(0);
+        match change {
+            TextInputStateChange::FocusGained => {
+                crate::ime::set_text_input_focused(ime_window_id, true)
+            }
+            TextInputStateChange::FocusLost => {
+                crate::ime::set_text_input_focused(ime_window_id, false)
+            }
+            // Zed's editor doesn't report these yet; the run loop polls the
+            // selection while the keyboard is up.
+            TextInputStateChange::SelectionChanged | TextInputStateChange::ContentChanged => {}
+        }
     }
 
     fn draw(&self, scene: &Scene) {
+        frame_presented();
         let mut state = self.ptr.state.borrow_mut();
         let raw_window = state.raw_window;
         let Some(renderer) = state.renderer.as_mut() else {
@@ -796,13 +909,34 @@ impl PlatformWindow for AndroidWindow {
             match renderer.recover(&raw_window) {
                 Ok(()) => {
                     state.force_render_after_recovery = true;
+                    request_frame_callback();
                 }
                 Err(err) => log::error!("GPU recovery failed: {err:#}"),
             }
             return;
         }
 
-        renderer.draw(scene);
+        let presented = renderer.draw(scene);
+        // gpui knows about neither of these, and its Wayland backend handles
+        // them the same way. When the renderer cleared its atlas, cached
+        // views still point into it, so the next frame redraws everything.
+        // When presenting failed, for example on an out-of-date swapchain
+        // the renderer just reconfigured, the next frame presents the same
+        // scene again; a failure that repeats, as while the surface is
+        // unconfigured, waits for the next change.
+        if renderer.needs_redraw() {
+            state.force_render_after_recovery = true;
+            request_frame_callback();
+        } else if !presented && !state.last_present_failed {
+            log::debug!("draw: present failed, presenting again on the next frame");
+            state.present_on_next_frame = true;
+            request_frame_callback();
+        }
+        state.last_present_failed = !presented;
+    }
+
+    fn schedule_frame(&self) {
+        request_frame_callback();
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {

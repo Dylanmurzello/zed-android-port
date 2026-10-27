@@ -36,7 +36,7 @@ pub(crate) type PlatformScreenCaptureFrame =
     objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
 
 use crate::{
-    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
+    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds, Corners,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
     LineLayout, MissingGlyphSink, Pixels, PlatformGestures, PlatformInput, Point, Priority,
@@ -1143,6 +1143,10 @@ pub enum AppLifecyclePhase {
     Background,
     /// Becoming visible again, before input is restored.
     Foreground,
+    /// The native scene has disconnected. Its windows may reconnect later.
+    /// This is not a process-termination notification or a guaranteed final
+    /// opportunity to save state.
+    Disconnected,
 }
 
 /// Regions of a window that are obscured or reserved by the system.
@@ -1162,6 +1166,11 @@ pub struct WindowInsets {
     /// (iOS: derived from `keyboardWillShow`/frame-change notifications.
     /// Android: `WindowInsets.Type.ime()`.)
     pub ime: Edges<Pixels>,
+    /// The radii of the window's visible corners where the display rounds
+    /// them, and zero where corners are square or the platform can't say.
+    /// Content inset from an edge by `d` lines up with the display by using a
+    /// radius of `radius - d`. (iOS 26+: a concentric `UICornerConfiguration`.)
+    pub corner_radii: Corners<Pixels>,
 }
 
 impl WindowInsets {
@@ -1273,48 +1282,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_close(&self, callback: Box<dyn FnOnce()>);
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
-
-    /// Set whether an element on this window is actively driving a
-    /// direct-manipulation drag (e.g. scrollbar thumb being dragged).
-    /// On touch platforms this gates the gesture-recognizer's
-    /// auto-conversion of single-finger drags to scroll events: while
-    /// `drag_active` is set, the touch SM passes the gesture through
-    /// as `MouseMove(Left held)` instead of synthesizing
-    /// `ScrollWheel`. Mouse / desktop platforms can ignore — they
-    /// don't synthesize scroll, so the default empty impl is correct.
-    fn set_drag_active(&self, _active: bool) {}
-
-    /// Returns true when the most recent pointer input on this window
-    /// came from touch (finger). Used by UI components that want to
-    /// widen hit zones for touch without affecting mouse precision —
-    /// e.g. a pane splitter handler can fall back to a dilated
-    /// position check when this is true, while the mouse path stays
-    /// on the precise hover-based check. Mouse / desktop platforms
-    /// return false (default impl).
-    fn last_input_was_touch(&self) -> bool {
-        false
-    }
-
-    /// Toggle the on-screen IME on Android. The Android impl
-    /// distinguishes between "user explicitly dismissed and wants
-    /// to bring it back" (this call) and the implicit show that
-    /// fires on text-input focus; the latter is suppressed once
-    /// the user has dismissed the IME so we don't fight the user
-    /// every time they scroll through text. No-op on every other
-    /// platform — IME visibility is OS-managed elsewhere.
-    fn toggle_soft_keyboard(&self) {}
-
-    /// True when the on-screen IME is currently visible from the OS's
-    /// perspective (Android: tracked by Kotlin's `imeShown` flag,
-    /// kept in sync via the WindowInsetsListener and our own
-    /// show/hide calls). The pane tab-bar keyboard button uses this
-    /// to drive its `toggle_state` highlight — same lit-up convention
-    /// other Zed togglable buttons follow. Default false on platforms
-    /// where IME visibility isn't a meaningful concept here.
-    fn soft_keyboard_visible(&self) -> bool {
-        false
-    }
-
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
@@ -2025,6 +1992,7 @@ impl From<TileId> for etagere::AllocId {
 pub struct PlatformInputHandler {
     cx: AsyncWindowContext,
     handler: Box<dyn InputHandler>,
+    focus_id: Option<crate::FocusId>,
 }
 
 #[expect(missing_docs)]
@@ -2037,7 +2005,24 @@ pub struct PlatformInputHandler {
 )]
 impl PlatformInputHandler {
     pub fn new(cx: AsyncWindowContext, handler: Box<dyn InputHandler>) -> Self {
-        Self { cx, handler }
+        Self {
+            cx,
+            handler,
+            focus_id: None,
+        }
+    }
+
+    pub(crate) fn with_focus(mut self, focus_id: crate::FocusId) -> Self {
+        self.focus_id = Some(focus_id);
+        self
+    }
+
+    /// Identifies the input field registered through [`Window::handle_input`].
+    ///
+    /// This identity survives adapter replacement during repaint. Backends can
+    /// use it to detect a field change without restarting the keyboard session.
+    pub fn focus_id(&self) -> Option<crate::FocusId> {
+        self.focus_id
     }
 
     pub fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
@@ -2122,6 +2107,15 @@ impl PlatformInputHandler {
             .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
             .ok()
             .flatten()
+    }
+
+    pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
+        self.cx
+            .update(|window, cx| {
+                self.handler
+                    .selection_bounds_for_range(range_utf16, window, cx)
+            })
+            .unwrap_or_default()
     }
 
     #[allow(dead_code)]
@@ -2230,6 +2224,21 @@ impl PlatformInputHandler {
             .unwrap_or(true)
     }
 
+    /// Checks eligibility against the current focus, including before the next frame is drawn.
+    ///
+    /// Unlike the legacy acceptance query, this fails closed when the window cannot
+    /// be updated and requires registration through `Window::handle_input`.
+    pub fn query_accepts_focused_text_input(&mut self) -> bool {
+        let focus_id = self.focus_id;
+        self.cx
+            .update(|window, cx| {
+                focus_id.is_some()
+                    && window.focus == focus_id
+                    && self.handler.accepts_text_input(window, cx)
+            })
+            .unwrap_or(false)
+    }
+
     /// See [`InputHandler::prefers_ime_for_printable_keys`].
     ///
     /// This is not a pure delegation to the handler: while a multi-stroke binding is pending this
@@ -2275,10 +2284,10 @@ pub struct UTF16Selection {
     pub reversed: bool,
 }
 
-/// Zed's interface for handling text input from the platform's IME system
-/// This is currently a 1:1 exposure of the NSTextInputClient API:
+/// GPUI's interface for native text input, IME composition, and selection.
+/// Platform backends translate their native text protocols into these operations.
 ///
-/// <https://developer.apple.com/documentation/appkit/nstextinputclient>
+/// Text offsets and ranges use UTF-16 code units unless stated otherwise.
 pub trait InputHandler: 'static {
     /// Get the range of the user's currently selected text, if any
     /// Corresponds to [selectedRange()](https://developer.apple.com/documentation/appkit/nstextinputclient/1438242-selectedrange)
@@ -2352,7 +2361,7 @@ pub trait InputHandler: 'static {
         }
     }
 
-    /// Get the bounds of the given document range in screen coordinates
+    /// Get the bounds of the given document range in window coordinates.
     /// Corresponds to [firstRect(forCharacterRange:actualRange:)](https://developer.apple.com/documentation/appkit/nstextinputclient/1438240-firstrect)
     ///
     /// This is used for positioning the IME candidate window
@@ -2362,6 +2371,21 @@ pub trait InputHandler: 'static {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Bounds<Pixels>>;
+
+    /// Returns selection rectangles in document order, in window coordinates.
+    ///
+    /// Return line or shaped-run fragments, not one rectangle per character. The
+    /// first and last rectangles contain the range's start and end respectively.
+    /// Empty means native selection geometry is unavailable; caret/IME geometry can
+    /// still be supplied by `bounds_for_range`.
+    fn selection_bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Vec<Bounds<Pixels>> {
+        Vec::new()
+    }
 
     /// Get the character offset for the given point in terms of UTF16 characters
     ///
@@ -2599,6 +2623,9 @@ pub struct WindowOptions {
 
     /// Tab group name, allows opening the window as a native tab on macOS 10.12+. Windows with the same tabbing identifier will be grouped together.
     pub tabbing_identifier: Option<String>,
+
+    /// Whether to render the window using the Display P3 color space on macOS.
+    pub use_display_p3: bool,
 }
 
 /// The variables that can be configured when creating a new window
@@ -2664,6 +2691,9 @@ pub struct WindowParams {
 
     #[cfg(target_os = "macos")]
     pub tabbing_identifier: Option<String>,
+
+    #[cfg(target_os = "macos")]
+    pub use_display_p3: bool,
 }
 
 /// Represents the status of how a window should be opened.
@@ -2725,6 +2755,7 @@ impl Default for WindowOptions {
             window_min_size: None,
             window_decorations: None,
             tabbing_identifier: None,
+            use_display_p3: false,
         }
     }
 }

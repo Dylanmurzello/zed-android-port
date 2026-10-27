@@ -115,10 +115,7 @@ impl PathIdentity {
 /// **Caller obligation**: build the returned suffix into your
 /// platform-specific relative path type (`RelPath`, `RelativePath`,
 /// whatever). This module stays free of editor-specific type concerns.
-pub fn strip_prefix_by_identity(
-    child: &Path,
-    parent: &Path,
-) -> Option<Vec<std::ffi::OsString>> {
+pub fn strip_prefix_by_identity(child: &Path, parent: &Path) -> Option<Vec<std::ffi::OsString>> {
     let parent_id = PathIdentity::of(parent)?;
     let mut current = child.to_path_buf();
     let mut suffix: Vec<std::ffi::OsString> = Vec::new();
@@ -154,9 +151,7 @@ mod tests {
 
     #[test]
     fn identity_of_nonexistent_is_none() {
-        let path = std::path::PathBuf::from(
-            "/this/path/does/not/exist/anywhere/at/all",
-        );
+        let path = std::path::PathBuf::from("/this/path/does/not/exist/anywhere/at/all");
         assert!(PathIdentity::of(&path).is_none());
     }
 

@@ -36,6 +36,7 @@ pub struct WorkspaceSettings {
     pub on_new_window: settings::OnNewWindow,
     pub on_last_window_closed: settings::OnLastWindowClosed,
     pub text_rendering_mode: settings::TextRenderingMode,
+    pub use_display_p3: bool,
     pub resize_all_panels_in_dock: Vec<DockPosition>,
     pub close_on_file_delete: bool,
     pub close_panel_on_toggle: bool,
@@ -93,15 +94,6 @@ pub struct TabBarSettings {
     pub show_pinned_tabs_in_separate_row: bool,
 }
 
-#[derive(Deserialize, RegisterSetting)]
-pub struct AndroidInputSettings {
-    pub on_screen_keyboard: bool,
-    pub trackpad_mode: bool,
-    pub trackpad_mode_active: bool,
-    pub programming_extras_row: bool,
-    pub invert_scroll: bool,
-}
-
 impl Settings for WorkspaceSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let workspace = &content.workspace;
@@ -144,6 +136,7 @@ impl Settings for WorkspaceSettings {
             on_new_window: workspace.on_new_window.unwrap(),
             on_last_window_closed: workspace.on_last_window_closed.unwrap(),
             text_rendering_mode: workspace.text_rendering_mode.unwrap(),
+            use_display_p3: workspace.use_display_p3.unwrap(),
             resize_all_panels_in_dock: workspace
                 .resize_all_panels_in_dock
                 .clone()
@@ -218,28 +211,6 @@ impl Settings for TabBarSettings {
             show_nav_history_buttons: tab_bar.show_nav_history_buttons.unwrap(),
             show_tab_bar_buttons: tab_bar.show_tab_bar_buttons.unwrap(),
             show_pinned_tabs_in_separate_row: tab_bar.show_pinned_tabs_in_separate_row.unwrap(),
-        }
-    }
-}
-
-impl Settings for AndroidInputSettings {
-    fn from_settings(content: &settings::SettingsContent) -> Self {
-        let android_input = content.android_input.clone().unwrap_or_default();
-        AndroidInputSettings {
-            // All Android Input features default to OFF. The
-            // onboarding card surfaces all three switches on first
-            // launch (Soft Keyboard, Programming Keys Row, Virtual
-            // Trackpad), and the Settings panel exposes the same row
-            // under "Android Input" with search. Off-by-default also
-            // sidesteps the boot-time race between Kotlin's field
-            // initialization and the Rust→Kotlin push (an unexpected
-            // "row appears while setting is off" was the original
-            // symptom that drove this choice).
-            on_screen_keyboard: android_input.on_screen_keyboard.unwrap_or(false),
-            trackpad_mode: android_input.trackpad_mode.unwrap_or(false),
-            trackpad_mode_active: android_input.trackpad_mode_active.unwrap_or(false),
-            programming_extras_row: android_input.programming_extras_row.unwrap_or(false),
-            invert_scroll: android_input.invert_scroll.unwrap_or(false),
         }
     }
 }

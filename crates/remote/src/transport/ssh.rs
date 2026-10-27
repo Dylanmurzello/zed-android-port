@@ -897,24 +897,20 @@ impl SshRemoteConnection {
                 return Err(e.context("Failed to connect to host"));
             }
 
-            if let Some(status) = master_process.as_mut().try_status()? {
-                // With -f on Android (and any caller that forks the
-                // master into background after auth), the parent ssh
-                // exits with success once the daemonized child has the
-                // master socket up. That's the happy path, not a
-                // failure — fall through to SshSocket::new. Only bail
-                // on non-zero exit.
-                if !status.success() {
-                    let mut output = Vec::new();
-                    if let Some(mut stderr) = master_process.as_mut().stderr.take() {
-                        stderr.read_to_end(&mut output).await?;
-                    }
-                    let error_message = format!(
-                        "failed to connect: {}",
-                        String::from_utf8_lossy(&output).trim()
-                    );
-                    anyhow::bail!(error_message);
-                }
+            // With -f (Android), the parent ssh exits with success once the
+            // master socket is up.
+            if let Some(status) = master_process.as_mut().try_status()?
+                && !(cfg!(target_os = "android") && status.success())
+            {
+                let mut output = Vec::new();
+                let mut stderr = master_process.as_mut().stderr.take().unwrap();
+                stderr.read_to_end(&mut output).await?;
+
+                let error_message = format!(
+                    "failed to connect: {}",
+                    String::from_utf8_lossy(&output).trim()
+                );
+                anyhow::bail!(error_message);
             }
 
             let socket = SshSocket::new(connection_options, socket_path).await?;
@@ -965,24 +961,20 @@ impl SshRemoteConnection {
                 return Err(e.context("Failed to connect to host"));
             }
 
-            if let Some(status) = master_process.as_mut().try_status()? {
-                // With -f on Android (and any caller that forks the
-                // master into background after auth), the parent ssh
-                // exits with success once the daemonized child has the
-                // master socket up. That's the happy path, not a
-                // failure — fall through to SshSocket::new. Only bail
-                // on non-zero exit.
-                if !status.success() {
-                    let mut output = Vec::new();
-                    if let Some(mut stderr) = master_process.as_mut().stderr.take() {
-                        stderr.read_to_end(&mut output).await?;
-                    }
-                    let error_message = format!(
-                        "failed to connect: {}",
-                        String::from_utf8_lossy(&output).trim()
-                    );
-                    anyhow::bail!(error_message);
-                }
+            // With -f (Android), the parent ssh exits with success once the
+            // master socket is up.
+            if let Some(status) = master_process.as_mut().try_status()?
+                && !(cfg!(target_os = "android") && status.success())
+            {
+                let mut output = Vec::new();
+                let mut stderr = master_process.as_mut().stderr.take().unwrap();
+                stderr.read_to_end(&mut output).await?;
+
+                let error_message = format!(
+                    "failed to connect: {}",
+                    String::from_utf8_lossy(&output).trim()
+                );
+                anyhow::bail!(error_message);
             }
 
             let socket = SshSocket::new(
@@ -1127,18 +1119,16 @@ impl SshRemoteConnection {
 
         let wanted_version = cx.update(|cx| match release_channel {
             ReleaseChannel::Nightly => Ok(None),
-            // Android builds come from a Zed stable release and report its
-            // version as the app version, so they fetch that release's
-            // server like a stable client, while keeping ReleaseChannel::Dev
-            // so the app data dir / settings.json / recent_projects don't
-            // namespace-shift. Client and server must match: newer clients
+            // Android builds come from a Zed stable or preview release and
+            // report its version as the app version, so they fetch that
+            // release's server like a client of its channel, while keeping
+            // ReleaseChannel::Dev so the app data dir / settings.json /
+            // recent_projects don't namespace-shift. Client and server must match: newer clients
             // launch agents through server subcommands older servers lack.
             // Non-Android Dev clients keep the original bail — they're
             // presumed to be Zed devs running `cargo run`, who can pre-stage
             // a remote_server binary on the remote or build from source.
-            ReleaseChannel::Dev if cfg!(target_os = "android") => {
-                Ok(Some(AppVersion::global(cx)))
-            }
+            ReleaseChannel::Dev if cfg!(target_os = "android") => Ok(Some(AppVersion::global(cx))),
             ReleaseChannel::Dev => {
                 anyhow::bail!(
                     "ZED_BUILD_REMOTE_SERVER is not set and no remote server exists at ({:?})",
@@ -2106,37 +2096,6 @@ fn build_command_posix(
     write!(exec, "exec env ")?;
 
     for (k, v) in input_env.iter() {
-        // Strip env vars that are only meaningful inside the local
-        // Zed-on-Android process. These leak into remote shells via
-        // Zed's worktree-shell capture (`crates/project/src/environment.rs::
-        // local_directory_environment`), which inherits LD_PRELOAD +
-        // TERMUX_* from our Termux bootstrap's profile.d. On a Linux
-        // remote (typical SSH target), the LD_PRELOAD path doesn't
-        // exist, so glibc spams `ld.so: object … cannot be preloaded:
-        // ignored` on every command. Other Termux-flavored vars
-        // (TMPDIR, HOME, SSL_CERT_FILE, etc.) point at our app-private
-        // Android paths that don't resolve on the remote either —
-        // overriding HOME breaks ssh-config / known-hosts / shell-rc
-        // resolution, overriding TMPDIR breaks subprocess scratch
-        // space.
-        //
-        // The filter here is deliberately conservative: only strip
-        // names that are unambiguously Termux/Android-only. Generic
-        // dev env vars (NVM_DIR, PYENV_ROOT, RUSTUP_HOME, etc.) keep
-        // forwarding so non-Android Zed clients aren't affected.
-        let drop = matches!(
-            k.as_str(),
-            "LD_PRELOAD"
-                | "PREFIX"
-                | "TMPDIR"
-                | "HOME"
-                | "SSL_CERT_FILE"
-                | "CURL_CA_BUNDLE"
-        ) || k.starts_with("TERMUX__")
-            || k.starts_with("TERMUX_APP__");
-        if drop {
-            continue;
-        }
         let assignment = format!("{k}={v}");
         let assignment = ssh_shell_kind
             .try_quote(&assignment)

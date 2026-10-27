@@ -24,7 +24,6 @@ use std::sync::OnceLock;
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result};
-use jni::{JavaVM, objects::JObject};
 
 static REQUESTED: OnceLock<()> = OnceLock::new();
 
@@ -40,7 +39,11 @@ pub fn request_once(android_app: &AndroidApp) {
             log::info!(
                 "storage: requestStoragePermissions returned {} ({})",
                 code,
-                if code == 1 { "already granted" } else { "dialog posted" }
+                if code == 1 {
+                    "already granted"
+                } else {
+                    "dialog posted"
+                }
             );
             let _ = REQUESTED.set(());
         }
@@ -54,16 +57,13 @@ pub fn request_once(android_app: &AndroidApp) {
 }
 
 fn request_inner(android_app: &AndroidApp) -> Result<i32> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread for storage permissions")?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let result = env
-        .call_method(&activity, "requestStoragePermissions", "()I", &[])
-        .context("MainActivity.requestStoragePermissions")?
-        .i()?;
-    Ok(result)
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let result = env
+            .call_method(activity, "requestStoragePermissions", "()I", &[])
+            .context("MainActivity.requestStoragePermissions")?
+            .i()?;
+        Ok(result)
+    })
 }
 
 /// Termux-style `~/storage/` curated symlinks into shared storage.
@@ -81,10 +81,7 @@ fn request_inner(android_app: &AndroidApp) -> Result<i32> {
 pub fn setup_user_symlinks(termux_home: &Path) {
     let storage_dir = termux_home.join("storage");
     if let Err(err) = std::fs::create_dir_all(&storage_dir) {
-        log::warn!(
-            "storage: create {}: {err:#}",
-            storage_dir.display()
-        );
+        log::warn!("storage: create {}: {err:#}", storage_dir.display());
         return;
     }
 
@@ -272,8 +269,7 @@ pub fn copy_tree(
     if !src.is_dir() {
         anyhow::bail!("copy_tree: source {} is not a directory", src.display());
     }
-    std::fs::create_dir_all(dst)
-        .with_context(|| format!("create_dir_all {}", dst.display()))?;
+    std::fs::create_dir_all(dst).with_context(|| format!("create_dir_all {}", dst.display()))?;
     let mut progress = CopyProgress::default();
     let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.to_path_buf(), dst.to_path_buf())];
     while let Some((cur_src, cur_dst)) = stack.pop() {
@@ -310,9 +306,7 @@ pub fn copy_tree(
                 match std::fs::read_link(&entry_src) {
                     Ok(target) => {
                         let _ = std::fs::remove_file(&entry_dst);
-                        if let Err(err) =
-                            std::os::unix::fs::symlink(&target, &entry_dst)
-                        {
+                        if let Err(err) = std::os::unix::fs::symlink(&target, &entry_dst) {
                             log::warn!(
                                 "storage: symlink {} -> {}: {err:#}",
                                 entry_dst.display(),
@@ -320,17 +314,11 @@ pub fn copy_tree(
                             );
                         }
                     }
-                    Err(err) => log::warn!(
-                        "storage: read_link {}: {err:#}",
-                        entry_src.display()
-                    ),
+                    Err(err) => log::warn!("storage: read_link {}: {err:#}", entry_src.display()),
                 }
             } else if file_type.is_dir() {
                 if let Err(err) = std::fs::create_dir_all(&entry_dst) {
-                    log::warn!(
-                        "storage: mkdir {}: {err:#}",
-                        entry_dst.display()
-                    );
+                    log::warn!("storage: mkdir {}: {err:#}", entry_dst.display());
                     continue;
                 }
                 progress.dirs += 1;

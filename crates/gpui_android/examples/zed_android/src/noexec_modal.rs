@@ -215,12 +215,7 @@ impl NoexecMoveModal {
             });
             if let Some(mw) = mw {
                 let task = mw.update(cx, |mw, window, cx| {
-                    mw.open_project(
-                        vec![dst],
-                        workspace::OpenMode::Activate,
-                        window,
-                        cx,
-                    )
+                    mw.open_project(vec![dst], workspace::OpenMode::Activate, window, cx)
                 });
                 if let Ok(task) = task {
                     if let Err(err) = task.await {
@@ -256,21 +251,13 @@ impl ModalView for NoexecMoveModal {
         true
     }
 
-    fn on_before_dismiss(
-        &mut self,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> DismissDecision {
+    fn on_before_dismiss(&mut self, _: &mut Window, _: &mut Context<Self>) -> DismissDecision {
         DismissDecision::Dismiss(true)
     }
 }
 
 impl Render for NoexecMoveModal {
-    fn render(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let path_label = self.abs_path.display().to_string();
 
         AlertModal::new("zed-android-noexec-modal")

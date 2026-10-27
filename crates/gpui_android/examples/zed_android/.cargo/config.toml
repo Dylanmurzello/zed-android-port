@@ -1,17 +1,33 @@
-# Snapdragon 8 Gen 2 (Cortex-X3 + cores) supports Armv8.2 fullfp16, so enable
-# it explicitly. cargo-ndk picks API 24 by default, which predates fullfp16
-# being on by default, and `gemm-f16` (pulled in via candle → audio → call →
-# git_ui → project_panel) refuses to assemble its `fmla *.8h` SIMD path
-# without it.
+# Built for the reference hardware's CPU, so atomics compile to single
+# instructions instead of retry loops (see
+# docs/workarounds/reference-cpu-build.md). Its cores implement SVE, MTE and
+# SSBS, but its kernel doesn't enable them, so they're turned back off. Of
+# the crypto extensions only AES and SHA-2 are on: other Armv9 chips may
+# lack SHA-3 and SM4, and Zed has no use for them. Devices with older CPUs
+# can't run this build. The fp16 this includes is also what `gemm-f16`
+# (pulled in via candle → audio → call → git_ui → project_panel) needs to
+# assemble its `fmla *.8h` SIMD path.
 #
 # The rest shrinks the `.so`. Like Zed's `script/bundle-linux`, the linker
 # folds functions that compile to identical code; `-addrsig` records which
 # functions have their address taken, so folding them can't change behavior.
-# Packed relocations need Android 6, below the app's minSdk 26.
+# Packed relocations need Android 6, below the app's minSdk 26. A build ID,
+# which the NDK's own build scripts always add, lets profilers and crash
+# reports pair the stripped library with its symbols file.
 [target.aarch64-linux-android]
 rustflags = [
-    "-C", "target-feature=+fp16",
+    "-C", "target-cpu=cortex-x3",
+    "-C", "target-feature=-sve,-sve2,-mte,-ssbs,+aes,+sha2",
     "-C", "llvm-args=-addrsig",
     "-C", "link-arg=-Wl,--icf=safe",
     "-C", "link-arg=-Wl,--pack-dyn-relocs=android",
+    "-C", "link-arg=-Wl,--build-id=sha1",
 ]
+
+# The same CPU for the C and C++ code that crates build with `cc`, such as
+# the tree-sitter grammars and SQLite. Clang's `-mcpu=cortex-x3` would enable
+# SVE and can't turn SSBS back off, so this names the same instruction set
+# as above and tunes for the core instead.
+[env]
+CFLAGS_aarch64_linux_android = "-march=armv8.5-a+fp16+fp16fml+i8mm+bf16+aes+sha2 -mtune=cortex-x3"
+CXXFLAGS_aarch64_linux_android = "-march=armv8.5-a+fp16+fp16fml+i8mm+bf16+aes+sha2 -mtune=cortex-x3"

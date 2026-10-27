@@ -10,6 +10,18 @@ here so future sessions don't re-derive it from scratch. When a workaround
 is replaced by something cleaner, mark it Reverted and link to the
 replacement.
 
+Features Zdroid implements because upstream Zed doesn't yet, to check at each
+Zed sync, are listed in [ahead-of-upstream.md](../ahead-of-upstream.md).
+
+## Reference hardware
+
+Zdroid is developed and tested on a Samsung Galaxy Tab S9 Ultra, the tablet
+Dylan used too (see "Tested on" in the top-level README). Unless a writeup
+says otherwise, the observations and measurements here and in code comments
+come from it: Snapdragon 8 Gen 2, Adreno 740 GPU, 120 Hz adaptive-refresh
+panel, ~336 dpi, Android 16 with One UI 8, and the Book Cover Keyboard's
+trackpad, in both tablet mode and DeX.
+
 ## How to read this
 
 | Status | Meaning |
@@ -68,7 +80,7 @@ patches.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
-| [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with event-driven vsync |
+| [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with vsync callbacks, requested only while gpui has frames to draw |
 | [Two-finger tap → right click](two-finger-rightclick.md) | Active | Touchscreens don't have a right mouse button |
 | [JVM stack overflow on clipboard](jvm-clipboard-stack-overflow.md) | Active | Android's 988KB android_main thread can't handle clipboard JNI synchronously |
 | [Soft-keyboard / IME bridge](deferred-soft-keyboard.md) | Deferred | Hardware keyboard works; touch IME bridge is its own engineering problem |
@@ -100,13 +112,14 @@ patches.
 | [Android 16 freeform configChanges (exhaustive)](android16-config-changes-resize.md) | Active | Drag-resize destroys Activity by default; declare every config to handle ourselves |
 | [`appCategory="productivity"`](android16-app-category-productivity.md) | Active | Defang Android 16 games carve-out from desktop windowing — GameActivity inheritance could trip the heuristic |
 | [`documentLaunchMode="always"` implies Intent flags](document-launch-mode-implies-flags.md) | Active | Setting both manifest mode AND explicit flags caused MainActivity to background under DeX |
-| [Cold Activity launch timeout (4s)](activity-launch-cold-timeout.md) | Active | Cold ExtraWindowActivity start ~2s; cap synchronous wait below ANR threshold |
+| [Cold Activity launch timeout (4s)](activity-launch-cold-timeout.md) | Active | Cap the wait for an extra window's surface below the ANR threshold, and acknowledge the main Activity's pause while waiting (it caused 2 s freezes) |
 | [Process-death recovery for extra windows](process-death-recovery-extra-windows.md) | Active | Activities resurrected from Recents after process kill must self-`finish()` if Rust runtime doesn't know their windowId |
 | [`ActivityOptions.setLaunchBounds`](activity-options-launch-bounds.md) | Active | Pass gpui's `WindowParams.bounds` to the OS so freeform windows open at the requested size |
 | [`with_active_or_new_workspace` falls back to existing on Android](with-active-or-new-workspace-android-fallback.md) | Active | When Settings is the active window, theme picker / command palette / recent projects routed through `with_active_or_new_workspace` were spawning duplicate Workspace ExtraWindowActivities; redirect to the existing primary instead |
 | [`activate()` via `AppTask.moveToFront`](activate-extra-activity-move-to-front.md) | Active | `Window::activate_window()` was a no-op stub on Android; settings_ui's existing-window dedup needed it to surface a backgrounded Settings instead of re-opening |
 | [`ZedDocumentsProvider` exposes `~` as a SAF root](zed-documents-provider.md) | Active | Other apps couldn't browse / share files from `/data/data/<pkg>/files/home` via the system picker; ported Termux's provider shape with custom dev MIME map + search skip list + provider-pre-Activity `mkdirs` guard |
-| [Notify `on_active_status_change` for cursor blink](notify-active-status-change.md) | Active | Editor's `cx.observe_window_activation` observer must fire to call `BlinkManager::enable`, otherwise search-bar cursor renders statically until first input |
+| [Notify `on_active_status_change` for cursor blink](notify-active-status-change.md) | Active | Editor's `cx.observe_window_activation` observer must fire to call `BlinkManager::enable`, otherwise search-bar cursor renders statically until first input; each window reports its Activity's focus so Zed's `CloseWindow` closes the window you're in |
+| [No default focus highlight on extra-window surfaces](extra-window-focus-highlight.md) | Active | Android's keyboard-focus highlight covered the whole focusable surface as a whitish tint |
 
 ## Build / packaging
 
@@ -116,6 +129,7 @@ patches.
 | [audio + livekit + call cfg-gates](android-cfg-gates.md) | Active | These crates don't compile against bionic; mock fallbacks already exist |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
+| [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off |
 
 ## Adding a new workaround
 

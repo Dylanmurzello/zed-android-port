@@ -129,11 +129,12 @@ fn main() -> ExitCode {
 
 fn build_provider() -> anyhow::Result<Box<dyn zdroid_runtime::port::RuntimeProvider>> {
     let path = PathBuf::from(RUNTIME_TOML);
-    let file = RuntimeFile::load(&path)?
-        .ok_or_else(|| anyhow::anyhow!(
+    let file = RuntimeFile::load(&path)?.ok_or_else(|| {
+        anyhow::anyhow!(
             "{} not found. Open Zdroid and pick a runtime in Settings first.",
             path.display(),
-        ))?;
+        )
+    })?;
     let resolved = file.resolve()?;
     adapters::for_config(&resolved)
 }

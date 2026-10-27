@@ -1,4 +1,8 @@
-#[cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd", target_os = "android")))]
+#[cfg(not(any(
+    all(target_os = "windows", target_env = "gnu"),
+    target_os = "freebsd",
+    target_os = "android"
+)))]
 mod real_implementation {
     use anyhow::Context;
     use libwebrtc::native::apm;
@@ -38,7 +42,11 @@ mod real_implementation {
     }
 }
 
-#[cfg(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd", target_os = "android"))]
+#[cfg(any(
+    all(target_os = "windows", target_env = "gnu"),
+    target_os = "freebsd",
+    target_os = "android"
+))]
 mod fake_implementation {
     #[derive(Clone, Default)]
     pub struct EchoCanceller;
@@ -51,7 +59,15 @@ mod fake_implementation {
     }
 }
 
-#[cfg(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd", target_os = "android"))]
+#[cfg(any(
+    all(target_os = "windows", target_env = "gnu"),
+    target_os = "freebsd",
+    target_os = "android"
+))]
 pub use fake_implementation::EchoCanceller;
-#[cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd", target_os = "android")))]
+#[cfg(not(any(
+    all(target_os = "windows", target_env = "gnu"),
+    target_os = "freebsd",
+    target_os = "android"
+)))]
 pub use real_implementation::EchoCanceller;

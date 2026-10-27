@@ -475,14 +475,6 @@ impl WgpuRenderer {
         // Configure the surface immediately. The adapter selection process already validated
         // that this adapter can successfully configure this surface.
         surface.configure(&context.device, &surface_config);
-        log::info!(
-            "wgpu surface configured: present_mode={:?} (requested={:?}), \
-             frame_latency={}, available_modes={:?}",
-            surface_config.present_mode,
-            config.preferred_present_mode,
-            surface_config.desired_maximum_frame_latency,
-            surface_caps.present_modes,
-        );
 
         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
 

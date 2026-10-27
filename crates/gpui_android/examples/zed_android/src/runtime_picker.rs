@@ -20,21 +20,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render, Size,
-    Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
+    Action as _, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render,
+    Size, Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
 };
 use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
 use theme::ActiveTheme;
 use ui::{
-    Button, Chip, Clickable, Color, Disableable, FluentBuilder, Headline, HeadlineSize, Icon,
-    IconName, IconSize, Label, LabelCommon, LabelSize, ParentElement, Styled, h_flex, v_flex,
+    Button, ButtonCommon, ButtonSize, ButtonStyle, Chip, Clickable, Color, Disableable,
+    FluentBuilder, Headline, HeadlineSize, Icon, IconName, IconSize, Label, LabelCommon, LabelSize,
+    ParentElement, Styled, h_flex, v_flex,
 };
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
-    HealthStatus, RuntimeId, RuntimeProvider,
-    adapters,
+    HealthStatus, RuntimeId, RuntimeProvider, adapters,
     adapters::chroot::SPAWND_RELEASE_URL,
     config::{BootstrapConfig, ChrootConfig, ExternalTermuxConfig, RuntimeFile},
     health::ProgressSink,
@@ -82,7 +82,7 @@ actions!(
 ///
 ///   - Command palette (`zdroid: pick runtime`).
 ///   - Settings → "Android Runtime" → "Open picker".
-///   - Onboarding basics page → "Set up Android runtime" button.
+///   - Onboarding basics page → "Configure runtime" button.
 ///
 /// The handler unconditionally opens the picker as a STANDALONE
 /// WINDOW (`cx.open_window`), not as a workspace Modal. The window
@@ -98,6 +98,49 @@ pub fn register(cx: &mut App) {
         },
     )
     .detach();
+}
+
+/// The runtime picked in `zd-runtime.toml`, or `None` before the user has
+/// picked one, for the onboarding page's label. `active_provider`'s fallback
+/// to Bootstrap isn't a pick, so this is read from the file.
+#[derive(Default)]
+pub struct ActiveRuntime {
+    pub current: Option<RuntimeId>,
+}
+
+impl gpui::Global for ActiveRuntime {}
+
+/// The onboarding page's runtime section (`onboarding::AndroidBasicsSections`).
+pub fn render_onboarding_section(tab_index: &mut isize, cx: &mut App) -> AnyElement {
+    let current_label = match cx
+        .try_global::<ActiveRuntime>()
+        .and_then(|runtime| runtime.current)
+    {
+        Some(RuntimeId::Chroot) => "Current: Kali chroot",
+        Some(RuntimeId::Bootstrap) => "Current: Bootstrap",
+        Some(RuntimeId::ExternalTermux) => "Current: External Termux",
+        None => "Not configured yet",
+    };
+    let button_tab_index = *tab_index;
+    *tab_index += 1;
+    v_flex()
+        .gap_2()
+        .child(Label::new("Android Runtime"))
+        .child(
+            Label::new(current_label)
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+        .child(
+            Button::new("configure-android-runtime", "Configure runtime")
+                .style(ButtonStyle::OutlinedGhost)
+                .size(ButtonSize::Medium)
+                .label_size(LabelSize::Small)
+                .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
+                .tab_index(button_tab_index)
+                .on_click(|_, window, cx| window.dispatch_action(PickRuntime.boxed_clone(), cx)),
+        )
+        .into_any_element()
 }
 
 fn handle_pick_runtime(
@@ -243,18 +286,14 @@ impl RuntimePicker {
                 let adapter = match adapters::bootstrap::BootstrapAdapter::new(config) {
                     Ok(a) => a,
                     Err(err) => {
-                        log::error!(
-                            "zdroid_runtime_picker: BootstrapAdapter::new failed: {err:#}"
-                        );
+                        log::error!("zdroid_runtime_picker: BootstrapAdapter::new failed: {err:#}");
                         let _ = tx.unbounded_send(format!("Failed: {err:#}"));
                         return;
                     }
                 };
                 let mut sink = ChannelProgressSink { tx: tx.clone() };
                 if let Err(err) = adapter.install(&mut sink) {
-                    log::error!(
-                        "zdroid_runtime_picker: BootstrapAdapter::install failed: {err:#}"
-                    );
+                    log::error!("zdroid_runtime_picker: BootstrapAdapter::install failed: {err:#}");
                     let _ = tx.unbounded_send(format!("Install failed: {err:#}"));
                 }
                 // tx + sink drop here → channel closes → foreground exits.
@@ -284,10 +323,7 @@ impl RuntimePicker {
 
     fn select(&mut self, id: RuntimeId, _window: &mut Window, cx: &mut Context<Self>) {
         if Some(id) == self.current {
-            log::info!(
-                "zdroid_runtime_picker: {:?} already active; no-op",
-                id
-            );
+            log::info!("zdroid_runtime_picker: {:?} already active; no-op", id);
             return;
         }
 
@@ -301,15 +337,10 @@ impl RuntimePicker {
                     path.display()
                 );
                 self.current = Some(id);
-                // Update the gpui Global so any entity observing it
-                // (e.g. the onboarding page's "Current: <adapter>"
-                // label) re-renders without waiting for an app
-                // restart. set_global pushes
-                // NotifyGlobalObservers which fans out to every
-                // registered observer.
-                cx.set_global(onboarding::runtime_global::ActiveRuntime {
-                    current: Some(id),
-                });
+                // The onboarding page doesn't observe this global, so
+                // refresh the windows to update its label.
+                cx.set_global(ActiveRuntime { current: Some(id) });
+                cx.refresh_windows();
                 cx.notify();
 
                 // Surface the close-and-reopen requirement inline,
@@ -532,60 +563,60 @@ fn render_card(
         // state), the user needs the Install button — showing a
         // "Selected" chip there would leave them stuck without a way
         // to trigger the download.
-        .child(if id == RuntimeId::Chroot
-            && !matches!(entry.health, HealthStatus::Healthy)
-        {
-            // Chroot adapter requires the zdroid-spawnd Magisk module
-            // to be running. If the daemon socket isn't reachable,
-            // letting the user pick chroot just writes a runtime.toml
-            // that breaks every subsequent spawn. Surface the install
-            // path inline instead: tap "Get module" to jump to the
-            // GitHub releases page where the zip lives. After install
-            // + reboot, re-open the picker and the gate flips to
-            // Healthy → normal Select.
-            Button::new(("get-module", idx), "Get module")
-                .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
-                .on_click(cx.listener(|_, _, _, cx| {
-                    cx.open_url(SPAWND_RELEASE_URL);
-                }))
-                .into_any_element()
-        } else if id == RuntimeId::Bootstrap
-            && matches!(entry.health, HealthStatus::NotInstalled { .. })
-        {
-            // Bootstrap adapter has its 240 MB userland in a separate
-            // GitHub repo (`<release_repo>`); Phase 6 of the Termux-
-            // divestment refactor stopped bundling it in the APK and
-            // moved download to `BootstrapAdapter::install`. Tap
-            // "Install" to kick off the async download + extract; the
-            // button label switches to the live `install_status` for
-            // the duration. After completion the card flips to
-            // Healthy → normal Select.
-            if let Some(status) = install_status {
-                Button::new(("installing", idx), status.to_string())
-                    .disabled(true)
-                    .into_any_element()
-            } else {
-                Button::new(("install", idx), "Install")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.install_bootstrap(cx);
+        .child(
+            if id == RuntimeId::Chroot && !matches!(entry.health, HealthStatus::Healthy) {
+                // Chroot adapter requires the zdroid-spawnd Magisk module
+                // to be running. If the daemon socket isn't reachable,
+                // letting the user pick chroot just writes a runtime.toml
+                // that breaks every subsequent spawn. Surface the install
+                // path inline instead: tap "Get module" to jump to the
+                // GitHub releases page where the zip lives. After install
+                // + reboot, re-open the picker and the gate flips to
+                // Healthy → normal Select.
+                Button::new(("get-module", idx), "Get module")
+                    .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.open_url(SPAWND_RELEASE_URL);
                     }))
                     .into_any_element()
-            }
-        } else if is_current {
-            // Healthy AND the active selection — decorative confirm.
-            // The header already shows an "Active" Chip; this right-
-            // hand Chip is design-language parity.
-            Chip::new("Selected")
-                .icon(IconName::Check)
-                .label_color(Color::Accent)
-                .into_any_element()
-        } else {
-            Button::new(("select", idx), "Select")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select(id, window, cx);
-                }))
-                .into_any_element()
-        })
+            } else if id == RuntimeId::Bootstrap
+                && matches!(entry.health, HealthStatus::NotInstalled { .. })
+            {
+                // Bootstrap adapter has its 240 MB userland in a separate
+                // GitHub repo (`<release_repo>`); Phase 6 of the Termux-
+                // divestment refactor stopped bundling it in the APK and
+                // moved download to `BootstrapAdapter::install`. Tap
+                // "Install" to kick off the async download + extract; the
+                // button label switches to the live `install_status` for
+                // the duration. After completion the card flips to
+                // Healthy → normal Select.
+                if let Some(status) = install_status {
+                    Button::new(("installing", idx), status.to_string())
+                        .disabled(true)
+                        .into_any_element()
+                } else {
+                    Button::new(("install", idx), "Install")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.install_bootstrap(cx);
+                        }))
+                        .into_any_element()
+                }
+            } else if is_current {
+                // Healthy AND the active selection — decorative confirm.
+                // The header already shows an "Active" Chip; this right-
+                // hand Chip is design-language parity.
+                Chip::new("Selected")
+                    .icon(IconName::Check)
+                    .label_color(Color::Accent)
+                    .into_any_element()
+            } else {
+                Button::new(("select", idx), "Select")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select(id, window, cx);
+                    }))
+                    .into_any_element()
+            },
+        )
         .into_any_element()
 }
 
@@ -614,20 +645,17 @@ fn build_entries() -> Vec<AdapterEntry> {
     vec![
         AdapterEntry {
             id: RuntimeId::Chroot,
-            tagline:
-                "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
+            tagline: "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
             health: chroot_health,
         },
         AdapterEntry {
             id: RuntimeId::Bootstrap,
-            tagline:
-                "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
+            tagline: "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
             health: bootstrap_health,
         },
         AdapterEntry {
             id: RuntimeId::ExternalTermux,
-            tagline:
-                "Bridges to the user's installed Termux app via Intent IPC. Slowest path; uses the user's existing setup.",
+            tagline: "Bridges to the user's installed Termux app via Intent IPC. Slowest path; uses the user's existing setup.",
             health: termux_health,
         },
     ]
@@ -666,4 +694,3 @@ fn detect_current() -> Option<RuntimeId> {
         .flatten()
         .map(|file| file.runtime.kind)
 }
-
