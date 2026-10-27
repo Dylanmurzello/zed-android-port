@@ -1358,7 +1358,7 @@ impl Render for Dock {
             let position = self.position;
             // Android widens the handle for fingers and draws a grabber
             // pill on it, lit while this dock is being resized.
-            let handle_size = if window.last_platform_input_was_touch() {
+            let handle_size = if window.last_input_was_touch() {
                 px(20.)
             } else {
                 RESIZE_HANDLE_SIZE
@@ -1394,17 +1394,13 @@ impl Render for Dock {
                     })
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|_, _: &MouseDownEvent, window, cx| {
-                            // Keeps Android's touch handling from turning
-                            // this drag into scrolling.
-                            window.set_drag_active(true);
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                         }),
                     )
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|dock, e: &MouseUpEvent, window, cx| {
-                            window.set_drag_active(false);
                             if e.click_count == 2 {
                                 dock.reset_panel_sizes(window, cx);
                                 dock.workspace

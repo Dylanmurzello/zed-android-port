@@ -1282,28 +1282,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_close(&self, callback: Box<dyn FnOnce()>);
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
-
-    /// Set whether an element on this window is actively driving a
-    /// direct-manipulation drag (e.g. scrollbar thumb being dragged).
-    /// On touch platforms this gates the gesture-recognizer's
-    /// auto-conversion of single-finger drags to scroll events: while
-    /// `drag_active` is set, the touch SM passes the gesture through
-    /// as `MouseMove(Left held)` instead of synthesizing
-    /// `ScrollWheel`. Mouse / desktop platforms can ignore — they
-    /// don't synthesize scroll, so the default empty impl is correct.
-    fn set_drag_active(&self, _active: bool) {}
-
-    /// Returns true when the most recent pointer input on this window
-    /// came from touch (finger). Used by UI components that want to
-    /// widen hit zones for touch without affecting mouse precision —
-    /// e.g. a pane splitter handler can fall back to a dilated
-    /// position check when this is true, while the mouse path stays
-    /// on the precise hover-based check. Mouse / desktop platforms
-    /// return false (default impl).
-    fn last_input_was_touch(&self) -> bool {
-        false
-    }
-
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;

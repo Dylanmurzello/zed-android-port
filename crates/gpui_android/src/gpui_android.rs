@@ -77,13 +77,6 @@ pub fn set_invert_scroll(enabled: bool) {
     ime::INVERT_SCROLL.store(enabled, std::sync::atomic::Ordering::Release);
 }
 
-/// Push the user's `android_input.legacy_touch` setting to the runtime
-/// atomic the touch dispatcher reads when a finger gesture starts, to pick
-/// between Zdroid's finger state machine and gpui's gesture recognizer.
-pub fn set_legacy_touch(enabled: bool) {
-    ime::LEGACY_TOUCH.store(enabled, std::sync::atomic::Ordering::Release);
-}
-
 /// Whether the on-screen keyboard is showing, as Kotlin last reported it
 /// (or as just requested, until Kotlin confirms).
 pub fn soft_keyboard_visible() -> bool {

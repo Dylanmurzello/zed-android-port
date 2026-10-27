@@ -1323,7 +1323,7 @@ mod element {
         /// divider than the mouse does.
         fn handle_hit(hitbox: &Hitbox, position: Point<Pixels>, window: &Window) -> bool {
             hitbox.is_hovered(window)
-                || (window.last_platform_input_was_touch()
+                || (window.last_input_was_touch()
                     && hitbox.bounds.dilate(px(16.0)).contains(&position))
         }
 
@@ -1604,7 +1604,6 @@ mod element {
 
                                     window.refresh();
                                 }
-                                window.set_drag_active(true);
                                 cx.stop_propagation();
                             }
                         }
@@ -1688,10 +1687,9 @@ mod element {
 
             window.on_mouse_event({
                 let dragged_handle = layout.dragged_handle.clone();
-                move |_: &MouseUpEvent, phase, window, _cx| {
+                move |_: &MouseUpEvent, phase, _window, _cx| {
                     if phase.bubble() {
                         dragged_handle.replace(None);
-                        window.set_drag_active(false);
                     }
                 }
             });

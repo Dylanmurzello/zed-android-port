@@ -3,8 +3,7 @@
 **Status:** Active
 **Phase / Commit:** `3193130a4b` — Switch Android right-click to two-finger tap
 (supersedes earlier `d4998d1d19` long-press-as-right-click)
-**Files:** `crates/gpui_android/src/touch.rs` (`TouchState` for the legacy path,
-`TouchFeed` for gpui's gestures)
+**Files:** `crates/gpui_android/src/touch.rs` (`TouchFeed`)
 
 ## Problem
 
@@ -31,26 +30,9 @@ finger's position.**
 
 ## Solution
 
-Finger input takes one of two paths, chosen by `android_input.legacy_touch`
-when a gesture's first finger lands.
-
-**Legacy path** (`legacy_touch` on, the default; `TouchState` in `touch.rs`).
-Resolved when the second finger lands:
-
-- Single finger: emit `MouseDown(Left)` at once.
-- Second finger lands within **800 ms** of the first and within **250 px** of
-  where the first landed (`TWO_FINGER_TAP_WINDOW`,
-  `TWO_FINGER_TAP_SLOP_PX`): release the pending `Left` with `click_count: 0`
-  and emit `Down(Right)` + `Up(Right)` at the first finger's landing point.
-  Also fires from a long-press selection, whatever the timing, so a second
-  finger opens the context menu on the selected word.
-- Otherwise: a two-finger scroll.
-
-Most two-finger swipes start within those limits, so they right-click.
-
-**gpui gestures path** (`legacy_touch` off; `TouchFeed` in `touch.rs`).
-gpui's recognizer follows one touch at a time, so `TouchFeed` holds
-two-finger gestures back and resolves them itself:
+Finger input goes to gpui's touch gesture recognizer, which follows one
+touch at a time, so `TouchFeed` in `touch.rs` holds two-finger gestures
+back and resolves them itself:
 
 - A second finger lands while the first is still within the touch slop
   (Android's `ViewConfiguration.getScaledTouchSlop()`): cancel the first
@@ -73,8 +55,8 @@ touch-style detection, emit `Down(Right)`/`Up(Right)` directly.
 
 - Two-finger tap is a deliberate user gesture that wouldn't otherwise be
   used for single-touch operations.
-- On the gpui gestures path, deciding on lift tells a tap from a swipe: a
-  swipe moves the fingers past twice the touch slop before they lift.
+- Deciding on lift tells a tap from a swipe: a swipe moves the fingers past
+  twice the touch slop before they lift.
 - Trackpad / mouse path is handled by Android's gesture resolver — we
   just respect what `button_state` says.
 
@@ -85,8 +67,8 @@ touch-style detection, emit `Down(Right)`/`Up(Right)` directly.
 - Slop too tight → two genuine two-finger taps slightly offset get
   rejected as separate single-tap gestures.
 - Slop too loose → two-finger scroll gets misclassified as right-click.
-- First finger's touch not cancelled on the gpui gestures path → gpui
-  taps or pans with the first finger as well as the right-click.
+- First finger's touch not cancelled → gpui taps or pans with the first
+  finger as well as the right-click.
 
 ## See also
 
