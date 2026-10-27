@@ -20,15 +20,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render, Size,
-    Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
+    Action as _, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Render,
+    Size, Window, WindowBounds, WindowKind, WindowOptions, actions, prelude::*, px,
 };
 use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
 use theme::ActiveTheme;
 use ui::{
-    Button, Chip, Clickable, Color, Disableable, FluentBuilder, Headline, HeadlineSize, Icon,
-    IconName, IconSize, Label, LabelCommon, LabelSize, ParentElement, Styled, h_flex, v_flex,
+    Button, ButtonCommon, ButtonSize, ButtonStyle, Chip, Clickable, Color, Disableable,
+    FluentBuilder, Headline, HeadlineSize, Icon, IconName, IconSize, Label, LabelCommon, LabelSize,
+    ParentElement, Styled, h_flex, v_flex,
 };
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
@@ -81,7 +82,7 @@ actions!(
 ///
 ///   - Command palette (`zdroid: pick runtime`).
 ///   - Settings → "Android Runtime" → "Open picker".
-///   - Onboarding basics page → "Set up Android runtime" button.
+///   - Onboarding basics page → "Configure runtime" button.
 ///
 /// The handler unconditionally opens the picker as a STANDALONE
 /// WINDOW (`cx.open_window`), not as a workspace Modal. The window
@@ -97,6 +98,49 @@ pub fn register(cx: &mut App) {
         },
     )
     .detach();
+}
+
+/// The runtime picked in `zd-runtime.toml`, or `None` before the user has
+/// picked one, for the onboarding page's label. `active_provider`'s fallback
+/// to Bootstrap isn't a pick, so this is read from the file.
+#[derive(Default)]
+pub struct ActiveRuntime {
+    pub current: Option<RuntimeId>,
+}
+
+impl gpui::Global for ActiveRuntime {}
+
+/// The onboarding page's runtime section (`onboarding::AndroidBasicsSections`).
+pub fn render_onboarding_section(tab_index: &mut isize, cx: &mut App) -> AnyElement {
+    let current_label = match cx
+        .try_global::<ActiveRuntime>()
+        .and_then(|runtime| runtime.current)
+    {
+        Some(RuntimeId::Chroot) => "Current: Kali chroot",
+        Some(RuntimeId::Bootstrap) => "Current: Bootstrap",
+        Some(RuntimeId::ExternalTermux) => "Current: External Termux",
+        None => "Not configured yet",
+    };
+    let button_tab_index = *tab_index;
+    *tab_index += 1;
+    v_flex()
+        .gap_2()
+        .child(Label::new("Android Runtime"))
+        .child(
+            Label::new(current_label)
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+        .child(
+            Button::new("configure-android-runtime", "Configure runtime")
+                .style(ButtonStyle::OutlinedGhost)
+                .size(ButtonSize::Medium)
+                .label_size(LabelSize::Small)
+                .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
+                .tab_index(button_tab_index)
+                .on_click(|_, window, cx| window.dispatch_action(PickRuntime.boxed_clone(), cx)),
+        )
+        .into_any_element()
 }
 
 fn handle_pick_runtime(
@@ -293,13 +337,10 @@ impl RuntimePicker {
                     path.display()
                 );
                 self.current = Some(id);
-                // Update the gpui Global so any entity observing it
-                // (e.g. the onboarding page's "Current: <adapter>"
-                // label) re-renders without waiting for an app
-                // restart. set_global pushes
-                // NotifyGlobalObservers which fans out to every
-                // registered observer.
-                cx.set_global(onboarding::runtime_global::ActiveRuntime { current: Some(id) });
+                // The onboarding page doesn't observe this global, so
+                // refresh the windows to update its label.
+                cx.set_global(ActiveRuntime { current: Some(id) });
+                cx.refresh_windows();
                 cx.notify();
 
                 // Surface the close-and-reopen requirement inline,

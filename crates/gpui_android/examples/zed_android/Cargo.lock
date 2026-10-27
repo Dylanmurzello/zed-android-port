@@ -8598,7 +8598,6 @@ dependencies = [
  "util",
  "vim_mode_setting",
  "workspace",
- "zdroid_runtime",
  "zed_actions",
  "zlog",
 ]

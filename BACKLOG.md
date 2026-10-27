@@ -79,7 +79,7 @@ The chroot adapter already has health-check hints in `RuntimeProvider::health_ch
 **Related tasks already in the live list:**
 
 - #33 — wire settings UI for adapter selection
-- #34 — first-launch onboarding modal (now landed as the inline basics_page section, but install-state UX is still TBD)
+- #34 — first-launch onboarding modal (now landed as the onboarding page's runtime section, `runtime_picker::render_onboarding_section`, but install-state UX is still TBD)
 - #36 — JNI Intent bridge for external Termux adapter
 - #37 — bootstrap install/uninstall (GitHub releases download)
 

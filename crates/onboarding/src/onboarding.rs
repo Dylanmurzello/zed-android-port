@@ -33,7 +33,6 @@ use zed_actions::OpenOnboarding;
 mod base_keymap_picker;
 mod basics_page;
 pub mod multibuffer_hint;
-pub mod runtime_global;
 mod theme_preview;
 
 /// Imports settings from Visual Studio Code.
@@ -55,6 +54,13 @@ pub struct ImportCursorSettings {
 }
 
 pub const FIRST_OPEN: &str = "first_open";
+
+/// Sections the Android app shows on the basics page in place of the AI and
+/// telemetry sections: Android has neither Zed's sign-in nor its telemetry.
+#[derive(Default)]
+pub struct AndroidBasicsSections(pub Vec<fn(&mut isize, &mut App) -> AnyElement>);
+
+impl Global for AndroidBasicsSections {}
 
 actions!(
     onboarding,
@@ -212,12 +218,6 @@ struct Onboarding {
     user_store: Entity<UserStore>,
     scroll_handle: ScrollHandle,
     _settings_subscription: Subscription,
-    /// Re-render trigger when the Zdroid runtime picker updates the
-    /// `runtime_global::ActiveRuntime` global. Makes the
-    /// `render_android_runtime_section` label reactive instead of
-    /// snapshotting at first render and going stale when the user
-    /// picks an adapter in the separate picker window.
-    _runtime_subscription: Subscription,
 }
 
 impl Onboarding {
@@ -276,9 +276,6 @@ impl Onboarding {
                 user_store: workspace.user_store().clone(),
                 _settings_subscription: cx
                     .observe_global::<SettingsStore>(move |_, cx| cx.notify()),
-                _runtime_subscription: cx.observe_global::<crate::runtime_global::ActiveRuntime>(
-                    move |_, cx| cx.notify(),
-                ),
             }
         })
     }
@@ -440,8 +437,6 @@ impl Item for Onboarding {
             scroll_handle: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             _settings_subscription: cx.observe_global::<SettingsStore>(move |_, cx| cx.notify()),
-            _runtime_subscription:
-                cx.observe_global::<crate::runtime_global::ActiveRuntime>(move |_, cx| cx.notify()),
         })))
     }
 
