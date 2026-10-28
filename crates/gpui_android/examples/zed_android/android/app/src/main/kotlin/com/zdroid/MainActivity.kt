@@ -139,6 +139,25 @@ class MainActivity : GameActivity(), ImeHost {
     /// from an earlier show can tell it's stale.
     private var imeRequestGeneration: Int = 0
 
+    /// The programming extras row covers the window above the keyboard,
+    /// so it counts as obscured too.
+    private val insetsReporter = WindowInsetsReporter(
+        PRIMARY_WINDOW_ID,
+        keyboardAccessoryHeight = {
+            extraKeysView?.takeIf { it.visibility == View.VISIBLE }?.height ?: 0
+        },
+        // Edge-to-edge (setDecorFitsSystemWindows=false) means the OS
+        // does NOT auto-translate content above the IME — the IME draws
+        // over the bottom of our surface. The row, gravity=BOTTOM, would
+        // sit behind the keyboard, so it moves up by the keyboard's
+        // height. This follows every frame of the keyboard's slide: the
+        // insets listener only gets the slide's end state, before it
+        // starts, and gpui's layout ends at the row's top edge.
+        onImeBottomChanged = { imeBottom ->
+            extraKeysView?.translationY = -imeBottom.toFloat()
+        },
+    )
+
     /// After a show request, clears [imeShown] if the IME never appeared,
     /// so the status bar keyboard button doesn't offer to hide a keyboard
     /// that isn't there.
@@ -209,13 +228,19 @@ class MainActivity : GameActivity(), ImeHost {
                     android.view.Gravity.BOTTOM,
                 )
                 addContentView(view, params)
-                view.translationY = -lastImeInsetBottom.toFloat()
+                view.translationY = -insetsReporter.imeBottom.toFloat()
+                // The row has no height until its first layout, and its
+                // height follows the display's density and font scale.
+                view.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                    if (bottom - top != oldBottom - oldTop) insetsReporter.refresh()
+                }
                 extraKeysView = view
             }
             extraKeysView?.visibility = View.VISIBLE
         } else {
             extraKeysView?.visibility = View.GONE
         }
+        insetsReporter.refresh()
     }
 
     /// Zed's "prevent idle sleep", requested while an agent works. Called
@@ -511,19 +536,11 @@ class MainActivity : GameActivity(), ImeHost {
             // "user dismissed" on the steady-state-0 reading right
             // after our show call, before the animation had started.
 
-            // Edge-to-edge (setDecorFitsSystemWindows=false) means the
-            // OS does NOT auto-translate content above the IME — the
-            // IME draws over the bottom of our surface. Any view with
-            // gravity=BOTTOM (the ExtraKeysView) would sit at the
-            // screen bottom and be hidden behind the keyboard. Apply
-            // the IME bottom inset as a negative translationY on the
-            // row so it floats just above the keyboard, following the
-            // IME show/hide animation smoothly.
-            extraKeysView?.translationY = -imeBottom.toFloat()
-
             lastImeInsetBottom = imeBottom
+            insetsReporter.onApplyWindowInsets(insets)
             insets
         }
+        insetsReporter.install(host)
 
         // Pointer-capture probe. When the decor view gains focus we ask
         // Android for raw pointer events. The captured listener
@@ -706,10 +723,14 @@ class MainActivity : GameActivity(), ImeHost {
         cursorOverlay = CursorSurfaceControl(this, surfaceView, displaySize)
     }
 
+    /// The surface above the on-screen keyboard and the extras row, where
+    /// gpui lays out; they would hide the cursor below it.
     private fun visibleBounds(): Pair<Float, Float> {
         val sv = findSurfaceView(window.decorView)
         val w = (sv?.width ?: window.decorView.width).toFloat().coerceAtLeast(1f)
-        val h = (sv?.height ?: window.decorView.height).toFloat().coerceAtLeast(1f)
+        val h = ((sv?.height ?: window.decorView.height) - insetsReporter.obscuredBottom)
+            .toFloat()
+            .coerceAtLeast(1f)
         return w to h
     }
 

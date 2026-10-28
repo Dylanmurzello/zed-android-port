@@ -725,6 +725,9 @@ impl AndroidPlatform {
             crate::multi_window::finish_extra_activity(&self.android_app, window_id);
             return Err(err);
         }
+        // Before gpui reads the window's size: its Activity may have
+        // reported its insets while this waited for the surface.
+        window.ptr().set_insets(crate::insets::reported(window_id));
 
         {
             let mut common = self.common.borrow_mut();
@@ -811,6 +814,32 @@ impl AndroidPlatform {
                 .window
                 .as_ref()
                 .map(|primary| primary.state.borrow().handle);
+        }
+    }
+
+    /// Hands each window the insets its Activity last reported.
+    fn apply_window_insets(&self) {
+        if !crate::insets::take_changed() {
+            return;
+        }
+        let (primary, extras) = {
+            let common = self.common.borrow();
+            (
+                common.window.clone(),
+                common
+                    .extra_windows
+                    .iter()
+                    .map(|(window_id, window)| (*window_id, window.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        if let Some(primary) = primary {
+            primary.set_insets(crate::insets::reported(
+                crate::captured_pointer::PRIMARY_WINDOW_ID,
+            ));
+        }
+        for (window_id, window) in extras {
+            window.set_insets(crate::insets::reported(window_id));
         }
     }
 
@@ -1714,6 +1743,8 @@ impl Platform for AndroidPlatform {
             self.drain_extra_window_events();
             self.reap_closed_extra_windows();
 
+            self.apply_window_insets();
+
             // Drain JNI-side captured-pointer (trackpad) events. Active
             // only while `MainActivity` has pointer capture; otherwise
             // the channel sits idle.
@@ -1898,6 +1929,10 @@ impl Platform for AndroidPlatform {
         })?;
         let scale_factor = self.compute_scale_factor();
         window.ptr().attach_surface(native_window, scale_factor)?;
+        // `MainActivity` reports its insets long before gpui opens its window.
+        window.ptr().set_insets(crate::insets::reported(
+            crate::captured_pointer::PRIMARY_WINDOW_ID,
+        ));
 
         self.common.borrow_mut().window = Some(window.ptr());
         self.common.borrow_mut().active_window = Some(handle);

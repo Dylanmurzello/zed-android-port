@@ -83,6 +83,9 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     private var programmaticHidePending: Boolean = false
     private var lastImeInsetBottom: Int = 0
 
+    /// Created in [onCreate], once the window id is known.
+    private var insetsReporter: WindowInsetsReporter? = null
+
     @Volatile
     private var imeTextState: ImeTextState? = null
 
@@ -256,6 +259,8 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         addContentView(imeHost, android.view.ViewGroup.LayoutParams(1, 1))
         imeHostView = imeHost
 
+        val reporter = WindowInsetsReporter(extraWindowId)
+        insetsReporter = reporter
         // Inset-transition listener — same rationale as MainActivity:
         // keeps [imeShown] in step when the user closes the keyboard
         // (Back press, swipe-down on the IME bar).
@@ -280,8 +285,10 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 setImeShown(false)
             }
             lastImeInsetBottom = imeBottom
+            reporter.onApplyWindowInsets(insets)
             insets
         }
+        reporter.install(imeHost)
     }
 
     /// Update [imeShown] and push the value into Rust's
@@ -593,9 +600,12 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         cursorOverlay = CursorSurfaceControl(this, surfaceView, displaySize)
     }
 
+    /// The surface above the on-screen keyboard; see `MainActivity`.
     private fun visibleBounds(): Pair<Float, Float> {
         val w = surfaceView.width.toFloat().coerceAtLeast(1f)
-        val h = surfaceView.height.toFloat().coerceAtLeast(1f)
+        val h = (surfaceView.height - (insetsReporter?.obscuredBottom ?: 0))
+            .toFloat()
+            .coerceAtLeast(1f)
         return w to h
     }
 

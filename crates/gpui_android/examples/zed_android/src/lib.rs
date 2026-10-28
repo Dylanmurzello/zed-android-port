@@ -908,6 +908,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     extension::init(cx);
     theme_settings::init(theme::LoadThemes::All(Box::new(assets::Assets)), cx);
     editor::init(cx);
+    android_input::keep_cursor_on_screen_when_window_shrinks(cx);
 
     let current_from_toml = RuntimeFile::load(&data_path.join("usr/etc/zd-runtime.toml"))
         .ok()

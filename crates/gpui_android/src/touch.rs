@@ -131,7 +131,9 @@ fn dispatch(
         let mut inputs = state.touch_feed.abandon();
         let android_app = state.android_app.clone();
         let extra_window_id = state.extra_window_id;
-        let bounds = state.bounds.size;
+        // The cursor stops above the on-screen keyboard and the extras row:
+        // they would hide it, and there's nothing of gpui's below them.
+        let bounds = state.layout_bounds().size;
         inputs.extend(state.trackpad_touch.on_event(
             touch_event,
             &android_app,

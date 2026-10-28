@@ -10,8 +10,8 @@ Everything in [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md) and [RELEASING.md](RELEASIN
 
 ## Branches
 
-- `main` is an exact mirror of `Dylanmurzello/zed-android-port:main`. Never commit to it. Update it with GitHub's **Sync fork** button, which is always a fast-forward, or with `git fetch dylan && git push origin dylan/main:main`. While it's behind, GitHub shows "This branch is N commits behind Dylanmurzello:main", which is the signal that Dylan pushed something.
-- `zdroid` is the default branch and holds everything this fork adds: Zed syncs, fixes, CI, and releases. `git diff main...zdroid` shows the fork's whole delta.
+- `main` is this fork's contribution to `Dylanmurzello/zed-android-port`: `zdroid` without what only applies to this fork (see [Contributing to Dylan's repo](#contributing-to-dylans-repo)), and with Dylan's version numbers. The pull request to his repository comes from `main`, so pushing to `main` updates it. Don't develop on `main`; changes land on `zdroid` first. Dylan's own branch is `dylan/main` (the `dylan` remote).
+- `zdroid` is the default branch and holds everything this fork adds: Zed syncs, fixes, CI, and releases. `git diff dylan/main...zdroid` shows the fork's whole delta.
 
 To get notified when Dylan pushes, **Watch** his repository on GitHub (Custom → Releases, or All activity).
 
@@ -92,7 +92,6 @@ Merge without the `ours` driver (see above), so Dylan's changes to fork-owned fi
 
 ```sh
 git fetch dylan
-git push origin dylan/main:main      # keep the mirror current
 git checkout -b dylan-sync zdroid
 git merge dylan/main
 # resolve conflicts, build, commit, then open a pull request into zdroid
@@ -103,7 +102,30 @@ Fork-specific changes to keep while resolving:
 - `ZDROID_RELEASE_REPO` in `crates/gpui_android/src/updater.rs`. Without it, the in-app updater follows Dylan's releases, and those are signed with a different key.
 - `versionCode`/`versionName` in `crates/gpui_android/examples/zed_android/android/app/build.gradle.kts`. Take whichever is higher.
 
-To offer a change back to Dylan, branch off `main`, cherry-pick the generic commits (not CI, this file, or version bumps), and open a pull request against his repository.
+## Contributing to Dylan's repo
+
+`main` carries `zdroid` to Dylan's repository, minus what only applies to this fork:
+
+- the APK workflow and Dependabot: `.github/workflows/zdroid_apk.yml`, `.github/dependabot.yml`
+- the release notes files: `.github/release/`, `.github/scripts/zdroid-release-notes.js`
+- this file, the "Zdroid fork" section at the top of `.rules`, and the references to this file elsewhere
+- `versionCode`/`versionName`: `main` keeps Dylan's, for him to bump when he releases
+
+To update it after a release, merge `zdroid` into `main`, keeping that list out (add to the list when the fork gains another file of its own):
+
+```sh
+git checkout main
+git merge zdroid    # modify/delete conflicts in the files above: keep them deleted;
+                    # build.gradle.kts: take zdroid's file with main's version numbers
+git rm -r --ignore-unmatch .github/workflows/zdroid_apk.yml .github/dependabot.yml \
+  .github/release .github/scripts/zdroid-release-notes.js FORK.md
+# remove the "# Zdroid fork" section from .rules, and `git grep FORK.md` for new references
+git commit
+git diff zdroid main --stat    # only the files above and the version numbers
+git push origin main           # updates the pull request on Dylan's repository
+```
+
+Keep `main`'s history: its Zed tag merges are real merges, which later Zed syncs in Dylan's repository depend on, so the pull request should be merged with a merge commit, not squashed.
 
 ## Releasing
 

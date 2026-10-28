@@ -674,6 +674,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityDestroy
     // Drop the GlobalRef from the JVM thread (which is attached). The
     // OsClosed event then triggers gpui-side teardown on the game thread.
     let _ = refs_table().as_mut().and_then(|m| m.remove(&window_id));
+    crate::insets::forget(window_id);
     dispatch_event(ExtraWindowEvent::OsClosed { window_id });
 }
 
