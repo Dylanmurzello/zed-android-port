@@ -148,7 +148,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         extraWindowId = intent.getLongExtra(EXTRA_WINDOW_ID, -1L)
         if (extraWindowId < 0L) {
             Log.e(TAG, "onCreate: missing or invalid $EXTRA_WINDOW_ID extra; finishing")
-            finish()
+            finishAndRemoveTask()
             return
         }
         Log.i(TAG, "onCreate windowId=$extraWindowId")
@@ -159,10 +159,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         // through the rest of onCreate would attach a SurfaceView that fires
         // JNI callbacks against a Rust runtime with no matching gpui Window —
         // touches do nothing, no rendering, ghost window. Detect early and
-        // bail. The user can re-open via the main app.
+        // bail, removing the Recents card that brought us back. The user can
+        // re-open via the main app.
         if (!NativeBridge.nativeIsExtraWindowKnown(extraWindowId)) {
             Log.w(TAG, "onCreate windowId=$extraWindowId not known to Rust runtime (resurrection?); finishing")
-            finish()
+            finishAndRemoveTask()
             return
         }
 

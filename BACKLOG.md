@@ -119,6 +119,13 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 - **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames zd-exec for keeping stdout open: fix that in zd-exec, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
+## 0.9.20 device checks
+
+0.9.20 removes a closed extra window's card from Recents. Check in DeX or desktop windowing:
+
+- Close Settings and the runtime picker with the window's X, with Back and with Ctrl+W: none leaves a card in Recents.
+- Tapping a leftover card from an older version removes it instead of opening an empty window.
+
 ## 0.9.19 device checks
 
 0.9.19 installs the latest release of Zdroid's fork of Bootstrap, checked against the SHA-256 GitHub records for it, adds the picker's **Download from** field and **Reinstall**, and gives the whole app Bootstrap's CA bundle. That fork's releases since `v2026.05.06-r6` keep apt working through `pkg upgrade` ([zdroid-bootstrap#1](https://github.com/Dylanmurzello/zdroid-bootstrap/issues/1)); `ilkersigirci/zdroid-bootstrap`'s test workflow checks that in Termux's Docker image, which runs Termux's binaries with Android's linker. Check on the tablet:
