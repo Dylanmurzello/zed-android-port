@@ -53,6 +53,10 @@ const SYMLINKS_DELIM: &str = "←";
 /// the latest release tag at download time.
 const VERSION_FILE: &str = ".bootstrap-version";
 
+/// File at `$PREFIX/.bootstrap-repository` recording which repository that
+/// release came from. Installs made before Zdroid 0.9.19 don't have it.
+const REPOSITORY_FILE: &str = ".bootstrap-repository";
+
 /// Set while an install runs. Two installs at once would extract into the
 /// same staging directory, and the runtime picker can start a second one
 /// from a reopened window while the first is still downloading.
@@ -139,6 +143,9 @@ pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSin
     fs::File::create(&version_file)
         .with_context(|| format!("create version sentinel at {}", version_file.display()))?
         .write_all(tag_name.as_bytes())?;
+    let repository_file = prefix.join(REPOSITORY_FILE);
+    fs::write(&repository_file, release_repo)
+        .with_context(|| format!("write {}", repository_file.display()))?;
 
     log::info!(
         "bootstrap_install: bootstrap {} ready at {}",
@@ -147,6 +154,18 @@ pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSin
     );
     progress.step(&format!("Bootstrap {tag_name} installed"));
     Ok(())
+}
+
+/// The installed release's tag and, when recorded, the repository it came
+/// from, for the runtime picker.
+pub fn installed_release(prefix: &Path) -> Option<(String, Option<String>)> {
+    let read = |name: &str| {
+        fs::read_to_string(prefix.join(name))
+            .ok()
+            .map(|contents| contents.trim().to_owned())
+            .filter(|contents| !contents.is_empty())
+    };
+    Some((read(VERSION_FILE)?, read(REPOSITORY_FILE)))
 }
 
 /// Resolve the latest-release tag without naming any asset.
@@ -668,6 +687,23 @@ mod tests {
         assert_eq!(fs::read_to_string(prefix.join("bin/sh"))?, "new");
         assert!(!prefix.join("old-file").exists());
         assert!(!staging.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn installed_release_reads_the_tag_and_repository() -> Result<()> {
+        let prefix = tempfile::tempdir()?;
+        assert_eq!(installed_release(prefix.path()), None);
+        fs::write(prefix.path().join(VERSION_FILE), "v2026.05.06-r4")?;
+        assert_eq!(
+            installed_release(prefix.path()),
+            Some(("v2026.05.06-r4".into(), None))
+        );
+        fs::write(prefix.path().join(REPOSITORY_FILE), "owner/repo\n")?;
+        assert_eq!(
+            installed_release(prefix.path()),
+            Some(("v2026.05.06-r4".into(), Some("owner/repo".into())))
+        );
         Ok(())
     }
 

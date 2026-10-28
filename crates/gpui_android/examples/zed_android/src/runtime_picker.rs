@@ -17,7 +17,10 @@ use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
     HealthStatus, RuntimeId, RuntimeProvider, adapters,
-    adapters::{bootstrap_install::release_repo_from_input, chroot::SPAWND_RELEASE_URL},
+    adapters::{
+        bootstrap_install::{installed_release, release_repo_from_input},
+        chroot::SPAWND_RELEASE_URL,
+    },
     config::{DEFAULT_RELEASE_REPO, RuntimeFile},
     health::ProgressSink,
 };
@@ -192,6 +195,8 @@ struct AdapterEntry {
     id: RuntimeId,
     tagline: &'static str,
     health: HealthStatus,
+    /// Which release is installed, for runtimes the picker installs.
+    installed: Option<String>,
 }
 
 pub struct RuntimePicker {
@@ -597,6 +602,13 @@ fn render_card(
                             .color(Color::Muted),
                     )
                 })
+                .when_some(entry.installed.clone(), |this, installed| {
+                    this.child(
+                        Label::new(installed)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
                 .when(installable, |this| {
                     this.child(repository_field.clone()).child(
                         Label::new(
@@ -670,26 +682,35 @@ fn build_entries(configuration: Option<&RuntimeFile>) -> Vec<AdapterEntry> {
     .unwrap_or_else(|err| HealthStatus::Failed {
         error: err.to_string(),
     });
-    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(
-        configuration
-            .and_then(|file| file.bootstrap.clone())
-            .unwrap_or_default(),
-    )
-    .map(|a| a.health_check())
-    .unwrap_or_else(|err| HealthStatus::Failed {
-        error: err.to_string(),
-    });
+    let bootstrap_config = configuration
+        .and_then(|file| file.bootstrap.clone())
+        .unwrap_or_default();
+    let bootstrap_installed =
+        installed_release(&bootstrap_config.prefix).map(|(tag, repository)| match repository {
+            Some(repository) => format!("Installed: {tag} from {repository}"),
+            None => format!("Installed: {tag}"),
+        });
+    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(bootstrap_config)
+        .map(|a| a.health_check())
+        .unwrap_or_else(|err| HealthStatus::Failed {
+            error: err.to_string(),
+        });
+    // A cleared prefix can keep its version file, which is a dotfile.
+    let bootstrap_installed = bootstrap_installed
+        .filter(|_| !matches!(bootstrap_health, HealthStatus::NotInstalled { .. }));
 
     vec![
         AdapterEntry {
             id: RuntimeId::Chroot,
             tagline: "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
             health: chroot_health,
+            installed: None,
         },
         AdapterEntry {
             id: RuntimeId::Bootstrap,
             tagline: "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
             health: bootstrap_health,
+            installed: bootstrap_installed,
         },
     ]
 }
