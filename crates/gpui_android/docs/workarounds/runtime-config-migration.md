@@ -1,6 +1,10 @@
 # Runtime config location and the not-configured state
 
-**Status:** Active
+**Status:** Superseded
+
+> Superseded by `rootfs-engine-integration.md`: with one runtime there is
+> no selection file. Boot deletes `<data>/files/etc/zd-runtime.toml` and
+> the old bootstrap prefix; the only runtime state is the rootfs sentinel.
 **Phase / Commit:** rootfs engine, chunk 0
 **Files:** `crates/zdroid_runtime/src/config.rs` (`RuntimeState`, `RuntimeKind`, `runtime_toml_path`), `crates/gpui_android/examples/zed_android/src/lib.rs` (`active_runtime`)
 

@@ -1,6 +1,10 @@
 # HOME env dual-pointing
 
-**Status:** Active
+**Status:** Superseded
+
+> Superseded by `rootfs-guest-env.md`: the editor keeps `HOME=<data>/files`
+> and the guest sees `HOME=/root` through `ZD_GUEST_ENV`; no
+> `TERMUX__HOME` exists anymore.
 **Phase / Commit:** Phase 8 / L3
 **Files:** `crates/gpui_android/examples/zed_android/src/lib.rs`, `crates/terminal/src/terminal.rs`
 

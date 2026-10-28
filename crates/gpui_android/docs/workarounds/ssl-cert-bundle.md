@@ -24,13 +24,8 @@ crate bump rather than an OS update. For Zed's use cases (extension
 registry, telemetry, LSP-binary downloads from GitHub releases) this is
 the right trade.
 
-Subprocess CA story is adapter-owned:
-
-- **Chroot adapter** : `sanitize_env_for_chroot` excludes the var.
-  The rootfs ships `/etc/ssl/certs` (Debian-style), self-sufficient.
-- **External Termux adapter** : spawns via Intent; the receiver
-  lives in Termux's own process with Termux's env, self-sufficient.
-- **Bootstrap adapter** : currently inherits caller env. Subsumed
-  by Phase 3 (adapter-owned env contract). Until then, integrated
-  terminal spawns still get the bundle via `terminal.rs::185-195`'s
-  PREFIX-based setup (a Phase 5 target).
+Subprocess CA story: the Ubuntu rootfs owns it. `ca-certificates` is
+installed by the essentials step after the first launch (or from
+Settings → Android Runtime), and every tool reads `/etc/ssl/certs` the
+Debian way. The editor process keeps its own trust through
+`rustls-platform-verifier`.

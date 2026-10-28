@@ -56,34 +56,9 @@ External user tried to file these and was blocked by upstream Zed's `blank_issue
 - ~~**Vim mode broken**~~ — **fixed in 29b29ddd63** (key events now route from `ExtraWindowActivity` to gpui via `nativeOnExtraKeyEvent` JNI bridge; the root cause was that any extra window's `dispatchKeyEvent` was never forwarded so `PlatformInput::KeyDown` never fired). Vim and any other editor in a non-Main window now accepts typing.
 - ~~**Settings searchbar typing broken**~~ — **fixed in 29b29ddd63** (same key-routing fix, plus a tap-to-focus wrapper on the search bar with `stop_propagation` so taps don't bubble to `SettingsWindow`'s focus tracker which was immediately blurring the bar).
 
-## Runtime picker: adapter install-state UX (deferred)
+## Runtime picker: adapter install-state UX (resolved)
 
-The onboarding runtime-picker section (and the Settings page entry) currently presents all three adapters — Kali chroot, Bootstrap, External Termux — as selectable equals. On a fresh install the user almost certainly has NONE of them installed:
-
-- **Chroot** requires Magisk + the `zdroid-spawnd` Magisk module (separate flashable zip from GitHub releases) + a Kali NetHunter chroot rootfs at `/data/local/nhsystem/kali-arm64`. None of those are bundled in our APK.
-- **Bootstrap** requires the bootstrap zip (~240 MB) extracted into `$PREFIX`. Auto-extracted from the APK asset today, but per task #17 we're moving to GitHub-release download. If the asset isn't present, "Bootstrap" doesn't work either.
-- **External Termux** requires the Termux app installed on the device AND the user granting `com.termux.permission.RUN_COMMAND`. Plus our JNI Intent bridge (task #36) needs to land.
-
-The picker doesn't surface any of this. A user tapping "Bootstrap" with no bootstrap installed sees: their selection saved, restart Zdroid, nothing works, no actionable feedback. Same for chroot without the Magisk module. Worst-case UX.
-
-**Bridge needed:**
-
-- Show an install-state badge per adapter (Installed / Missing / Partial).
-- For Missing: link out to the install instructions (GitHub release page, F-Droid Magisk module link, Termux Play Store/F-Droid).
-- For Partial (e.g., chroot module installed but rootfs path is empty): explain what's missing AND what to do.
-- Consider whether to install silently (downloads bootstrap zip on selection) or surface as an opt-in download with progress.
-- "Auto-install" vs "show options" — likely the right answer is BOTH, with auto-install gated behind explicit user consent because: bootstrap is 240 MB, chroot requires Magisk + root, external Termux needs a separate app install. Silent install is hostile to discoverability and bandwidth control.
-
-The chroot adapter already has health-check hints in `RuntimeProvider::health_check()` — `HealthStatus::NotInstalled { hint }` with links to the spawnd release page. The picker UI just doesn't surface these yet. Wiring through to the inline section would give us the install-state-aware UX without inventing new infrastructure.
-
-**Related tasks already in the live list:**
-
-- #33 — wire settings UI for adapter selection
-- #34 — first-launch onboarding modal (now landed as the inline basics_page section, but install-state UX is still TBD)
-- #36 — JNI Intent bridge for external Termux adapter
-- #37 — bootstrap install/uninstall (GitHub releases download)
-
-Resolve this AFTER the Termux-divestment refactor (tasks #74-80) lands. Once each adapter is a first-class peer with a proper install flow, the picker can surface that flow.
+Resolved by the rootfs engine (chunk 4, 2026-10-28): there is one runtime and nothing to pick. The Ubuntu base image is bundled in the APK and extracted on first launch, the essentials step runs in the background with a notification, and Settings → Android Runtime carries the reset and retry actions. The picker, the adapter trait and `zd-runtime.toml` are gone; see `crates/gpui_android/docs/workarounds/rootfs-engine-integration.md`.
 
 ## Settings search bar input pipeline (deferred)
 
@@ -142,7 +117,7 @@ Visible workaround for users today: there isn't one — search filter is effecti
 
 - Add `agent_ui` + `context_server` (and the transitive `language_models`, `assistant`, etc. that won't compile without it) to `crates/gpui_android/examples/zed_android/Cargo.toml`.
 - Initialize `agent_ui::init` in `boot()` past the "AI skipped" comment band. Confirm the agent-panel + workspace action wiring actually fires on Android; the editor compiles agent surfaces today via cfg-gates to mocks, but full init likely surfaces side effects (LLM provider registration, settings observers, etc.) that we have not exercised.
-- Route the stdio-transport spawn through `zdroid_runtime` so the configured MCP server inherits the active adapter's environment. Easiest path: replace the upstream `tokio::process::Command` invocation with a call that goes through our existing `zd-exec` wrapper (`crates/zdroid_runtime/src/bin/zd-exec.rs`); the wrapper already handles chroot/bootstrap/external Termux selection. Either patch upstream's transport with an Android cfg-gate, or wrap the `MCPCommand` config builder.
+- Route the stdio-transport spawn through `zdroid_runtime` so the configured MCP server inherits the active adapter's environment. Easiest path: replace the upstream `tokio::process::Command` invocation with `util::command::new_command`, whose Android arm routes absolute paths under the files dir through the engine loader; a PATH-resolved name already reaches the farm. Either patch upstream's transport with an Android cfg-gate, or wrap the `MCPCommand` config builder.
 - Decide what to do with the LLM provider gate. MCP servers are useful even without a model talking to them (tool execution, prompt management), so a "BYO key, no provider configured" mode is viable. Alternatively gate MCP UI visibility behind a configured provider so the no-key state is not confusing.
 
 **Why deferred:**
@@ -207,10 +182,10 @@ The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parall
 
 **Accessibility tree.** `PlatformWindow::a11y_init`/`a11y_tree_update` defaults mean Android currently reports nothing to AccessKit. Wire it to Android's accessibility APIs (upstream: `crates/gpui/src/window/a11y.rs`).
 
-**Audit new git CLI spawn sites.** git2 is gone; `crates/git/src/repository.rs` (+3.3k) and `project/src/git_store.rs` (+3.2k) now spawn `git` per operation through the zd-exec router (verified working on-device for status/trust). Sweep for spawn sites that assume desktop git semantics (pager, hooks, credential helpers) under the runtime's git.
+**Audit new git CLI spawn sites.** git2 is gone; `crates/git/src/repository.rs` (+3.3k) and `project/src/git_store.rs` (+3.2k) now spawn `git` per operation through the farm and the engine loader (verified working on-device for status/trust). Sweep for spawn sites that assume desktop git semantics (pager, hooks, credential helpers) under the runtime's git.
 
 **`sandbox` crate on Android.** New non-optional dep of the `zed` binary path; heavy backends are cfg-gated off android and it compiled clean, but its runtime fallback arm has never been exercised on-device beyond boot. Check what agent tool-calls hit it.
 
 **`spawn_when_idle` support.** New defaulted `PlatformDispatcher` methods (`dispatch_on_main_thread_when_idle`, `idle_time_remaining`) are unimplemented on Android, so `BackgroundExecutor::spawn_when_idle` degrades to never-idle. Fine today; revisit if upstream starts scheduling real work through it.
 
-**`util::command` bridge doc.** The zd-exec spawn bridge (`new_std_command` android arm, env-root routing, shebang rewrite) moved into `crates/gpui_util` so upstream's `pub use gpui_util::new_std_command` re-export carries the rewrite for sync spawn sites too. Update the workarounds index entry that still points at util/command.rs internals.
+**`util::command` bridge doc.** The spawn bridge (`new_std_command` android arm, env-root routing) moved into `crates/gpui_util` so upstream's `pub use gpui_util::new_std_command` re-export carries the rewrite for sync spawn sites too. Update the workarounds index entry that still points at util/command.rs internals.

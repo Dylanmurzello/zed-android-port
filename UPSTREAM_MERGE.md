@@ -22,10 +22,11 @@ Identity + Zdroid-specific docs that we have actually authored. Conflicts on the
 - `.github/FUNDING.yml` (we repointed from zed-industries to Dylanmurzello)
 - `.gitattributes` (we extended)
 
-Plus the two crates that don't exist upstream (entirely ours):
+Plus the crates that don't exist upstream (entirely ours):
 
 - `crates/gpui_android/**`
 - `crates/zdroid_runtime/**`
+- `crates/zd_engine_core/**`, `crates/zd_loader/**` (the rootfs engine, MIT)
 
 **NOT in this list** (verified upstream-unchanged, so future upstream improvements should flow through):
 

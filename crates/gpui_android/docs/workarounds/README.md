@@ -48,7 +48,9 @@ is built.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Storage permission JNI shim](storage-permission-jni.md) | Active | `READ/WRITE_EXTERNAL_STORAGE` are runtime-prompted at targetSdk≤28 |
-| [Runtime config location + not-configured state](runtime-config-migration.md) | Active | Config moved out of the bootstrap prefix; legacy or broken files route to the picker instead of a silent default |
+| [Rootfs engine integration](rootfs-engine-integration.md) | Active | How the editor reaches the Ubuntu rootfs: the loader link, the bundled image extracted on first launch, the symlink farm, the spawn bridge, reset |
+| [The guest environment contract](rootfs-guest-env.md) | Active | Editor keeps the host env, tools get the guest view at exec through `ZD_GUEST_ENV`; per-spawn PATH merge, terminal, SSH strip list |
+| [Runtime config location + not-configured state](runtime-config-migration.md) | Superseded | One runtime, no selection file; the sentinel is the only state |
 | [JNI DNS bridge](jni-dns-bridge.md) | Active | Android has no `/etc/resolv.conf`; ConnectivityManager's servers seed the guest rootfs resolv.conf |
 | [Asset selection by runtime OS](runtime-os-asset-selection.md) | Active | Downloaded tools run in the Linux userland, so every asset-selection site asks `util::runtime_os()` instead of `consts::OS` |
 | [Vendored async-task: one vtable pointer per task waker](async-task-waker-identity.md) | Active | A task woke itself on every poll because its waker clones carried a different vtable address; the SSH connect task froze the main loop |
@@ -63,8 +65,8 @@ is built.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
-| [HOME env dual-pointing](home-env-dual-pointing.md) | Active | Rust process needs HOME=data_path; bash needs HOME=$TERMUX__HOME |
-| [Terminal HOME override](terminal-home-override.md) | Active | Pass TERMUX__HOME into bash without disturbing Rust globals |
+| [HOME env dual-pointing](home-env-dual-pointing.md) | Superseded | The guest view (`HOME=/root`) is applied by the loader at exec; see the guest environment contract |
+| [Terminal HOME override](terminal-home-override.md) | Superseded | Same: no `TERMUX__HOME` anymore |
 | [SSL_CERT_FILE / CURL_CA_BUNDLE](ssl-cert-bundle.md) | Removed | In-process trust via webpki-roots; subprocess CA is adapter-owned |
 | [.gitconfig safe.directory = *](gitconfig-safe-directory.md) | Active | libgit2 dubious-ownership check fires for media_rw-owned /sdcard repos |
 | [Activity-recreation idempotency](activity-recreation-idempotency.md) | Active | `android_main` re-enters; everything must be re-entrant |

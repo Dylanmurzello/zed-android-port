@@ -72,7 +72,12 @@ A different cert means users would have to uninstall/reinstall to upgrade — ne
 - [ ] **Open Project** from the welcome screen pops the SAF picker. Pick a folder, project loads.
 - [ ] **Clone Repository** from the welcome screen pops the URL modal. Submit a small public repo URL. Toast appears with Cancel button. Clone completes, project opens.
 - [ ] Open a folder on `/sdcard/`. Yellow Move chip appears in the title bar. Tap, confirm Copy. Toast with Cancel button shows. Cancel mid-copy: dst at `~/projects/<name>` is removed cleanly.
-- [ ] Integrated terminal opens. `pkg install npm && npm install -g @anthropic-ai/claude-code && claude` runs, claude responds.
+- [ ] On a wiped install (`adb shell pm clear com.zdroid`), the first launch extracts the rootfs behind the splash (`adb logcat -d | grep runtime_setup` shows `rootfs installed from the bundled image`), the "Installing git and certificates" notification completes, and Settings → Android Runtime names the installed image.
+- [ ] Over the previous release, `files/rootfs` is untouched, `readlink files/zd-runtime/bash` points at the new `/data/app/~~...` loader, and no `files/usr` or `files/bin/zd-exec` remains.
+- [ ] `zdroid runtime: engine self test` from the command palette passes every step.
+- [ ] Integrated terminal opens as `root@zdroid`. `apt install -y python3 && python3 -c 'import os; print(os.getcwd())'` prints the project dir.
+- [ ] `apt install -y nodejs npm && npm install -g @anthropic-ai/claude-code && claude` runs, claude responds.
+- [ ] Open a Rust project with rustup installed: rust-analyzer diagnostics appear; Home for a minute, come back, the server is the same pid (`adb shell ps -A | grep rust-analyzer`).
 - [ ] Powerline-style prompt characters (`❯`, `✻`, etc.) render as glyphs not boxes (font fallback to /system/fonts).
 - [ ] Touch a `.rs` file in a worktree. Editor opens, syntax highlighting active.
 - [ ] Git panel opens, shows current branch / staging.
@@ -135,7 +140,7 @@ This is an in-place upgrade over [previous] — same signing cert, your existing
 * APK SHA-256: `<sha>`
 * Signing cert SHA-256: `25:68:A2:A3:81:2D:8B:C3:A4:E8:E7:56:68:5C:5C:F7:25:40:EA:A2:94:37:F4:C1:25:8A:0C:81:73:BF:AB:4E`
 * Built from commit `<short SHA>`
-* Bootstrap: [bootstrap-2026.05.06-r2](https://github.com/Dylanmurzello/zed-android-port/releases/tag/bootstrap-2026.05.06-r2)
+* Rootfs image: `ubuntu-base-26.04.1-base-arm64.tar.gz` (bundled; name and SHA-256 in `crates/zdroid_runtime/rootfs-image.properties`)
 ```
 
 ### 7. Cut the release
@@ -149,7 +154,7 @@ gh release create "$VERSION" \
   "/tmp/zdroid-release-build/Zdroid-${VERSION#v}.apk"
 ```
 
-`--latest` is intentional — every new release should be the latest entry on the public page. Bootstrap zip stays as a pre-release; it never competes for the latest slot.
+`--latest` is intentional — every new release should be the latest entry on the public page. The bootstrap and spawnd assets of the adapter era stay published as pre-releases for history; nothing new is hosted besides the APK.
 
 ### 8. Verify the public release works for anonymous users
 
@@ -163,7 +168,6 @@ Should return `302 → 200` with a content-length matching the APK byte count. I
 ### 9. After release
 
 - The README badge / `/releases/latest` link auto-updates to point at the new version. No README changes needed unless install instructions changed.
-- The bootstrap GitHub Release stays unchanged unless the bootstrap zip itself was rebuilt for this version.
 - No need to manually update download counts — the worker / shields.io badges do it.
 
 ## Common mistakes (and what they cost)

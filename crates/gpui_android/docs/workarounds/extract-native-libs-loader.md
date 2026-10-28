@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunk 0
-**Files:** `android/app/build.gradle.kts` (`buildZdLoader`, `verifyZdLoader`, `stageZdLoaderJniLib`, `packaging.jniLibs`), `crates/zd_loader/verify.sh`, `MainActivity.kt::nativeLibraryDir`, `crates/gpui_android/src/zd_exec_install.rs::native_library_dir`
+**Files:** `android/app/build.gradle.kts` (`buildZdLoader`, `verifyZdLoader`, `stageZdLoaderJniLib`, `packaging.jniLibs`), `crates/zd_loader/verify.sh`, `MainActivity.kt::nativeLibraryDir`, `crates/gpui_android/src/runtime_links.rs::native_library_dir`
 
 ## Problem
 
