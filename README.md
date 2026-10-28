@@ -26,7 +26,7 @@ Zdroid is an independent port of [Zed](https://zed.dev) for Android, not affilia
 
 Vulkan via wgpu. AChoreographer-driven vsync, no JNI hop per frame. Opt-in 120Hz with Mailbox present mode. Glyph fallback into `/system/fonts` so Powerline arrows and CJK render without bundling fonts. Editing, projects, search, Git, extensions, and terminal UI use Zed's native implementations. The Rust `.so` is the app process. gpui composites every pixel (yes, you read that right) straight into the Adreno Vulkan driver. Multi-Activity OS-chromed extra windows so DeX freeform renders Settings and secondary editors with real chrome.
 
-Termux userland rebuilt under `com.zdroid` (applicationId byte-length pinned to 10 because prebuilt RUNPATHs in the .debs don't stretch). Musl loader hex-patched at runtime so Bun-compiled binaries like claude-code and codex resolve `/etc/resolv.conf` to a JNI-populated `/sdcard/.zed/r`. Optional Magisk-flashable `zd-spawnd` daemon with SCM_RIGHTS stdio relay for the chroot runtime. SurfaceControl-composited hardware cursor sprite on a sibling overlay, separate from the wgpu frame. Pointer-capture trackpad that consumes historical motion samples so finger drags don't lose 80% of their travel to event batching. SAF DocumentsProvider exposing `~/` as a system volume. Native Android trust via `rustls-platform-verifier`. In-app updater pulling signed APKs from GitHub Releases. Everything else is upstream. Deep-dives for the platform layer live in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
+Termux userland under `com.zdroid`: packages from Termux's repository are repacked for it as they install, which works because `com.zdroid` is as long as `com.termux`. npm's Linux binaries, such as Claude Code and Codex, run on a bundled musl loader and read their DNS servers from `/sdcard/.zed/r`, which the app fills with Android's. Optional Magisk-flashable `zd-spawnd` daemon with SCM_RIGHTS stdio relay for the chroot runtime. SurfaceControl-composited hardware cursor sprite on a sibling overlay, separate from the wgpu frame. Pointer-capture trackpad that consumes historical motion samples so finger drags don't lose 80% of their travel to event batching. SAF DocumentsProvider exposing `~/` as a system volume. HTTPS trusts the Mozilla root bundle (`webpki-roots`). In-app updater pulling signed APKs from GitHub Releases. Everything else is upstream. Deep-dives for the platform layer live in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
 
 ---
 
@@ -41,7 +41,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/D
 
 1. **Storage permissions.** The system prompts for read/write to `/sdcard` so the editor can reach anything outside its app-private dir. Grant it. Without it, "Open Project" can't see your files.
 2. **Runtime adapter.** Open **Configure runtime** in onboarding (or **Settings → Android** later). Choose **Bootstrap** for a Termux-derived userland without root, or **Kali chroot** for an existing Magisk and Kali NetHunter installation. The picker shows whether each runtime is ready.
-3. **Bootstrap download.** Tap **Install** on the Bootstrap card to download the userland from [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap). When it is ready, select it and restart Zdroid. Installation errors remain visible in the picker.
+3. **Bootstrap download.** Tap **Install** on the Bootstrap card to download the userland from [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap), Zdroid's fork of [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap). To use another repository that publishes `bootstrap-aarch64.zip` releases, enter it in **Download from** first. When it is ready, the card shows the installed release; select it and restart Zdroid. **Reinstall** on the card later moves to a newer release or another repository: it deletes the packages installed since, and keeps your home folder. Installation errors remain visible in the picker.
 
 ### Setting up your shell environment (Bootstrap)
 
@@ -51,14 +51,21 @@ Open the integrated terminal. First, sync the package index:
 pkg update && pkg upgrade
 ```
 
-Pre-baked in the bootstrap: rust-analyzer (the LSP binary; `cargo` and `rustc` are not bundled, install with `pkg install rust` if you want them), nodejs, go, bash, openssh, busybox, the bionic-compat patchelf, the hex-patched musl loader. `npm` is a separate Termux package and needs an install before user-facing `npm` calls work. Claude Code, for example:
+Pre-baked in the bootstrap: rust-analyzer (the LSP binary; `cargo` and `rustc` are not bundled, install with `pkg install rust` if you want them), nodejs, go, bash, openssh, busybox, the bionic-compat patchelf, the hex-patched musl loader. `npm` is a separate Termux package and needs an install before user-facing `npm` calls work:
 
 ```sh
 pkg install npm
-npm install -g @anthropic-ai/claude-code
 ```
 
-Toolchains and LSPs for other languages have install recipes in the bootstrap repo: [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap).
+The agent panel's Claude Agent and Codex start the Claude Code and Codex CLIs, which run on Android only from a global npm install: the bootstrap patches those. Install them, sign in from the terminal (`claude`, then `/login`; `codex login`), and restart Zdroid, which then points the agents at them:
+
+```sh
+npm install -g @anthropic-ai/claude-code @openai/codex
+```
+
+In the terminal, run Codex as `codex --no-daemon` (or add `alias codex='codex --no-daemon'` to `~/.bashrc`): by default it starts a background server that sandboxes itself with bubblewrap, which Android doesn't allow inside an app. The agent panel's Codex doesn't use that server.
+
+Toolchains and LSPs for other languages have install recipes in the bootstrap repo: [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap).
 
 > [!NOTE]
 > The first `pkg install` after extracting a fresh bootstrap will surface "broken dependencies" from apt and prompt you to run `apt --fix-broken install`. Run it. The pre-baked packages (`go`, `openssh`, busybox, etc.) declare dpkg dependencies that aren't formally registered in the database on a fresh extract, so apt flags the inconsistency the first time it has to resolve anything. fix-broken reconciles the state; `pkg` works normally afterward.
@@ -135,14 +142,14 @@ The editor is bionic-linked and runs as the Android app process. Every subproces
 
 | Adapter | What it is | Where it comes from |
 |---|---|---|
-| **Bootstrap** _(no root)_ | Termux userland rebuilt under `com.zdroid`: apt/dpkg/bash with our package name baked into RUNPATHs and shebangs. Pure bionic, no glibc; same trade-offs as any Termux install. `apt` and `pkg install` work for everything Termux ships. | Downloaded from [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap) using **Install** on the Bootstrap card in the runtime picker. |
+| **Bootstrap** _(no root)_ | Termux userland rebuilt under `com.zdroid`: apt/dpkg/bash with our package name baked into RUNPATHs and shebangs. Pure bionic, no glibc; same trade-offs as any Termux install. `apt` and `pkg install` work for everything Termux ships. | Downloaded from [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap) using **Install** on the Bootstrap card in the runtime picker. |
 | **Kali chroot** _(needs Magisk)_ | Real glibc Linux. Every spawn goes over a Unix socket to `zd-spawnd` (a small privileged daemon) which does `fork` + `chroot` + `setuid` + `execve` on the editor's behalf. ~5 ms per spawn vs ~200 ms for `su`-mediated. All the bionic gotchas (`/usr/bin/env`, `/tmp`, `dlopen libfoo.so`) disappear because subprocesses run inside a real distro. | Flash the Magisk module from [`Dylanmurzello/zdroid-spawnd`](https://github.com/Dylanmurzello/zdroid-spawnd), plus drop a Kali NetHunter aarch64 rootfs at `/data/local/nhsystem/kali-arm64`. |
 
 Switching is one tap (Settings → Android). Selection persists in `$PREFIX/etc/zd-runtime.toml`. **Restart Zdroid after switching adapters.** The editor caches environment state (PATH, HOME, library search paths, spawn-router config) from whichever adapter was active at boot; without a restart, subprocesses spawned post-switch can land with stale env and fail in cryptic ways (LSPs not found, `git` claiming HOME doesn't exist, `pkg install` writing to the wrong rootfs, etc.).
 
 ### When to pick which
 
-- **No root, just want it to work:** Bootstrap. apt, npm, `go install`, rust-analyzer all work. Rough edges: precompiled Bun CLIs (claude-code, codex) rely on a runtime hex-patch of `/etc/resolv.conf` to a `/sdcard/.zed/r` file that JNI populates each boot from `ConnectivityManager.getActiveDnsServers()`. Full writeup in [`zdroid-bootstrap/docs/hex-patch-resolv-conf.md`](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md). Some glibc-only extension binaries don't run.
+- **No root, just want it to work:** Bootstrap. apt, npm, `go install`, rust-analyzer all work. Rough edges: npm's Linux binaries (Claude Code, Codex) read their DNS servers from `/sdcard/.zed/r`, which the app fills from Android's at startup ([how it works](https://github.com/ilkersigirci/zdroid-bootstrap#dns)). Some glibc-only extension binaries don't run.
 - **Have Magisk, want real Linux:** Kali chroot. Everything you'd expect on Debian/Kali works as-is, no shimming needed. The chroot is shared with whatever else uses that NetHunter rootfs.
 
 ---
@@ -238,7 +245,7 @@ A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, fol
 
 ## <img src="https://api.iconify.design/lucide:file-text.svg?color=%23999999&height=22" valign="middle" /> &nbsp;License
 
-GPL-3.0-or-later, same as upstream Zed. The Bootstrap-adapter zip (distributed from [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap), not bundled in the APK) contains Termux-rebuilt packages each under its own license (mostly BSD/MIT/Apache; gnupg/bash/coreutils are GPL). The Alpine-derived `ld-musl-aarch64.so.1` inside it is MIT. The `zd-spawnd` daemon ([`Dylanmurzello/zdroid-spawnd`](https://github.com/Dylanmurzello/zdroid-spawnd)) is GPL-3.0-or-later.
+GPL-3.0-or-later, same as upstream Zed. The Bootstrap-adapter zip (distributed from [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap), not bundled in the APK) contains Termux-rebuilt packages each under its own license (mostly BSD/MIT/Apache; gnupg/bash/coreutils are GPL). The Alpine-derived `ld-musl-aarch64.so.1` inside it is MIT. The `zd-spawnd` daemon ([`Dylanmurzello/zdroid-spawnd`](https://github.com/Dylanmurzello/zdroid-spawnd)) is GPL-3.0-or-later.
 
 © Dylan Murzello, distributed under GPL-3.0-or-later. Zed itself is © Zed Industries.
 

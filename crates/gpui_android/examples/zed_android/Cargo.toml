@@ -129,6 +129,7 @@ theme = { path = "../../../theme" }
 theme_extension = { path = "../../../theme_extension" }
 theme_settings = { path = "../../../theme_settings" }
 ui = { path = "../../../ui" }
+ui_input = { path = "../../../ui_input" }
 menu = { path = "../../../menu" }
 auto_update = { path = "../../../auto_update" }
 

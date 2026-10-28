@@ -10,13 +10,19 @@ use theme::ActiveTheme;
 use ui::{
     Button, ButtonCommon, ButtonSize, ButtonStyle, Chip, Clickable, Color, Disableable,
     FluentBuilder, Headline, HeadlineSize, Icon, IconName, IconSize, Label, LabelCommon, LabelSize,
-    ParentElement, Styled, h_flex, v_flex,
+    ParentElement, Styled, TintColor, h_flex, v_flex,
 };
+use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
-    HealthStatus, RuntimeId, RuntimeProvider, adapters, adapters::chroot::SPAWND_RELEASE_URL,
-    config::RuntimeFile, health::ProgressSink,
+    HealthStatus, RuntimeId, RuntimeProvider, adapters,
+    adapters::{
+        bootstrap_install::{installed_release, release_repo_from_input},
+        chroot::SPAWND_RELEASE_URL,
+    },
+    config::{DEFAULT_RELEASE_REPO, RuntimeFile},
+    health::ProgressSink,
 };
 
 /// Bridges the sync `ProgressSink` trait (called from the background
@@ -180,7 +186,7 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
             window_min_size: Some(window_min_size),
             ..Default::default()
         },
-        |_, cx| cx.new(RuntimePicker::new),
+        |window, cx| cx.new(|cx| RuntimePicker::new(window, cx)),
     )
     .log_err();
 }
@@ -189,6 +195,8 @@ struct AdapterEntry {
     id: RuntimeId,
     tagline: &'static str,
     health: HealthStatus,
+    /// Which release is installed, for runtimes the picker installs.
+    installed: Option<String>,
 }
 
 pub struct RuntimePicker {
@@ -207,19 +215,26 @@ pub struct RuntimePicker {
     /// them here + calls `cx.notify()` so the install button's
     /// label re-renders without the user having to interact.
     install_status: Option<String>,
-    /// True once an adapter selection has been saved to
-    /// `runtime.toml` and the user needs to fully close and reopen
-    /// the app for the change to take effect. Drives the inline
-    /// banner at the top of the picker. We don't attempt an in-app
-    /// restart (canonical Android patterns interact poorly with
-    /// Background Activity Launch rules and per-OEM task lifecycle
-    /// policies); the user closes via Recents and reopens from the
-    /// launcher.
-    restart_required: bool,
+    /// Why the user needs to fully close and reopen the app, once an
+    /// adapter selection has been saved to `runtime.toml` or Bootstrap
+    /// reinstalled. Drives the inline banner at the top of the picker.
+    /// We don't attempt an in-app restart (canonical Android patterns
+    /// interact poorly with Background Activity Launch rules and per-OEM
+    /// task lifecycle policies); the user closes via Recents and reopens
+    /// from the launcher.
+    restart_reason: Option<&'static str>,
+    /// The GitHub repository Install downloads the bootstrap from, so
+    /// another one can be used without rebuilding Zdroid. There is no
+    /// terminal to edit `zd-runtime.toml` with before the first install.
+    repository_field: Entity<InputField>,
+    /// Reinstall was tapped once. Reinstalling deletes every package
+    /// installed since, so it shows the field and a warning and waits for
+    /// a second tap.
+    confirming_reinstall: bool,
 }
 
 impl RuntimePicker {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title_bar = if !cfg!(target_os = "macos") {
             Some(cx.new(|cx| PlatformTitleBar::new("runtime-picker-title-bar", cx)))
         } else {
@@ -240,6 +255,20 @@ impl RuntimePicker {
                     .into(),
             );
         }
+        let bootstrap = configuration
+            .as_ref()
+            .and_then(|file| file.bootstrap.clone())
+            .unwrap_or_default();
+        // A reinstall keeps the installed release's repository unless the
+        // user changes it.
+        let release_repo = installed_release(&bootstrap.prefix)
+            .and_then(|(_, repository)| repository)
+            .unwrap_or(bootstrap.release_repo);
+        let repository_field = cx.new(|cx| {
+            let field = InputField::new(window, cx, DEFAULT_RELEASE_REPO).label("Download from");
+            field.set_text(&release_repo, window, cx);
+            field
+        });
         Self {
             title_bar,
             focus_handle: cx.focus_handle(),
@@ -248,26 +277,44 @@ impl RuntimePicker {
             error,
             current,
             install_status: None,
-            restart_required: false,
+            restart_reason: None,
+            repository_field,
+            confirming_reinstall: false,
         }
     }
 
-    /// Trigger an async bootstrap install. Drops the user into a
-    /// "downloading + extracting" state on the Bootstrap card while
-    /// the background task pulls the latest release zip from GitHub
-    /// and extracts to `$PREFIX`. Refreshes adapter health on
-    /// completion so the card flips from NotInstalled → Healthy
-    /// without the user having to re-open the picker.
+    /// Trigger an async bootstrap install or reinstall. Drops the user into
+    /// a "downloading + extracting" state on the Bootstrap card while the
+    /// background task downloads the zip from the repository in the
+    /// "Download from" field and replaces `$PREFIX` with it. Refreshes
+    /// adapter health on completion so the card updates without the user
+    /// having to re-open the picker.
     fn install_bootstrap(&mut self, cx: &mut Context<Self>) {
         if self.install_status.is_some() {
             return; // already in progress
         }
+        let input = self.repository_field.read(cx).text(cx);
+        let release_repo = if input.trim().is_empty() {
+            Some(DEFAULT_RELEASE_REPO.to_owned())
+        } else {
+            release_repo_from_input(&input)
+        };
+        let error = release_repo
+            .is_none()
+            .then_some("Enter a GitHub repository as owner/repo or its github.com URL.");
+        self.repository_field
+            .update(cx, |field, cx| field.set_error(error, cx));
+        let Some(release_repo) = release_repo else {
+            return;
+        };
+        let reinstall = std::mem::take(&mut self.confirming_reinstall);
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
-        let config = self
+        let mut config = self
             .configuration
             .as_ref()
             .and_then(|file| file.bootstrap.clone())
             .unwrap_or_default();
+        config.release_repo = release_repo;
         self.install_status = Some("Starting install".into());
         self.error = None;
         cx.notify();
@@ -290,6 +337,11 @@ impl RuntimePicker {
             }
             this.update(cx, |this, cx| {
                 this.install_status = None;
+                if reinstall && result.is_ok() {
+                    // The terminal, language servers and agents still run
+                    // the deleted userland's programs.
+                    this.restart_reason = Some("Bootstrap reinstalled.");
+                }
                 this.error = result
                     .err()
                     .map(|error| format!("Install failed: {error:#}"));
@@ -345,7 +397,7 @@ impl RuntimePicker {
                 // appTasks sweep) all interact poorly with Android's
                 // evolving Background Activity Launch rules and per-
                 // OEM task lifecycle policies.
-                self.restart_required = true;
+                self.restart_reason = Some("Runtime adapter switched.");
             }
             Err(err) => {
                 log::error!(
@@ -379,11 +431,19 @@ impl Render for RuntimePicker {
             .iter()
             .enumerate()
             .map(|(idx, entry)| {
-                render_card(idx, entry, self.current, self.install_status.as_deref(), cx)
+                render_card(
+                    idx,
+                    entry,
+                    self.current,
+                    self.install_status.as_deref(),
+                    &self.repository_field,
+                    self.confirming_reinstall,
+                    cx,
+                )
             })
             .collect();
 
-        let banner = self.restart_required.then(|| {
+        let banner = self.restart_reason.map(|reason| {
             let border = cx.theme().colors().border;
             let banner_bg = cx.theme().colors().element_background;
             let warning = cx.theme().status().warning;
@@ -411,7 +471,7 @@ impl Render for RuntimePicker {
                                 .color(Color::Default),
                         )
                         .child(
-                            Label::new("Runtime adapter switched.")
+                            Label::new(reason)
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -462,6 +522,8 @@ fn render_card(
     entry: &AdapterEntry,
     current: Option<RuntimeId>,
     install_status: Option<&str>,
+    repository_field: &Entity<InputField>,
+    confirming_reinstall: bool,
     cx: &mut Context<RuntimePicker>,
 ) -> AnyElement {
     let theme_colors = cx.theme().colors();
@@ -483,6 +545,10 @@ fn render_card(
         HealthStatus::Misconfigured { reason } => Some(reason.clone()),
         HealthStatus::Failed { error } => Some(error.clone()),
     };
+    let bootstrap = id == RuntimeId::Bootstrap;
+    let not_installed = matches!(entry.health, HealthStatus::NotInstalled { .. });
+    let show_repository_field =
+        bootstrap && install_status.is_none() && (not_installed || confirming_reinstall);
 
     h_flex()
         .id(("adapter-card", idx))
@@ -550,6 +616,33 @@ fn render_card(
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
+                })
+                .when_some(entry.installed.clone(), |this, installed| {
+                    this.child(
+                        Label::new(installed)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+                .when(show_repository_field, |this| {
+                    this.child(repository_field.clone()).child(
+                        Label::new(
+                            "A GitHub repository whose releases include bootstrap-aarch64.zip. \
+                             Zdroid installs its latest release.",
+                        )
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                    )
+                })
+                .when(bootstrap && confirming_reinstall, |this| {
+                    this.child(
+                        Label::new(
+                            "Reinstalling deletes the runtime, and every package installed \
+                             with pkg or npm since. Your home folder and runtime choice stay.",
+                        )
+                        .size(LabelSize::XSmall)
+                        .color(Color::Warning),
+                    )
                 }),
         )
         // An unhealthy selected runtime still needs its setup action.
@@ -569,38 +662,80 @@ fn render_card(
                         cx.open_url(SPAWND_RELEASE_URL);
                     }))
                     .into_any_element()
-            } else if id == RuntimeId::Bootstrap
-                && matches!(entry.health, HealthStatus::NotInstalled { .. })
-            {
-                if let Some(status) = install_status {
-                    Button::new(("installing", idx), status.to_string())
-                        .disabled(true)
-                        .into_any_element()
-                } else {
-                    Button::new(("install", idx), "Install")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.install_bootstrap(cx);
-                        }))
-                        .into_any_element()
-                }
-            } else if is_current {
-                // Healthy AND the active selection — decorative confirm.
-                // The header already shows an "Active" Chip; this right-
-                // hand Chip is design-language parity.
-                Chip::new("Selected")
-                    .icon(IconName::Check)
-                    .label_color(Color::Accent)
+            } else if let Some(status) = install_status.filter(|_| bootstrap) {
+                Button::new(("installing", idx), status.to_string())
+                    .disabled(true)
                     .into_any_element()
-            } else {
-                Button::new(("select", idx), "Select")
-                    .disabled(!entry.health.is_healthy())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select(id, window, cx);
+            } else if bootstrap && not_installed {
+                Button::new(("install", idx), "Install")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.install_bootstrap(cx);
                     }))
                     .into_any_element()
+            } else if bootstrap && confirming_reinstall {
+                v_flex()
+                    .gap_2()
+                    .items_end()
+                    .child(
+                        Button::new(("confirm-reinstall", idx), "Delete and reinstall")
+                            .style(ButtonStyle::Tinted(TintColor::Error))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.install_bootstrap(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(("cancel-reinstall", idx), "Cancel").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.confirming_reinstall = false;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .into_any_element()
+            } else if bootstrap {
+                v_flex()
+                    .gap_2()
+                    .items_end()
+                    .child(select_or_selected(idx, entry, is_current, cx))
+                    .child(
+                        Button::new(("reinstall", idx), "Reinstall").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.confirming_reinstall = true;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .into_any_element()
+            } else {
+                select_or_selected(idx, entry, is_current, cx)
             },
         )
         .into_any_element()
+}
+
+fn select_or_selected(
+    idx: usize,
+    entry: &AdapterEntry,
+    is_current: bool,
+    cx: &mut Context<RuntimePicker>,
+) -> AnyElement {
+    let id = entry.id;
+    if is_current {
+        // The active selection — decorative confirm. The header
+        // already shows an "Active" Chip; this right-hand Chip is
+        // design-language parity.
+        Chip::new("Selected")
+            .icon(IconName::Check)
+            .label_color(Color::Accent)
+            .into_any_element()
+    } else {
+        Button::new(("select", idx), "Select")
+            .disabled(!entry.health.is_healthy())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select(id, window, cx);
+            }))
+            .into_any_element()
+    }
 }
 
 fn build_entries(configuration: Option<&RuntimeFile>) -> Vec<AdapterEntry> {
@@ -613,26 +748,35 @@ fn build_entries(configuration: Option<&RuntimeFile>) -> Vec<AdapterEntry> {
     .unwrap_or_else(|err| HealthStatus::Failed {
         error: err.to_string(),
     });
-    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(
-        configuration
-            .and_then(|file| file.bootstrap.clone())
-            .unwrap_or_default(),
-    )
-    .map(|a| a.health_check())
-    .unwrap_or_else(|err| HealthStatus::Failed {
-        error: err.to_string(),
-    });
+    let bootstrap_config = configuration
+        .and_then(|file| file.bootstrap.clone())
+        .unwrap_or_default();
+    let bootstrap_installed =
+        installed_release(&bootstrap_config.prefix).map(|(tag, repository)| match repository {
+            Some(repository) => format!("Installed: {tag} from {repository}"),
+            None => format!("Installed: {tag}"),
+        });
+    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(bootstrap_config)
+        .map(|a| a.health_check())
+        .unwrap_or_else(|err| HealthStatus::Failed {
+            error: err.to_string(),
+        });
+    // A cleared prefix can keep its version file, which is a dotfile.
+    let bootstrap_installed = bootstrap_installed
+        .filter(|_| !matches!(bootstrap_health, HealthStatus::NotInstalled { .. }));
 
     vec![
         AdapterEntry {
             id: RuntimeId::Chroot,
             tagline: "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
             health: chroot_health,
+            installed: None,
         },
         AdapterEntry {
             id: RuntimeId::Bootstrap,
             tagline: "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
             health: bootstrap_health,
+            installed: bootstrap_installed,
         },
     ]
 }

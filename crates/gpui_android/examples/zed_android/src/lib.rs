@@ -612,7 +612,7 @@ fn android_main(app: AndroidApp) {
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
     // every subsequent execve into $PREFIX/bin/* will EACCES.
-    gpui_android::termux_bootstrap::check_selinux_context();
+    gpui_android::selinux_canary::check_selinux_context();
 
     // Best-effort runtime READ/WRITE_EXTERNAL_STORAGE prompt. Replaces the
     // MANAGE_EXTERNAL_STORAGE → Settings deep-link flow we used at
@@ -979,18 +979,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
     info!("zed_android: UserStore + WorkspaceStore constructed");
 
-    // Real NodeRuntime, mirroring crates/zed/src/main.rs:496-518. The
-    // earlier port stage stubbed this out as `NodeRuntime::unavailable()`
-    // back when Termux's Node didn't run on bionic — pre L3 npm intercept
-    // architecture (project_l3_npm_intercept memory). The intercept layer
-    // (patched node platform string, npm wrapper, launcher-gen RUNPATH
-    // fixup, libtermux-exec LD_PRELOAD) plus the bundled musl loader make
-    // a Termux-installed Node usable. Wire NodeRuntime against settings
-    // so PATH-resolved Node (`pkg install nodejs` → $PREFIX/bin/node)
-    // works, and Zed's managed-node fallback download path is available
-    // for users without termux Node. Without this, npm-based LSPs
-    // (TypeScript / JavaScript / Pyright / etc.) fail at the install step
-    // with `'node' settings do not allow any way to use Node.js`.
+    // Zed's NodeRuntime, set up as in crates/zed/src/main.rs. It finds the
+    // runtime's Node and npm on PATH: the bootstrap ships Node, and npm
+    // comes from `pkg install npm`. Zed's own Node download has no Android
+    // build, so without them npm-based language servers and agents can't
+    // install.
     let (mut node_options_tx, node_options_rx) =
         watch::channel::<Option<node_runtime::NodeBinaryOptions>>(None);
     cx.observe_global::<SettingsStore>(move |cx| {

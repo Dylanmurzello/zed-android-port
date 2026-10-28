@@ -1,6 +1,6 @@
 # Resilience for Bun-binary `/etc/resolv.conf` hex-patch
 
-**Status:** Deferred. Active hex-patch in [`hex-patch-resolv-conf.md`](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md) works today; this doc captures the failure modes when it eventually breaks and the options for replacing it.
+**Status:** Deferred. Active rewrite described under [DNS in the zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#dns) works today; this doc captures the failure modes when it eventually breaks and the options for replacing it.
 
 ## Why this is fragile
 

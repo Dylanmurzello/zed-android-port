@@ -219,11 +219,7 @@ impl RuntimeProvider for BootstrapAdapter {
     }
 
     fn install(&self, progress: &mut dyn ProgressSink) -> anyhow::Result<()> {
-        super::bootstrap_install::install_latest(
-            &self.config.prefix,
-            &self.config.release_repo,
-            progress,
-        )
+        super::bootstrap_install::install(&self.config.prefix, &self.config.release_repo, progress)
     }
 
     #[cfg(target_os = "android")]
@@ -332,7 +328,7 @@ impl RuntimeProvider for BootstrapAdapter {
         //      of HOME. The few `paths::home_dir()` consumers
         //      (`.ssh/config` in particular) align correctly with
         //      what shells see when both use termux_home.
-        vec![
+        let mut variables = vec![
             (
                 "HOME".into(),
                 EnvOp::Set(termux_home.as_os_str().to_owned()),
@@ -349,15 +345,6 @@ impl RuntimeProvider for BootstrapAdapter {
             (
                 "TERMUX__HOME".into(),
                 EnvOp::Set(termux_home.into_os_string()),
-            ),
-            // Read by our patched dpkg's tarfn.c at extract time. When
-            // set and != "com.termux", dpkg rewrites tar entry paths
-            // starting with /data/data/com.termux/ to /data/data/
-            // <this>/ on the fly, letting `pkg install <upstream-deb>`
-            // Just Work with our prefix.
-            (
-                "TERMUX_APP__PACKAGE_NAME".into(),
-                EnvOp::Set(OsString::from("com.zdroid")),
             ),
             (
                 "TMPDIR".into(),
@@ -380,27 +367,55 @@ impl RuntimeProvider for BootstrapAdapter {
                 "SHELL".into(),
                 EnvOp::Set(prefix.join("bin/bash").into_os_string()),
             ),
-        ]
+        ];
+        let cert_path = prefix.join("etc/tls/cert.pem");
+        if cert_path.is_file() {
+            // Android has none of the CA bundle paths Linux programs look
+            // for, so programs with their own TLS stack (Codex, cargo) fail
+            // every HTTPS request without these. Set for the whole process
+            // so agents and language servers get them, not just the
+            // terminal; Zed's own HTTP client uses built-in roots.
+            variables.push((
+                "SSL_CERT_FILE".into(),
+                EnvOp::Set(cert_path.as_os_str().to_owned()),
+            ));
+            variables.push((
+                "CURL_CA_BUNDLE".into(),
+                EnvOp::Set(cert_path.into_os_string()),
+            ));
+        }
+        // The agent panel's Claude Agent and Codex start the copies of these
+        // CLIs that Zed installs with them, which don't run here: Claude
+        // Code's looks for its musl loader in /lib, and both read
+        // /etc/resolv.conf, which Android doesn't have, so Codex hangs on
+        // its first request. Bootstrap's npm wrapper patches global
+        // installs for both, so point the agents at those.
+        for (variable, program) in [
+            ("CLAUDE_CODE_EXECUTABLE", "bin/claude"),
+            ("CODEX_PATH", "bin/codex"),
+        ] {
+            let program = prefix.join(program);
+            if program.exists() {
+                variables.push((variable.into(), EnvOp::Set(program.into_os_string())));
+            }
+        }
+        variables
     }
 
     fn env_for_terminal(&self, data_path: &std::path::Path) -> Vec<(String, std::ffi::OsString)> {
         use std::ffi::OsString;
 
         // On top of the inherited process env: the Termux-flavored vars
-        // the integrated terminal expects, the libtermux-exec shim, the
-        // HOME override and the CA bundle.
+        // the integrated terminal expects, the libtermux-exec shim and the
+        // HOME override.
         let prefix = self.config.prefix.clone();
         let termux_home = data_path.join("home");
 
-        let mut variables = vec![
+        vec![
             ("PREFIX".into(), prefix.as_os_str().to_owned()),
             ("TERMUX__ROOTFS".into(), data_path.as_os_str().to_owned()),
             ("TERMUX__PREFIX".into(), prefix.as_os_str().to_owned()),
             ("TERMUX__HOME".into(), termux_home.as_os_str().to_owned()),
-            (
-                "TERMUX_APP__PACKAGE_NAME".into(),
-                OsString::from("com.zdroid"),
-            ),
             ("HOME".into(), termux_home.into_os_string()),
             // termux-exec.so hooks execve to translate hardcoded
             // /data/data/com.termux/... shebangs in upstream maintainer
@@ -411,17 +426,7 @@ impl RuntimeProvider for BootstrapAdapter {
                 "LD_PRELOAD".into(),
                 OsString::from("/data/data/com.zdroid/files/usr/lib/libtermux-exec.so"),
             ),
-        ];
-        let cert_path = prefix.join("etc/tls/cert.pem");
-        if cert_path.is_file() {
-            // CA bundle for tools that go over HTTPS (cargo, npm,
-            // curl). Without this, `cargo metadata` from rust-analyzer
-            // dies with "unable to get local issuer certificate" on
-            // first crates.io index update.
-            variables.push(("SSL_CERT_FILE".into(), cert_path.as_os_str().to_owned()));
-            variables.push(("CURL_CA_BUNDLE".into(), cert_path.into_os_string()));
-        }
-        variables
+        ]
     }
 
     fn terminal_shell(&self, _data_path: &std::path::Path) -> Option<std::path::PathBuf> {
