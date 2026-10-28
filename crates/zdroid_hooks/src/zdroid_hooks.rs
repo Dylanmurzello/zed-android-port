@@ -1,32 +1,20 @@
-//! Android hooks that Zed's crates call from small `cfg(target_os =
+//! The Android code that Zed's crates call from small `cfg(target_os =
 //! "android")` blocks: process spawning (`gpui_util`, `util::command`), the
 //! local terminal's environment (`terminal`), npm's environment
-//! (`node_runtime`) and path identity (`project`). Keeping the code here
-//! leaves one call in each of those crates, which have to be merged at every
-//! Zed sync.
+//! (`node_runtime`) and a path lookup fallback (`project`). Keeping it here
+//! leaves one call in each of those crates, which are merged at every Zed
+//! sync.
 //!
-//! The app registers the active runtime's paths and environment once at
-//! startup. Switching runtimes restarts the app, so the registries are
-//! `OnceLock`s; a second registration, from the Activity being recreated,
-//! is ignored.
+//! The app registers the active runtime's paths and variables at startup.
+//! Switching runtimes restarts the app, so each is set once; a second
+//! registration, when the Activity is recreated, is ignored.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::hash::BuildHasher;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-
-pub mod path_equivalence;
-
-/// One change in a runtime adapter's environment contract, applied to the
-/// app process or to a spawn's environment map.
-#[derive(Debug, Clone)]
-pub enum EnvOp {
-    /// Set the variable, replacing any existing value.
-    Set(OsString),
-    /// Remove the variable if it's set.
-    Remove,
-}
 
 /// Invoked by short name so the kernel's PATH lookup finds the
 /// `$PREFIX/zd-runtime/zd-exec` symlink, like every other PATH-resolved
@@ -34,8 +22,7 @@ pub enum EnvOp {
 const ZD_EXEC_PROGRAM: &str = "zd-exec";
 
 static ENVIRONMENT_ROOT: OnceLock<PathBuf> = OnceLock::new();
-static TERMINAL_ENV_OVERLAY: OnceLock<Vec<(String, EnvOp)>> = OnceLock::new();
-static WORKSPACE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+static TERMINAL_ENV: OnceLock<Vec<(String, OsString)>> = OnceLock::new();
 static NPM_LIBTERMUX_EXEC_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 fn register<T>(slot: &OnceLock<T>, value: T, name: &str) {
@@ -51,18 +38,10 @@ pub fn register_environment_root(root: PathBuf) {
     register(&ENVIRONMENT_ROOT, root, "environment root");
 }
 
-/// Registers the variables the active runtime adds to local terminals.
-pub fn register_terminal_env_overlay(ops: Vec<(String, EnvOp)>) {
-    register(&TERMINAL_ENV_OVERLAY, ops, "terminal environment");
-}
-
-/// Registers the active runtime's workspace root, which holds `projects`.
-pub fn register_workspace_root(path: Option<PathBuf>) {
-    register(&WORKSPACE_ROOT, path, "workspace root");
-}
-
-pub fn workspace_root() -> Option<&'static PathBuf> {
-    WORKSPACE_ROOT.get().and_then(Option::as_ref)
+/// Registers the variables the active runtime sets in local terminals, on
+/// top of the app's own environment, which the shell inherits.
+pub fn register_terminal_env(variables: Vec<(String, OsString)>) {
+    register(&TERMINAL_ENV, variables, "terminal environment");
 }
 
 /// Registers Bootstrap's `libtermux-exec.so`, which rewrites the
@@ -169,27 +148,14 @@ pub fn safe_current_dir(dir: &Path) -> PathBuf {
     PathBuf::from("/system/bin")
 }
 
-/// Adds the app's HOME, PATH, SHELL, TMPDIR and LANG and the active
-/// runtime's terminal variables to a local terminal's environment. Alacritty
-/// replaces the inherited environment with this map when it spawns the
-/// shell. This isn't part of `terminal::insert_zed_terminal_env` because
-/// that also builds the environment sent to SSH remotes, where these paths
+/// Adds the active runtime's terminal variables to a local terminal's
+/// environment. The shell inherits the app's environment, and these replace
+/// what they name in it. Kept out of `terminal::insert_zed_terminal_env`,
+/// which also builds the environment sent to SSH remotes, where these paths
 /// don't exist.
 pub fn insert_terminal_env<S: BuildHasher>(env: &mut HashMap<String, String, S>) {
-    for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {
-        if let Ok(value) = std::env::var(key) {
-            env.entry(key.to_string()).or_insert(value);
-        }
-    }
-    for (key, op) in TERMINAL_ENV_OVERLAY.get().map(Vec::as_slice).unwrap_or(&[]) {
-        match op {
-            EnvOp::Set(value) => {
-                env.insert(key.clone(), value.to_string_lossy().into_owned());
-            }
-            EnvOp::Remove => {
-                env.remove(key);
-            }
-        }
+    for (name, value) in TERMINAL_ENV.get().into_iter().flatten() {
+        env.insert(name.clone(), value.to_string_lossy().into_owned());
     }
 }
 
@@ -209,4 +175,56 @@ pub fn insert_npm_env<S: BuildHasher>(env: &mut HashMap<String, String, S>) {
         );
     }
     env.insert("npm_config_libc".into(), "musl".into());
+}
+
+/// `child`'s path relative to `parent`, when one of `child`'s ancestors is
+/// the same directory as `parent` under another name. Android reaches the
+/// app's data directory as both `/data/data/<package>` and
+/// `/data/user/0/<package>`: two bind mounts of one directory, which
+/// `canonicalize` doesn't unify, so the device and inode numbers are
+/// compared instead.
+pub fn strip_prefix_by_identity(child: &Path, parent: &Path) -> Option<PathBuf> {
+    let parent_identity = file_identity(parent)?;
+    child
+        .ancestors()
+        .find(|ancestor| file_identity(ancestor) == Some(parent_identity))
+        .and_then(|ancestor| child.strip_prefix(ancestor).ok())
+        .map(Path::to_path_buf)
+}
+
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_prefix_by_identity_finds_an_ancestor() {
+        let directory = std::env::temp_dir();
+        let child = directory.join("nested").join("file.txt");
+        assert_eq!(
+            strip_prefix_by_identity(&child, &directory),
+            Some(PathBuf::from("nested/file.txt"))
+        );
+        assert_eq!(
+            strip_prefix_by_identity(&directory, &directory),
+            Some(PathBuf::new())
+        );
+    }
+
+    #[test]
+    fn strip_prefix_by_identity_without_a_match() {
+        let parent = std::env::temp_dir();
+        assert_eq!(
+            strip_prefix_by_identity(Path::new("/no/such/path"), &parent),
+            None
+        );
+        assert_eq!(
+            strip_prefix_by_identity(&parent, Path::new("/no/such/path")),
+            None
+        );
+    }
 }

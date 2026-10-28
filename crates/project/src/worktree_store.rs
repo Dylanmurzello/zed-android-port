@@ -479,23 +479,12 @@ impl WorktreeStore {
             // and /data/user/0/<package>, bind mounts of one directory that
             // canonicalize doesn't unify, so on a miss compare file identity.
             #[cfg(target_os = "android")]
-            if let Some(suffix) = zdroid_hooks::path_equivalence::strip_prefix_by_identity(
+            if let Some(path) = zdroid_hooks::strip_prefix_by_identity(
                 abs_path.as_ref(),
                 tree.read(cx).abs_path().as_ref(),
-            ) {
-                let rel = if suffix.is_empty() {
-                    RelPath::empty().into_arc()
-                } else {
-                    let mut rel = std::path::PathBuf::new();
-                    for component in &suffix {
-                        rel.push(component);
-                    }
-                    match RelPath::new(rel.as_path(), path_style) {
-                        Ok(cow) => cow.into_arc(),
-                        Err(_) => continue,
-                    }
-                };
-                return Some((tree.clone(), rel));
+            ) && let Ok(relative_path) = RelPath::new(&path, path_style)
+            {
+                return Some((tree.clone(), relative_path.into_arc()));
             }
         }
         None

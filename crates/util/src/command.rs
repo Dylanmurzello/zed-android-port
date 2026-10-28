@@ -44,7 +44,7 @@ impl Command {
             // runtime and shebang routing. smol preserves the std command.
             Self(new_std_command(program).into())
         }
-        #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+        #[cfg(not(any(target_os = "windows", target_os = "android")))]
         Self(smol::process::Command::new(program))
     }
 

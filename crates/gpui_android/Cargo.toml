@@ -26,7 +26,6 @@ raw-window-handle = "0.6"
 serde_json.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 util.workspace = true
-zdroid_hooks.workspace = true
 uuid.workspace = true
 
 # The importer has no Android APIs, so exercise file safety on the host too.

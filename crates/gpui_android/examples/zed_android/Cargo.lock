@@ -5255,7 +5255,6 @@ dependencies = [
  "ureq",
  "util",
  "uuid",
- "zdroid_hooks",
 ]
 
 [[package]]
@@ -16139,7 +16138,6 @@ dependencies = [
  "sha2",
  "toml 0.9.8",
  "ureq",
- "zdroid_hooks",
  "zip 2.6.1",
 ]
 
