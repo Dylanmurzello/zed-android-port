@@ -23380,6 +23380,9 @@ dependencies = [
 [[package]]
 name = "zd_engine_core"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+]
 
 [[package]]
 name = "zdroid_runtime"
