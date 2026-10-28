@@ -1,10 +1,10 @@
 # Choreographer-driven vsync
 
 **Status:** Active
-**Phase / Commit:** vsync callbacks from the first port; on-demand frames since Zdroid 0.8.6
+**Phase / Commit:** vsync callbacks from the first port; on-demand frames since Zdroid 0.8.6; performance hints since 0.9.22
 **Files:** `crates/gpui_android/src/platform.rs` (`request_frame_callback`,
 `frame_callback`), `crates/gpui_android/src/window.rs` (`frame_waker`,
-`schedule_frame`)
+`schedule_frame`), `crates/gpui_android/src/performance_hint.rs`
 
 ## Problem
 
@@ -58,8 +58,8 @@ no frames.
 Java threads queue work for the run loop: IME events, extra-window events
 and captured-trackpad events, plus the soft keyboard's visibility. They
 wake the loop with `wake_run_loop` after queueing. The old callback picked
-them up within a vsync; without the wake, an idle loop would only see them
-at its 100ms poll timeout.
+them up within a vsync. The run loop sleeps without a timeout, so without
+the wake an idle loop wouldn't see them until something else woke it.
 
 Repaints that gpui doesn't know about request a frame themselves: surface
 attach after returning from the background, GPU device-lost recovery, an
@@ -70,12 +70,32 @@ The soft-keyboard tick sets `FRAME_PENDING` directly, as before.
 
 ## Why this works
 
-An idle editor now wakes only for the run loop's 100ms poll timeout and real
-events, instead of at the panel's refresh rate. While you scroll or drag,
+An idle editor now wakes only for real events, instead of at the panel's
+refresh rate. While you scroll or drag,
 and for the second gpui keeps presenting after, frames run on every vsync
 as before. Typing and animations still paint on the next vsync, because
 they dirty the window or schedule a next-frame callback, which wakes the
 frame loop.
+
+## Performance hints
+
+Android's UI toolkit reports each frame's deadline and duration to the CPU
+scheduler through a performance hint session (ADPF), so the scheduler can
+raise clocks or move a late frame's thread to a faster core. Zdroid paints
+with Vulkan on `android_main` and bypasses that toolkit, so the scheduler
+only saw its load. A CPU profile of scrolling on the reference hardware
+(2026-10-26, simpleperf) found `android_main` on the prime core (cpu7) for
+62% of its samples and on the middle cores for the other 38%; the frames
+themselves were text painting and wgpu encoding.
+
+`performance_hint.rs` opens a session for the run loop's thread with one
+frame at 120 Hz (8.3ms) as its target, and the run loop reports how long
+each frame's refresh took. The NDK functions are API 33+, so they're looked
+up at runtime, and devices without them or without hint support in their
+power HAL keep the old behavior. `adb shell dumpsys performance_hint` lists
+the session under Zdroid's UID while it draws. When Samsung's adaptive
+refresh runs the panel at 60 Hz, the target is still 8.3ms, so a slow frame
+gets more boost than that rate needs.
 
 ## Failure mode if regressed
 
@@ -83,13 +103,15 @@ frame loop.
   window stale until the next input event. Request a frame from that code,
   as `attach_surface` does.
 - A new JNI callback that queues work for the run loop has to call
-  `wake_run_loop`, or an idle editor handles it up to 100ms late.
+  `wake_run_loop`, or an idle editor doesn't handle it until something
+  else wakes the loop.
 - `AndroidPlatform::run` clears the pending flag before it opens the window
   on every `android_main` run. Without that, a callback posted on a recreated
   Activity's old looper would never fire, and frames would stop.
 - If the callback re-posts itself again, idle wake-ups return to 120 a
-  second. Zdroid's CPU use while idle shows it: `top` in Zdroid's own
-  terminal, which runs as the app's user.
+  second. Count the `android_main` thread's voluntary context switches in
+  `/proc/<pid>/task/*/status` over `adb shell` while Zdroid is idle;
+  release builds hide the app's process from Zdroid's own terminal.
 
 ## See also
 
