@@ -102,6 +102,10 @@ Still unverified on a device: streamed responses and tool calls through an OpenA
 
 Tried on the tablet on 2026-10-28 with the workaround: the Codex thread opened, then every request failed with "workspace routing discovery failed". Codex looks for a CA bundle in Linux paths Android doesn't have, and Bootstrap set `SSL_CERT_FILE` only in the terminal; since 0.9.19 it sets it for the whole app, so agents and language servers get it too; the tablet confirmed the fix. Claude Agent is still untested.
 
+## Scrolling runs at about 64 fps on the 120 Hz panel
+
+Measured on 2026-10-29 on 0.9.21, scrolling a file in landscape with `adb shell input swipe`: a frame every 15.6ms on average, and 83% of the gaps between frames were longer than one refresh. `android_main` spends about 12.5ms of CPU per frame on the prime core at its maximum clock, so the CPU scheduler can't help; a performance hint session changed nothing (`crates/gpui_android/docs/workarounds/choreographer-vsync.md`). The 2026-10-26 profile put the time in gpui's text painting (glyph raster bounds, atlas lookups, sprite sorting) and wgpu's command encoding. Next: profile scrolling with the build's native symbols, and look for work Android does per frame that desktop doesn't, before changing gpui itself.
+
 ## Platform gaps found in the 2026-10-28 audit
 
 - **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
@@ -118,14 +122,6 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - **Extra windows return from `surfaceDestroyed` before the renderer stops.** `ExtraWindowActivity`'s `surfaceDestroyed` only queues `nativeOnExtraSurfaceDestroyed` (`multi_window.rs`), so gpui can still present to a surface Android has destroyed, which the `SurfaceHolder` contract forbids (`NativeBridge.kt` says Rust must stop inside the callback); wgpu then reports errors to its uncaptured-error handler. Fix: block, with a timeout, until the gpui thread confirms the detach, and handle that event in `create_extra_window_blocking`'s wait loop so the two can't deadlock. Tablet check: in DeX, minimize and restore the Settings window repeatedly and look for wgpu errors in logcat.
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 - **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames zd-exec for keeping stdout open: fix that in zd-exec, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
-
-## 0.9.22 device checks
-
-0.9.22 reports each frame's duration to Android's CPU scheduler through a performance hint session (`performance_hint.rs`). Check over adb:
-
-- While Zdroid draws, `dumpsys performance_hint` lists a session under Zdroid's UID with the `android_main` thread's ID and `TargetDurationNanos: 8333333`, and logcat shows "performance hint session for thread".
-- Scroll a long file with the same swipes on 0.9.21 and 0.9.22, measuring each with simpleperf and SurfaceFlinger's present times: `android_main` should spend more of its samples on cpu7, and fewer gaps between presents should exceed one refresh.
-- Idle wake-ups stay as before: the session adds no work while nothing draws.
 
 ## 0.9.21 device checks
 

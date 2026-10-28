@@ -67,7 +67,7 @@ const FRAME_RATE_COMPATIBILITY_DEFAULT: i8 = 0;
 /// rate the compositor downgrades transparently, so hardcoding the
 /// max we care about is safe across the device matrix. Floating-point
 /// because Android's API takes float.
-pub(crate) const TARGET_FRAME_RATE_HZ: f32 = 120.0;
+const TARGET_FRAME_RATE_HZ: f32 = 120.0;
 
 /// Ask the system to render the given native window at our target
 /// refresh rate. No-op on API 26-29 (returns `false`).
@@ -1790,7 +1790,6 @@ impl Platform for AndroidPlatform {
                 {
                     post_frame_callback(true);
                 }
-                let frame_started = Instant::now();
                 IN_FRAME.set(true);
                 crate::frame_timing::paint_started();
                 // Hidden windows have no surface to present to; gpui's
@@ -1802,7 +1801,6 @@ impl Platform for AndroidPlatform {
                 }
                 crate::frame_timing::paint_finished();
                 IN_FRAME.set(false);
-                crate::performance_hint::frame_finished(frame_started.elapsed());
                 // First successful paint cycle => let the SplashScreen
                 // poller dismiss its window. Idempotent atomic swap on
                 // the inside; safe to call every frame.

@@ -1,10 +1,10 @@
 # Choreographer-driven vsync
 
 **Status:** Active
-**Phase / Commit:** vsync callbacks from the first port; on-demand frames since Zdroid 0.8.6; performance hints since 0.9.22
+**Phase / Commit:** vsync callbacks from the first port; on-demand frames since Zdroid 0.8.6
 **Files:** `crates/gpui_android/src/platform.rs` (`request_frame_callback`,
 `frame_callback`), `crates/gpui_android/src/window.rs` (`frame_waker`,
-`schedule_frame`), `crates/gpui_android/src/performance_hint.rs`
+`schedule_frame`)
 
 ## Problem
 
@@ -77,25 +77,22 @@ as before. Typing and animations still paint on the next vsync, because
 they dirty the window or schedule a next-frame callback, which wakes the
 frame loop.
 
-## Performance hints
+## Performance hints: tried, no gain
 
-Android's UI toolkit reports each frame's deadline and duration to the CPU
-scheduler through a performance hint session (ADPF), so the scheduler can
-raise clocks or move a late frame's thread to a faster core. Zdroid paints
-with Vulkan on `android_main` and bypasses that toolkit, so the scheduler
-only saw its load. A CPU profile of scrolling on the reference hardware
-(2026-10-26, simpleperf) found `android_main` on the prime core (cpu7) for
-62% of its samples and on the middle cores for the other 38%; the frames
-themselves were text painting and wgpu encoding.
+Android's UI toolkit reports each frame's duration to the CPU scheduler
+through a performance hint session (ADPF), so the scheduler can raise
+clocks or move a late frame to a faster core. Zdroid paints with Vulkan on
+`android_main` and bypasses that toolkit, so a session of its own looked
+like a way to speed up scrolling.
 
-`performance_hint.rs` opens a session for the run loop's thread with one
-frame at 120 Hz (8.3ms) as its target, and the run loop reports how long
-each frame's refresh took. The NDK functions are API 33+, so they're looked
-up at runtime, and devices without them or without hint support in their
-power HAL keep the old behavior. `adb shell dumpsys performance_hint` lists
-the session under Zdroid's UID while it draws. When Samsung's adaptive
-refresh runs the panel at 60 Hz, the target is still 8.3ms, so a slow frame
-gets more boost than that rate needs.
+Measured on the reference hardware on 2026-10-29, scrolling a file in
+landscape with scripted swipes, `android_main` already ran on the prime core
+(cpu7) for 95–97% of its samples, at that core's maximum clock. Each frame
+took about 12.5ms of CPU, so scrolling presented a frame every 15.6ms on
+average on the 120 Hz panel. A build that reported each frame's duration to
+a hint session, with one 120 Hz frame as its target, measured the same
+(15.7ms). The scheduler can't make these frames faster; making them cheaper
+can.
 
 ## Failure mode if regressed
 

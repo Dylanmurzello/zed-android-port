@@ -17,7 +17,6 @@ mod insets;
 mod jni_env;
 mod keyboard;
 mod multi_window;
-mod performance_hint;
 mod platform;
 pub mod project_import;
 mod saf;
