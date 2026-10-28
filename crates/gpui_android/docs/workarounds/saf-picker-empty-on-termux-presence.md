@@ -85,10 +85,10 @@ data and uninstall wipes it. Disable/enable preserves data.
   saying "your SAF picker is broken, run this `adb` command."
 
 The cleanest mitigation we ship is good docs (this file) plus the
-Open menu's behavior of falling back to in-app navigation
-(workspace start screen has Workspace + External sections that don't
-go through SAF, so the user can still get to recent projects and
-known shared paths even when the picker is broken).
+Open menu's behavior of falling back to in-app navigation (the welcome
+page lists recent projects without going through SAF, so the user can
+still get to them and to known shared paths even when the picker is
+broken).
 
 ## See also
 
