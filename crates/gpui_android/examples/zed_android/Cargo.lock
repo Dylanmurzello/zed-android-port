@@ -16325,6 +16325,7 @@ dependencies = [
  "theme_settings",
  "toolchain_selector",
  "ui",
+ "ui_input",
  "ui_prompt",
  "url",
  "util",

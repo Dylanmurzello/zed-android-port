@@ -12,11 +12,14 @@ use ui::{
     FluentBuilder, Headline, HeadlineSize, Icon, IconName, IconSize, Label, LabelCommon, LabelSize,
     ParentElement, Styled, h_flex, v_flex,
 };
+use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
-    HealthStatus, RuntimeId, RuntimeProvider, adapters, adapters::chroot::SPAWND_RELEASE_URL,
-    config::RuntimeFile, health::ProgressSink,
+    HealthStatus, RuntimeId, RuntimeProvider, adapters,
+    adapters::{bootstrap_install::release_repo_from_input, chroot::SPAWND_RELEASE_URL},
+    config::{DEFAULT_RELEASE_REPO, RuntimeFile},
+    health::ProgressSink,
 };
 
 /// Bridges the sync `ProgressSink` trait (called from the background
@@ -180,7 +183,7 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
             window_min_size: Some(window_min_size),
             ..Default::default()
         },
-        |_, cx| cx.new(RuntimePicker::new),
+        |window, cx| cx.new(|cx| RuntimePicker::new(window, cx)),
     )
     .log_err();
 }
@@ -216,10 +219,14 @@ pub struct RuntimePicker {
     /// policies); the user closes via Recents and reopens from the
     /// launcher.
     restart_required: bool,
+    /// The GitHub repository Install downloads the bootstrap from, so
+    /// another one can be used without rebuilding Zdroid. There is no
+    /// terminal to edit `zd-runtime.toml` with before the first install.
+    repository_field: Entity<InputField>,
 }
 
 impl RuntimePicker {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title_bar = if !cfg!(target_os = "macos") {
             Some(cx.new(|cx| PlatformTitleBar::new("runtime-picker-title-bar", cx)))
         } else {
@@ -240,6 +247,18 @@ impl RuntimePicker {
                     .into(),
             );
         }
+        let release_repo = configuration
+            .as_ref()
+            .and_then(|file| file.bootstrap.as_ref())
+            .map_or(DEFAULT_RELEASE_REPO, |bootstrap| {
+                bootstrap.release_repo.as_str()
+            })
+            .to_owned();
+        let repository_field = cx.new(|cx| {
+            let field = InputField::new(window, cx, DEFAULT_RELEASE_REPO).label("Download from");
+            field.set_text(&release_repo, window, cx);
+            field
+        });
         Self {
             title_bar,
             focus_handle: cx.focus_handle(),
@@ -249,25 +268,41 @@ impl RuntimePicker {
             current,
             install_status: None,
             restart_required: false,
+            repository_field,
         }
     }
 
     /// Trigger an async bootstrap install. Drops the user into a
     /// "downloading + extracting" state on the Bootstrap card while
-    /// the background task pulls the latest release zip from GitHub
-    /// and extracts to `$PREFIX`. Refreshes adapter health on
+    /// the background task downloads the zip from the repository in
+    /// the "Download from" field and extracts to `$PREFIX`. Refreshes adapter health on
     /// completion so the card flips from NotInstalled → Healthy
     /// without the user having to re-open the picker.
     fn install_bootstrap(&mut self, cx: &mut Context<Self>) {
         if self.install_status.is_some() {
             return; // already in progress
         }
+        let input = self.repository_field.read(cx).text(cx);
+        let release_repo = if input.trim().is_empty() {
+            Some(DEFAULT_RELEASE_REPO.to_owned())
+        } else {
+            release_repo_from_input(&input)
+        };
+        let error = release_repo
+            .is_none()
+            .then_some("Enter a GitHub repository as owner/repo or its github.com URL.");
+        self.repository_field
+            .update(cx, |field, cx| field.set_error(error, cx));
+        let Some(release_repo) = release_repo else {
+            return;
+        };
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
-        let config = self
+        let mut config = self
             .configuration
             .as_ref()
             .and_then(|file| file.bootstrap.clone())
             .unwrap_or_default();
+        config.release_repo = release_repo;
         self.install_status = Some("Starting install".into());
         self.error = None;
         cx.notify();
@@ -379,7 +414,14 @@ impl Render for RuntimePicker {
             .iter()
             .enumerate()
             .map(|(idx, entry)| {
-                render_card(idx, entry, self.current, self.install_status.as_deref(), cx)
+                render_card(
+                    idx,
+                    entry,
+                    self.current,
+                    self.install_status.as_deref(),
+                    &self.repository_field,
+                    cx,
+                )
             })
             .collect();
 
@@ -462,6 +504,7 @@ fn render_card(
     entry: &AdapterEntry,
     current: Option<RuntimeId>,
     install_status: Option<&str>,
+    repository_field: &Entity<InputField>,
     cx: &mut Context<RuntimePicker>,
 ) -> AnyElement {
     let theme_colors = cx.theme().colors();
@@ -483,6 +526,9 @@ fn render_card(
         HealthStatus::Misconfigured { reason } => Some(reason.clone()),
         HealthStatus::Failed { error } => Some(error.clone()),
     };
+    let installable = id == RuntimeId::Bootstrap
+        && matches!(entry.health, HealthStatus::NotInstalled { .. })
+        && install_status.is_none();
 
     h_flex()
         .id(("adapter-card", idx))
@@ -549,6 +595,17 @@ fn render_card(
                         Label::new(Arc::<str>::from(detail))
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
+                    )
+                })
+                .when(installable, |this| {
+                    this.child(repository_field.clone()).child(
+                        Label::new(
+                            "A GitHub repository whose releases include bootstrap-aarch64.zip. \
+                             Only Zdroid's own repository is checked against a SHA-256 built \
+                             into the app.",
+                        )
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
                     )
                 }),
         )
