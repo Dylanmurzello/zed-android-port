@@ -164,7 +164,7 @@ Switching is one tap (Settings → Android Runtime). Selection persists in `$PRE
 - **LSPs.** rust-analyzer baked in. gopls, ts-server, pyright, jdtls install in one `pkg`/`npm`/`go install`.
 - **Extensions.** Browse, install, manage. Themes, language configs, grammars, slash commands.
 - **Remote SSH.** Server-picker pill in the title bar, persisted server list, native askpass.
-- **Agents.** Zed's ACP agent UI and native BYO model providers, including OpenAI-compatible gateways such as LiteLLM. No Zed account flow. Native provider streaming and inline assistance still need Android device validation.
+- **Agents.** Zed's ACP agent UI, plus Zed's own agent with your API keys ([below](#ai)).
 - **Multi-window.** Android freeform and DeX, each extra window is a real Activity with OS chrome.
 - **Edge-to-edge** rendering with content under the display cutout.
 - **App menu bar** with nested submenus (Settings, Keymap, Themes, Extensions).
@@ -173,43 +173,32 @@ Switching is one tap (Settings → Android Runtime). Selection persists in `$PRE
 
 ---
 
-## AI with your own provider
+<a id="ai"></a>
+## <img src="https://api.iconify.design/lucide:bot.svg?color=%23999999&height=22" valign="middle" /> &nbsp;AI with your own API keys
 
-Zed's native agent supports your own API keys without a Zed account. Zdroid uses
-that upstream implementation and excludes Zed-hosted models, cloud web search,
-account commands and subscription prompts. Remote ACP agents keep their own
-authentication and configuration on the remote machine.
+Besides ACP agents, Zed's own agent and inline assistant work with your API keys, no Zed account needed. Zdroid keeps the API providers Zed supports (Anthropic, OpenAI, Google, OpenRouter and the rest) and OpenAI-compatible endpoints such as a LiteLLM or vLLM gateway. It leaves out Zed-hosted models and web search, Zed sign-in, and the local model servers (Ollama, LM Studio, llama.cpp). ACP agents on an SSH remote keep their own authentication on the remote machine.
 
-For LiteLLM, open **Settings → AI → LLM Providers → Add Provider**, choose
-**OpenAI**, and enter your gateway URL, API key and model alias. Use the model's
-actual context limit and capabilities; agent tools need tool-call support.
-The key is saved through Android's credential store. You can also configure the
-endpoint and model in `settings.json`, then enter the key in LLM Providers:
+To add an OpenAI-compatible endpoint, open **Settings → AI → LLM Providers → Add Provider**, choose **OpenAI**, and enter the URL, API key and model name. Agent tools need a model with tool-call support. Keys are stored in Android Keystore. The same endpoint in `settings.json` (enter the key in LLM Providers):
 
 ```json
 {
   "language_models": {
     "openai_compatible": {
-      "litellm": {
-        "api_url": "https://litellm.example.com/v1",
-        "available_models": [
-          { "name": "my-model", "max_tokens": 128000 }
-        ]
+      "my-gateway": {
+        "api_url": "https://gateway.example.com/v1",
+        "available_models": [{ "name": "my-model", "max_tokens": 128000 }]
       }
     }
   },
   "agent": {
-    "default_model": { "provider": "litellm", "model": "my-model" }
+    "default_model": { "provider": "my-gateway", "model": "my-model" }
   }
 }
 ```
 
-Replace the example URL, model alias and context limit with your gateway's values.
-The gateway must be reachable from the tablet, even when editing an SSH project;
-the native provider's requests originate in the Android app. Inference runs at
-the gateway's configured model provider. Native gateway streaming, tool calls,
-inline edits and credential recovery still need testing on a device. See
-[Zed's gateway documentation](https://zed.dev/docs/ai/use-a-gateway).
+Requests come from the tablet, even in an SSH project, so the endpoint must be reachable from it. See [Zed's gateway documentation](https://zed.dev/docs/ai/use-a-gateway). Streaming, tool calls and inline edits through these providers haven't been tested on a device yet.
+
+---
 
 ## <img src="https://api.iconify.design/lucide:hammer.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Build from source
 

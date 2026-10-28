@@ -1303,6 +1303,14 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     );
     language_model::init(cx);
     language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
+    // Hosted APIs and OpenAI-compatible gateways only: the local model servers
+    // (default URLs on localhost, i.e. the tablet itself) are left out. These
+    // are the IDs settings.json stores under `provider`, so they stay stable.
+    language_model::LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
+        for id in ["ollama", "lmstudio", "llama.cpp"] {
+            registry.unregister_provider(language_model::LanguageModelProviderId::new(id), cx);
+        }
+    });
     // The native agent reads this registry even without Zed-hosted web search.
     web_search::init(cx);
     let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
