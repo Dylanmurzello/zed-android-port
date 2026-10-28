@@ -108,7 +108,6 @@ Tried on the tablet on 2026-10-28 with the workaround: the Codex thread opened, 
 - **`prompt_for_paths` ignores `PathPromptOptions`.** It always opens the SAF folder picker (`ACTION_OPEN_DOCUMENT_TREE`), so requests for files or multiple paths get a single folder.
 - **`reveal_path` and `open_with_system` are empty** in `platform.rs`, so "Reveal in file manager" and "Open with system app" do nothing.
 - **"Failed to run package-version-server" in the status bar.** Zed's JSON support downloads `package-version-server`, which adds version hints to `package.json`, and stops at "Running on unsupported os: android" (`languages/src/json.rs`, `NodeVersionAdapter`). Harmless, but shown whenever a JSON file opens. Fix: leave it out of the JSON language servers on Android.
-- **`pkg update && pkg upgrade` on a fresh Bootstrap breaks apt** ([zdroid-bootstrap#1](https://github.com/Dylanmurzello/zdroid-bootstrap/issues/1), from June, unanswered there): apt's https method then can't find `libandroid-glob.so`. Installing any package and running `apt --fix-broken install` first avoids it, yet the README's first step is that upgrade. Reproduce, then fix it in `ilkersigirci/zdroid-bootstrap`, or reorder the README's steps.
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
@@ -122,11 +121,12 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 ## 0.9.19 device checks
 
-0.9.19 downloads Bootstrap from Zdroid's fork, pinned by SHA-256, adds the picker's **Download from** field, and gives the whole app Bootstrap's CA bundle. Check on the tablet:
+0.9.19 downloads Bootstrap from Zdroid's fork, pinned by SHA-256, adds the picker's **Download from** field and **Reinstall**, and gives the whole app Bootstrap's CA bundle. Its bootstrap, `v2026.05.06-r6`, keeps apt working through `pkg upgrade` ([zdroid-bootstrap#1](https://github.com/Dylanmurzello/zdroid-bootstrap/issues/1)); `ilkersigirci/zdroid-bootstrap`'s test workflow checks that in Termux's Docker image, which runs Termux's binaries with Android's linker. Check on the tablet:
 
 - With Claude Code installed globally and no `agent_servers` settings, after a restart, a Claude Agent thread answers. Codex passed this on 2026-10-28.
-- On a fresh install (or another device), the Bootstrap card shows **Download from** with `ilkersigirci/zdroid-bootstrap`, and Install succeeds; the log shows "verified bootstrap-aarch64.zip against the pinned sha256", and the card then shows "Installed: v2026.05.06-r5 from ilkersigirci/zdroid-bootstrap". An existing install shows only its tag, plus "Reinstall to get" the pinned release when it's older. Typing `Dylanmurzello/zdroid-bootstrap` installs his latest release instead, and a typo shows the field's error.
+- On a fresh install (or another device), the Bootstrap card shows **Download from** with `ilkersigirci/zdroid-bootstrap`, and Install succeeds; the log shows "verified bootstrap-aarch64.zip against the pinned sha256", and the card then shows "Installed: v2026.05.06-r6 from ilkersigirci/zdroid-bootstrap". An existing install shows only its tag, plus "Reinstall to get" the pinned release when it's older. Typing `Dylanmurzello/zdroid-bootstrap` installs his latest release instead, and a typo shows the field's error.
 - With Bootstrap installed, **Reinstall** shows **Download from** and a warning; **Delete and reinstall** replaces the runtime: packages installed since are gone, the home folder and runtime choice stay, the banner asks for a restart, and after it the terminal works. **Cancel** changes nothing.
+- After a reinstall, `pkg update && pkg upgrade` (with `apt --fix-broken install` when apt asks for it, then `pkg upgrade` again) keeps apt working: `pkg install jq` and `jq --version` succeed afterwards.
 - rust-analyzer's first `cargo metadata` in a new project downloads the crates.io index without a certificate error.
 
 ## 0.9.18 device checks
