@@ -210,10 +210,9 @@ pub trait RuntimeProvider: Send + Sync {
     }
 
     /// Where the user's projects and Zdroid-managed cache live.
-    /// Recent-project UI groups paths under this dir as "Workspace"
-    /// (vs. SAF-picked "External"); `gpui_android::storage` derives
-    /// the `~/projects` mkdir target and the noexec-suppression cache
-    /// from this. Returns `None` when the adapter has no workspace root.
+    /// `gpui_android::storage` derives the `~/projects` mkdir target
+    /// and the noexec-suppression cache from this. Returns `None` when
+    /// the adapter has no workspace root.
     fn workspace_root(&self, _data_path: &Path) -> Option<PathBuf> {
         None
     }
