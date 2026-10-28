@@ -37,7 +37,7 @@ git for-each-ref --format='%(refname:short) %(objectname)' 'refs/tags/v0.*' | so
 `.gitattributes` marks `crates/gpui_android/**`, `crates/zdroid_runtime/**`, `README.md` and the other fork-owned files as `merge=ours`. Don't enable the driver in your git config: with it on, *every* 3-way merge of those files keeps the current branch's version silently. That covers rebases and cherry-picks of this fork's own stacked branches and merges from Dylan's repo, not just Zed merges. (2026-10: a rebase dropped an entire commit this way.) Enable it only for the Zed merge itself:
 
 ```sh
-git -c merge.ours.driver=true merge v1.26.2-pre
+git -c merge.ours.driver=true merge v1.26.2
 ```
 
 If an earlier setup enabled it, run `git config --unset merge.ours.driver`.
@@ -75,12 +75,12 @@ Follow [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md), with these differences:
 - List the upstream files the fork still changes, and drop any patch the new release made unnecessary, for example because upstream fixed the same bug. Each one can conflict again on the next sync:
 
   ```sh
-  git diff --stat v1.26.2-pre HEAD -- . ':!crates/gpui_android' ':!crates/zdroid_runtime' ':!.github' ':!*.md' ':!Cargo.lock'
+  git diff --stat v1.26.2 HEAD -- . ':!crates/gpui_android' ':!crates/zdroid_runtime' ':!.github' ':!*.md' ':!Cargo.lock'
   ```
 - The Android app can't link the `zed` crate, which is a binary, so it copies the startup code it needs: the app's `src/zed.rs` and `src/zed/migrate.rs` copy `crates/zed/src/zed.rs` and `crates/zed/src/zed/migrate.rs`, and its `src/lib.rs` copies a few functions from `crates/zed/src/main.rs`. The merge doesn't touch the copies, so port what the release changed in the originals, comparing the previous sync's tag with the new one:
 
   ```sh
-  git diff v1.25.3 v1.26.2-pre -- crates/zed/src/main.rs crates/zed/src/zed.rs crates/zed/src/zed/migrate.rs
+  git diff v1.26.2-pre v1.26.2 -- crates/zed/src/main.rs crates/zed/src/zed.rs crates/zed/src/zed/migrate.rs
   ```
 - Go through [crates/gpui_android/docs/ahead-of-upstream.md](crates/gpui_android/docs/ahead-of-upstream.md), the features Zdroid implements ahead of Zed. If the release covers one, take upstream's and delete ours.
 - Push the sync branch and open a pull request into `zdroid`. The **Zdroid APK** check builds the full APK. It covers the `cargo ndk` gate, Gradle, and the bundled helper binaries.

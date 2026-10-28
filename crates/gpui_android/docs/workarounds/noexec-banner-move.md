@@ -22,7 +22,7 @@ finished before dismissal, its completed directory remains, but the late result
 does not open a project. The toast uses the current workspace entity so it does
 not try to borrow the click handler's window a second time.
 
-Zed v1.26.2-pre's `fs::copy_recursive` follows directory symlinks and does not
+Zed v1.26.2's `fs::copy_recursive` follows directory symlinks and does not
 provide cancellation. Keep the importer until that helper can satisfy both
 requirements. The unused progress callback and best-effort skipping path were
 removed in the 2026-10-28 review. Host tests cover symlink cycles, concurrent
