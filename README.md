@@ -63,6 +63,8 @@ The agent panel's Claude Agent and Codex start the Claude Code and Codex CLIs, w
 npm install -g @anthropic-ai/claude-code @openai/codex
 ```
 
+In the terminal, run Codex as `codex --no-daemon` (or add `alias codex='codex --no-daemon'` to `~/.bashrc`): by default it starts a background server that sandboxes itself with bubblewrap, which Android doesn't allow inside an app. The agent panel's Codex doesn't use that server.
+
 Toolchains and LSPs for other languages have install recipes in the bootstrap repo: [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap).
 
 > [!NOTE]

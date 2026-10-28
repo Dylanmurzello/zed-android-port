@@ -23,8 +23,8 @@ use crate::health::ProgressSink;
 /// The release of [`DEFAULT_RELEASE_REPO`] this version of Zdroid installs,
 /// and its SHA-256. The download is checked against this value, built into
 /// the APK, instead of the digest GitHub reports for the same file.
-pub const PINNED_TAG: &str = "v2026.05.06-r6";
-const PINNED_SHA256: &str = "5f433afc4dbd4d764fc4b066c83822cb52d439c40e3fad3734accbc5647db2ca";
+pub const PINNED_TAG: &str = "v2026.05.06-r7";
+const PINNED_SHA256: &str = "74c3dbaa1d5e235cf8828cb94369477e8eb4835f4ab60e9282517bcdc98d9d72";
 
 /// Preferred asset name. Also used when GitHub's release metadata is
 /// unavailable, so the download can continue through anonymous API limits.
