@@ -6255,8 +6255,7 @@ impl AgentPanel {
     }
 
     fn should_render_trial_end_upsell(&self, cx: &mut Context<Self>) -> bool {
-        // Android has no Zed subscription or trial flow.
-        if cfg!(target_os = "android") || TrialEndUpsell::dismissed(cx) {
+        if TrialEndUpsell::dismissed(cx) {
             return false;
         }
 

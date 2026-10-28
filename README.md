@@ -13,7 +13,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Alpha" />
   <img src="https://img.shields.io/badge/platform-Android-3DDC84?logo=android" alt="Android" />
-  <a href="https://github.com/ilkersigirci/zed-android-port/releases/latest"><img src="https://img.shields.io/github/downloads/ilkersigirci/zed-android-port/total?label=downloads" alt="Total downloads" /></a>
+  <a href="https://github.com/Dylanmurzello/zed-android-port/releases/latest"><img src="https://img.shields.io/github/downloads/Dylanmurzello/zed-android-port/total?label=downloads" alt="Total downloads" /></a>
 </p>
 
 Zdroid is an independent port of [Zed](https://zed.dev) for Android, not affiliated with Zed Industries. Zed's editing, workspace, search, Git, extension and terminal components run on a `gpui_android` platform backend with Android-specific adaptations and Vulkan rendering. The reference hardware and supported build configuration are documented in [the platform workarounds](crates/gpui_android/docs/workarounds/README.md). A downloaded Linux userland (Termux-derived, repackaged under `com.zdroid`) runs apt, bash, git, ssh, node, go and rust-analyzer as subprocesses from the app's private data directory; a second runtime adapter runs tools in a Kali chroot.
@@ -32,7 +32,7 @@ Termux userland rebuilt under `com.zdroid` (applicationId byte-length pinned to 
 
 ## <img src="https://api.iconify.design/lucide:download.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Install
 
-Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/ilkersigirci/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Updates from this fork preserve app data. Dylan's APK uses a different signing key; switching from it requires uninstalling first, which deletes app data. Back up projects and settings before switching.
+Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/Dylanmurzello/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
 
 > [!NOTE]
 > Android may show a "built for an older version of Android" warning before you tap Install. Proceed anyway. `targetSdk` is pinned at 28 on purpose: the bundled Termux userland depends on the `untrusted_app_27` SELinux domain, which permits `execve` on app-private files. Bumping `targetSdk` to 29+ lands the process in a stricter domain that denies exec, and the entire runtime stops working. See [`docs/workarounds/targetsdk-28-execve.md`](crates/gpui_android/docs/workarounds/targetsdk-28-execve.md) for the receipts.

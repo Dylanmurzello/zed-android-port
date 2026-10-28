@@ -616,7 +616,7 @@ fn android_main(app: AndroidApp) {
     // node_runtime::node_runtime, gpui_android::storage) ask the
     // active adapter via these registry slots — Bootstrap publishes
     // its Termux-flavored paths, chroot publishes the bionic-clean
-    // equivalents, external Termux publishes None.
+    // equivalents.
     util::env::register_workspace_root(provider.workspace_root(&data_path));
     util::env::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
 
@@ -748,7 +748,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // config_dir was initialized". Guard with a static flag.
     static PATHS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let _ = PATHS_INITIALIZED.get_or_init(|| {
-        // Each runtime adapter (chroot / bootstrap / external Termux)
+        // Each runtime adapter (chroot / bootstrap)
         // gets a FULLY ISOLATED Zed install: its own config, keymap,
         // themes, sqlite db, language servers, extensions, history,
         // logs — everything. Switching adapters via the runtime picker
@@ -776,14 +776,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             );
             // Test writability before handing the path to paths::set_custom_data_dir,
             // which panics in `create_dir_all` if the path lives in another package's
-            // data dir (the ExternalTermux adapter's environment_root points at
-            // /data/data/com.termux/... which we can't write to under SELinux). On
+            // data dir (the removed External Termux adapter's root was
+            // /data/data/com.termux/..., which SELinux keeps us from writing). On
             // PermissionDenied we fall back to the bare app data dir so the editor
-            // can still boot; the adapter's spawn-side dispatch (env_for_zed_process,
-            // zd-exec routing) stays unaffected because that's a separate seam from
-            // the editor's data_dir. Without this, picking ExternalTermux in the
-            // runtime picker permanently bricks the install in a boot-time panic
-            // loop with no in-app recovery path.
+            // can still boot instead of panicking at every launch; the adapter's
+            // spawn-side dispatch (env_for_zed_process, zd-exec routing) is a
+            // separate seam from the editor's data_dir.
             let env_root_usable = match std::fs::create_dir_all(&env_root) {
                 Ok(()) => true,
                 Err(err) => {
@@ -801,8 +799,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             // spawns under it get rewritten to route through `zd-exec`.
             // Gated on `needs_command_bridge()` so adapters whose
             // binaries run natively on the host (bootstrap's bionic-
-            // flavored Termux prefix, external Termux's Intent
-            // dispatch) skip the rewrite. Without that gate, every
+            // flavored Termux prefix) skip the rewrite. Without that gate, every
             // absolute-path spawn from a bootstrap user (PATH-resolved
             // rust-analyzer at $PREFIX/bin/rust-analyzer, downloaded
             // LSPs under <data>/languages/, etc.) would rewrite to
@@ -1227,10 +1224,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     project::trusted_worktrees::init(db_trusted_paths, cx);
     Project::init(&client, cx);
 
-    // Android uses Zed's provider registry and extension proxy. The registry
-    // must exist before extensions register their language model providers.
-    language_model::init(cx);
-    language_models::init_extension_proxy(cx);
     {
         let extension_host_proxy = extension::ExtensionHostProxy::global(cx);
         extension_host::init(
@@ -1294,8 +1287,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     settings_profile_selector::init(cx);
     language_tools::init(cx);
     feedback::init(cx);
-    // Keep provider startup in the same order as Zed's main.rs. Android's
-    // platform credential API stores these credentials in Android Keystore.
+    // Model providers, in the order of Zed's main(). Left out: copilot_ui
+    // (Copilot edit prediction) and RefreshLlmTokenListener (Zed-hosted
+    // models, which need a Zed account). The API keys go to Android
+    // Keystore because android_main sets ZED_DEVELOPMENT_USE_KEYCHAIN.
     copilot_chat::init(
         app_state.client.http_client(),
         app_state.client.credentials_provider(),
@@ -1306,6 +1301,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         },
         cx,
     );
+    language_model::init(cx);
     language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
     // The native agent reads this registry even without Zed-hosted web search.
     web_search::init(cx);

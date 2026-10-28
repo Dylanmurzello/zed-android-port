@@ -178,9 +178,9 @@ pub fn detect_env_shebang(program: &OsStr) -> Option<(std::ffi::OsString, std::p
 
 #[cfg(target_os = "android")]
 pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    // Same env_root bridge + shebang fixup as `util::command::Command::new`;
-    // mirrored here so synchronous spawn sites get the rewrite too.
-    // See the helper fns above for the full rationale.
+    // The env_root bridge + shebang fixup for every spawn: synchronous sites
+    // call this directly, and `util::command::Command::new` converts its
+    // result. See the helper fns above for the full rationale.
     let program = program.as_ref();
     if let Some(program_path) = env_root_program_path(program) {
         let mut cmd = std::process::Command::new(ZD_EXEC_PROGRAM);

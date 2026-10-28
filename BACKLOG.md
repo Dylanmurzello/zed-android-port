@@ -1,6 +1,6 @@
 # Zdroid backlog
 
-Remaining Android feature gaps and device reports. See [the 2026-10-28 fork review](crates/gpui_android/docs/fork-review-2026-10-28.md) for the reviewed baselines, changes, and validation limits.
+Remaining Android feature gaps, device reports and unfixed review findings.
 
 ## "Open Project" on first boot: SAF picker works, post-pick handoff drops the project on the floor
 
@@ -60,6 +60,8 @@ External user tried to file these and was blocked by upstream Zed's `blank_issue
 
 The runtime picker now shows health badges and explanations, installs Bootstrap on request, links to the chroot module, and requires a restart after selection. The 2026-10-28 review removed the unusable External Termux entry, preserved saved adapter settings when switching, and made install/save errors persistent in the picker. Chroot setup remains external to the app.
 
+Open: Select is disabled for a Bootstrap the health check calls Misconfigured (`proot_rootfs` set but proot or the rootfs missing), and the picker offers no other action there, so the fix is editing `zd-runtime.toml` by hand. Before 0.9.17, selecting rewrote the file with defaults, which cleared `proot_rootfs`.
+
 Settings search input was fixed in `29b29ddd63`, and text fields now request GPUI's virtual keyboard. Keep keyboard focus, dismissal/reopening, and hardware typing in the extra-window device checklist; the old claim that Settings search is entirely unwired no longer matches the code.
 
 ## Image paste into the agent panel doesn't work on Android
@@ -92,7 +94,26 @@ Settings search input was fixed in `29b29ddd63`, and text fields now request GPU
 
 The app initializes upstream `agent_ui` and `acp_tools`, including the agent panel and context-server UI; `agent`, `acp_thread`, and `context_server` are transitive dependencies. The earlier diagnosis that these dependencies and initialization were missing is obsolete. ACP agent sessions are already part of the app; keep using those upstream components.
 
-The 2026-10-28 review restored upstream BYO model-provider registration, Copilot Chat initialization and the language-model extension proxy. Android excludes the Zed-hosted provider, account actions, trial prompts and cloud web-search provider. The empty native web-search registry remains initialized for agent code. OpenAI-compatible gateways (including LiteLLM), streamed tool calls, inline edits and credential persistence still need device validation. Copilot edit prediction remains uninitialized. Verify local MCP tools under Bootstrap and chroot, including the sandbox fallback, and distinguish them from servers running on an SSH host. Keep using Zed's native agent/MCP implementation without introducing Zed account services.
+Since 0.9.17 the app also runs Zed's model providers (`copilot_chat::init`, `language_model::init`, `language_models::init`, `web_search::init`, in the order of Zed's `main()`), so the native agent and the inline assistant work with your own API keys, including OpenAI-compatible gateways such as LiteLLM. Zed accounts stay out: the app skips `client::init` (sign-in actions), `RefreshLlmTokenListener`, `web_search_providers::init` and `copilot_ui::init`, and three Android-gated edits to Zed's crates hide the rest: `language_models::register_language_model_providers` skips the Zed-hosted provider, `ai_onboarding::AgentPanelOnboarding` shows only the API-key setup, and `AgentPanel::should_render_new_user_onboarding` ignores empty history. Zed doesn't call `language_models::init_extension_proxy` at v1.26.2-pre, so extension-provided model providers stay off here too; enable them when Zed does.
+
+Still unverified on a device: streamed responses and tool calls through LiteLLM, inline edits, API keys surviving a restart (Android Keystore), Copilot Chat's GitHub sign-in, and local MCP servers under Bootstrap and chroot (including the sandbox fallback), as opposed to servers on an SSH host. Copilot edit prediction is not initialized. Android's API-key card in a native agent thread has no dismiss button (Zed's card has one through `ZedAiOnboarding`), so it stays until a provider is configured.
+
+## Platform gaps found in the 2026-10-28 audit
+
+- **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
+- **`prompt_for_paths` ignores `PathPromptOptions`.** It always opens the SAF folder picker (`ACTION_OPEN_DOCUMENT_TREE`), so requests for files or multiple paths get a single folder.
+- **`reveal_path` and `open_with_system` are empty** in `platform.rs`, so "Reveal in file manager" and "Open with system app" do nothing.
+
+## 0.9.17 device checks
+
+The 2026-10-28 audit (0.9.17) changed these paths without a device test:
+
+- Bootstrap: open an existing project; terminal, git, LSP startup, a task, and an `npm install` of a package with native binaries (npm's `--libc=musl` now applies only under Bootstrap, not chroot).
+- Runtime picker: switch runtimes and back with a customized `zd-runtime.toml` (settings must survive); a failed or offline Bootstrap install must leave an error in the picker; a saved External Termux selection must be replaceable from the picker.
+- Shared-storage import: import a project, cancel one mid-copy, import the same project twice, and close the dialog during a copy (closing cancels it). No partial tree may open, and existing projects must stay untouched.
+- Native AI: a fresh agent panel shows the API-key setup without Zed sign-in or trial prompts; configure a LiteLLM model, stream a reply with a tool call, run an inline edit, restart and check the key is still there.
+- Keyboard-cover trackpad: quick two-finger taps still right-click, slow two-finger scrolls don't, and the cursor captures and releases in the main and extra windows.
+- Files app (DocumentsProvider): search through a symlink loop in `~`; renaming or deleting the Zed root must be refused.
 
 ## Input review of 2026-10-26: open findings
 

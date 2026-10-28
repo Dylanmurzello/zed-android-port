@@ -309,8 +309,11 @@ impl RuntimePicker {
 
         let path = std::path::PathBuf::from(RUNTIME_TOML_PATH);
         let result = (|| {
-            let mut file =
-                RuntimeFile::load(&path)?.unwrap_or_else(|| RuntimeFile::with_defaults(id));
+            // An unreadable file is replaced: the picker is how users repair it.
+            let mut file = RuntimeFile::load(&path)
+                .log_err()
+                .flatten()
+                .unwrap_or_else(|| RuntimeFile::with_defaults(id));
             file.select(id)?;
             file.save(&path)?;
             anyhow::Ok(file)
