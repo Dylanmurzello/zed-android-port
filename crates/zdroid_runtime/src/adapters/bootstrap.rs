@@ -393,6 +393,21 @@ impl RuntimeProvider for BootstrapAdapter {
                 EnvOp::Set(cert_path.into_os_string()),
             ));
         }
+        // The agent panel's Claude Agent and Codex start the copies of these
+        // CLIs that Zed installs with them, which don't run here: Claude
+        // Code's looks for its musl loader in /lib, and both read
+        // /etc/resolv.conf, which Android doesn't have, so Codex hangs on
+        // its first request. Bootstrap's npm wrapper patches global
+        // installs for both, so point the agents at those.
+        for (variable, program) in [
+            ("CLAUDE_CODE_EXECUTABLE", "bin/claude"),
+            ("CODEX_PATH", "bin/codex"),
+        ] {
+            let program = prefix.join(program);
+            if program.exists() {
+                variables.push((variable.into(), EnvOp::Set(program.into_os_string())));
+            }
+        }
         variables
     }
 

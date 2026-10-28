@@ -57,23 +57,10 @@ Pre-baked in the bootstrap: rust-analyzer (the LSP binary; `cargo` and `rustc` a
 pkg install npm
 ```
 
-The agent panel's Claude Agent and Codex start the Claude Code and Codex CLIs, which run on Android only from a global npm install: the bootstrap patches those. Install them, sign in from the terminal (`claude`, then `/login`; `codex login`), and point the agents at them in `settings.json`:
+The agent panel's Claude Agent and Codex start the Claude Code and Codex CLIs, which run on Android only from a global npm install: the bootstrap patches those. Install them, sign in from the terminal (`claude`, then `/login`; `codex login`), and restart Zdroid, which then points the agents at them:
 
 ```sh
 npm install -g @anthropic-ai/claude-code @openai/codex
-```
-
-```json
-"agent_servers": {
-  "claude-acp": {
-    "type": "registry",
-    "env": { "CLAUDE_CODE_EXECUTABLE": "/data/data/com.zdroid/files/usr/bin/claude" }
-  },
-  "codex-acp": {
-    "type": "registry",
-    "env": { "CODEX_PATH": "/data/data/com.zdroid/files/usr/bin/codex" }
-  }
-}
 ```
 
 Toolchains and LSPs for other languages have install recipes in the bootstrap repo: [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap).

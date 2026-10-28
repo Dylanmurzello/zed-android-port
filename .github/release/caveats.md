@@ -5,4 +5,4 @@
 - A keyboard with a built-in touchpad that Android reports as one device isn't recognized as a keyboard: the keyboard button stays in the status bar, and tapping text can show the on-screen keyboard.
 - A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints) but haven't been tested on a device yet. Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
-- Under Bootstrap, the agent panel's Claude Agent and Codex need npm and the Claude Code and Codex CLIs installed in the terminal, plus two settings that point the agents at them. See "Setting up your shell environment (Bootstrap)" in the README. Claude Agent hasn't been tested on a device yet.
+- Under Bootstrap, the agent panel's Claude Agent and Codex need npm and the Claude Code and Codex CLIs installed in the terminal, then a restart of Zdroid. See "Setting up your shell environment (Bootstrap)" in the README. Claude Agent hasn't been tested on a device yet.
