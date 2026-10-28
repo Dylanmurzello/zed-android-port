@@ -8,23 +8,31 @@ use std::ffi::OsString;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
-use util::env::EnvOp;
-
 use crate::config::RuntimeId;
 use crate::health::{HealthStatus, ProgressSink};
 
+/// One change to the app process's environment, from
+/// [`RuntimeProvider::env_for_zed_process`].
+#[derive(Debug, Clone)]
+pub enum EnvOp {
+    /// Set the variable, replacing any existing value.
+    Set(OsString),
+    /// Remove the variable if it's set.
+    Remove,
+}
+
 /// A spawn request handed to the active provider. Mirrors the data a
 /// `Command::new` carries plus the inheritable fds (passed via
-/// `SCM_RIGHTS` in chroot mode, via temp files in external-Termux mode).
+/// `SCM_RIGHTS` in chroot mode).
 ///
 /// Adapters take this and return a [`SpawnHandle`] representing the
-/// running process. The caller waits / signals via the handle.
+/// running process. The caller waits via the handle.
 #[derive(Debug, Clone)]
 pub struct SpawnRequest {
     /// Target binary name as the user / Zed wants it (e.g. `git`,
     /// `rust-analyzer`). The adapter resolves this against its userland
     /// (e.g. `/usr/bin/git` inside a chroot, `$PREFIX/bin/git` in
-    /// bootstrap mode, `bash -c git ...` via Termux RUN_COMMAND).
+    /// bootstrap mode).
     pub program: String,
 
     /// argv[1..] for the child. argv[0] is set by the adapter to match
@@ -51,69 +59,48 @@ pub struct SpawnRequest {
     /// Stdio fds to pass to the child. Indexed 0=stdin, 1=stdout,
     /// 2=stderr. Typically `[0, 1, 2]` for "inherit the caller's
     /// stdio". Adapters that bridge across processes (chroot via
-    /// daemon, external Termux via intent) duplicate these fds across
+    /// daemon) duplicate these fds across
     /// the boundary using `SCM_RIGHTS` or equivalent. The fds remain
     /// valid for the caller; ownership is not transferred.
     pub stdio: [RawFd; 3],
 }
 
 /// A running child process spawned through an adapter. Exact mechanism
-/// is adapter-specific (subprocess pid, daemon-tracked job, intent
-/// callback handle), but the surface is uniform.
+/// is adapter-specific (subprocess pid or daemon-tracked job).
 pub trait SpawnHandle: Send {
     /// Block until the child exits, return its exit code. -1 if killed
     /// by a signal that doesn't map to an exit code (the adapter logs
     /// the signal number).
     fn wait(&mut self) -> anyhow::Result<i32>;
-
-    /// Send SIGKILL (or adapter-equivalent termination signal).
-    fn kill(&mut self) -> anyhow::Result<()>;
 }
 
-/// The port. Implementations are in `adapters::{chroot, bootstrap,
-/// external_termux}`.
+/// The process and environment requirements of a runtime.
 pub trait RuntimeProvider: Send + Sync {
     /// Stable identifier for this provider — picked into `runtime.toml`
     /// and shown in the settings UI.
     fn id(&self) -> RuntimeId;
 
     /// Quick feasibility check ("ping"). Should complete in <1s for
-    /// healthy state, <3s for failure modes. Settings UI calls this on
-    /// page render to show a green/yellow/red dot per adapter.
+    /// healthy state, <3s for failure modes. The runtime picker calls this
+    /// when it opens and after installation to populate adapter status.
     fn health_check(&self) -> HealthStatus;
 
     /// One-shot install / setup. Idempotent: calling on an
     /// already-installed adapter is a no-op + Ok. Long operations
-    /// (downloading a bootstrap tarball, walking a rootfs) report
+    /// (downloading a bootstrap ZIP, walking a rootfs) report
     /// progress through the sink.
     fn install(&self, progress: &mut dyn ProgressSink) -> anyhow::Result<()>;
-
-    /// Remove anything this adapter installed. Adapter-specific:
-    /// bootstrap removes its `$PREFIX/{bin,lib,etc}`; chroot is no-op
-    /// (the rootfs is the user's, not ours); external Termux is no-op.
-    /// Project files / settings / config are never touched.
-    fn uninstall(&self) -> anyhow::Result<()>;
 
     /// Spawn the child process described by `req`. See [`SpawnHandle`]
     /// for the returned handle's contract.
     fn spawn(&self, req: SpawnRequest) -> anyhow::Result<Box<dyn SpawnHandle>>;
 
-    /// True if switching TO this adapter from another requires the app
-    /// to restart. Most adapters return true because env init (PATH,
-    /// HOME, etc.) runs once at boot and won't pick up the new shape
-    /// otherwise. Settings UI uses this to gate the "Restart Zdroid?"
-    /// prompt during a switch.
-    fn requires_restart_on_switch(&self) -> bool {
-        true
-    }
-
-    /// Whether `util::command::new_command` should rewrite absolute-path
+    /// Whether `zdroid_hooks::new_std_command` should rewrite absolute-path
     /// spawns under [`Self::environment_root`] to route through
     /// `zd-exec`. Adapters that cross a namespace boundary (e.g. chroot)
     /// return true so the spawn lands inside the right userland;
     /// adapters whose binaries run natively on the host (bootstrap's
-    /// bionic-flavored Termux prefix, external Termux's Intent
-    /// dispatch) return false so `execve` runs the binary directly.
+    /// bionic-flavored Termux prefix) return false so `execve` runs the binary directly.
     ///
     /// Default false — opt in. A misregistered true value in an
     /// adapter without `zd-exec` on PATH fails every absolute-path
@@ -177,8 +164,7 @@ pub trait RuntimeProvider: Send + Sync {
     /// what to put in it.
     ///
     /// Default impl returns empty — adapters that don't have a
-    /// readable bin layout (e.g. external Termux until the JNI
-    /// bridge lands) opt out cleanly; PATH-based lookup just won't
+    /// readable bin layout opt out; PATH-based lookup just won't
     /// find anything, which is the correct fail-closed behavior.
     fn list_binaries(&self) -> Vec<String> {
         Vec::new()
@@ -202,25 +188,20 @@ pub trait RuntimeProvider: Send + Sync {
         Vec::new()
     }
 
-    /// Mutations to overlay on the integrated terminal's env at spawn
-    /// time. Applied on top of whatever the Zed-Rust process env
-    /// already has (i.e. on top of [`Self::env_for_zed_process`]).
-    ///
-    /// Used by `crates/terminal/src/terminal.rs` via the static
-    /// `register_terminal_env_contributor` slot. Adapters that want
-    /// the terminal to behave identically to the editor process can
-    /// return an empty Vec — the inherited process env is then the
-    /// terminal's env.
-    fn env_for_terminal(&self, _data_path: &Path) -> Vec<(String, EnvOp)> {
+    /// Variables to set in the integrated terminal. The shell inherits
+    /// the Zed-Rust process env (after [`Self::env_for_zed_process`]),
+    /// and these replace what they name in it. The app registers them
+    /// with `zdroid_hooks::register_terminal_env`. Adapters that want
+    /// the terminal to behave identically to the editor process return
+    /// an empty Vec.
+    fn env_for_terminal(&self, _data_path: &Path) -> Vec<(String, OsString)> {
         Vec::new()
     }
 
     /// Absolute path of the program the integrated terminal should
     /// exec when the user opens a new terminal. Chroot returns the
     /// `zd-exec` wrapper (which dispatches into the rootfs); bootstrap
-    /// returns `$PREFIX/bin/bash`; external Termux returns whatever
-    /// stub shell is reachable from bionic until the JNI Intent
-    /// bridge lands.
+    /// returns `$PREFIX/bin/bash`.
     ///
     /// Returns `None` for non-Android adapters to keep the upstream
     /// terminal code path untouched.
@@ -229,11 +210,9 @@ pub trait RuntimeProvider: Send + Sync {
     }
 
     /// Where the user's projects and Zdroid-managed cache live.
-    /// Recent-project UI groups paths under this dir as "Workspace"
-    /// (vs. SAF-picked "External"); `gpui_android::storage` derives
-    /// the `~/projects` mkdir target and the noexec-suppression cache
-    /// from this. Returns `None` when the adapter has no opinion
-    /// (external Termux, until the JNI bridge lands).
+    /// `gpui_android::storage` derives the `~/projects` mkdir target
+    /// and the noexec-suppression cache from this. Returns `None` when
+    /// the adapter has no workspace root.
     fn workspace_root(&self, _data_path: &Path) -> Option<PathBuf> {
         None
     }
@@ -242,8 +221,7 @@ pub trait RuntimeProvider: Send + Sync {
     /// should LD_PRELOAD so their hardcoded `/data/data/com.termux/`
     /// shebangs and dlopen calls get translated. Only the Bootstrap
     /// adapter has this; chroot-spawned npm tools live inside the
-    /// rootfs and use glibc directly, external-Termux dispatches via
-    /// Intent and doesn't propagate LD_PRELOAD.
+    /// rootfs and use glibc directly.
     fn npm_libtermux_exec_path(&self, _data_path: &Path) -> Option<PathBuf> {
         None
     }

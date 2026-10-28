@@ -419,99 +419,41 @@ impl Render for WelcomePage {
 
         let ai_enabled = AgentSettings::get_global(cx).enabled(cx);
 
-        let recent_projects_data: Vec<_> = self
+        let recent_projects = self
             .recent_workspaces
             .as_ref()
             .into_iter()
             .flatten()
             .take(5)
-            .collect();
+            .enumerate()
+            .map(|(index, workspace)| {
+                self.render_recent_project(
+                    index,
+                    first_section_entries + index,
+                    &workspace.location,
+                    &workspace.identity_paths,
+                )
+            })
+            .collect::<Vec<_>>();
 
         let showing_recent_projects =
-            self.fallback_to_recent_projects && !recent_projects_data.is_empty();
+            self.fallback_to_recent_projects && !recent_projects.is_empty();
         let second_section = if showing_recent_projects {
-            #[cfg(target_os = "android")]
-            {
-                // Android-only split: ~/projects/* projects (built locally,
-                // exec-mounted) vs anything else (typically /storage/emulated/0/*
-                // SAF-picked, FUSE noexec). The two `rust` problem — same name
-                // appearing twice in Recent Projects from different storage
-                // tiers — is otherwise indistinguishable to the user.
-                let workspace_root = util::env::workspace_root().map(|h| h.join("projects"));
-                let mut workspace_entries: Vec<gpui::AnyElement> = Vec::new();
-                let mut external_entries: Vec<gpui::AnyElement> = Vec::new();
-                for (index, workspace) in recent_projects_data.iter().enumerate() {
-                    let is_workspace = workspace_root
-                        .as_ref()
-                        .and_then(|root| {
-                            workspace.paths.paths().first().map(|p| p.starts_with(root))
-                        })
-                        .unwrap_or(false);
-                    let rendered = self
-                        .render_recent_project(
-                            index,
-                            first_section_entries + index,
-                            &workspace.location,
-                            &workspace.identity_paths,
-                        )
-                        .into_any_element();
-                    if is_workspace {
-                        workspace_entries.push(rendered);
-                    } else {
-                        external_entries.push(rendered);
-                    }
-                }
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .when(!workspace_entries.is_empty(), |this| {
-                        this.child(
-                            v_flex()
-                                .child(SectionHeader::new("Workspace"))
-                                .children(workspace_entries),
-                        )
-                    })
-                    .when(!external_entries.is_empty(), |this| {
-                        this.child(
-                            v_flex()
-                                .child(SectionHeader::new("External"))
-                                .children(external_entries),
-                        )
-                    })
-                    .into_any_element()
-            }
-            #[cfg(not(target_os = "android"))]
-            {
-                let recent_projects = recent_projects_data
-                    .iter()
-                    .enumerate()
-                    .map(|(index, workspace)| {
-                        self.render_recent_project(
-                            index,
-                            first_section_entries + index,
-                            &workspace.location,
-                            &workspace.identity_paths,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                self.render_recent_project_section(recent_projects)
-                    .into_any_element()
-            }
+            self.render_recent_project_section(recent_projects)
+                .into_any_element()
         } else {
             second_section
                 .render(first_section_entries, &self.focus_handle)
                 .into_any_element()
         };
 
-        let welcome_label = match (
-            self.fallback_to_recent_projects,
-            cfg!(target_os = "android"),
-        ) {
-            (true, true) => "Welcome back to Zdroid",
-            (true, false) => "Welcome back to Zed",
-            (false, true) => "Welcome to Zdroid",
-            (false, false) => "Welcome to Zed",
+        let welcome_label = if self.fallback_to_recent_projects {
+            "Welcome back to Zed"
+        } else {
+            "Welcome to Zed"
         };
+        #[cfg(target_os = "android")]
+        let welcome_label = welcome_label.replace("Zed", "Zdroid");
 
         h_flex()
             .key_context("Welcome")

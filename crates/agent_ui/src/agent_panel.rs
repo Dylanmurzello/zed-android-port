@@ -6324,7 +6324,9 @@ impl AgentPanel {
             BaseView::Uninitialized | BaseView::Terminal { .. } => false,
             BaseView::AgentThread { conversation_view } => {
                 if conversation_view.read(cx).as_native_thread(cx).is_some() {
-                    let history_is_empty = ThreadStore::global(cx).read(cx).is_empty();
+                    // Android's API-key setup is complete once a provider is configured.
+                    let history_is_empty =
+                        !cfg!(target_os = "android") && ThreadStore::global(cx).read(cx).is_empty();
                     history_is_empty || !has_configured_non_zed_providers
                 } else {
                     false

@@ -1,7 +1,14 @@
 # Welcome-page Workspace/External split (Android)
 
-**Status:** Active
+**Status:** Reverted in 0.9.18
 
-cfg-gated to target_os=android. crates/workspace/src/welcome.rs partitions recent_workspaces by whether the path starts with TERMUX__HOME/projects. Workspace section = local; External = anywhere else (most often /storage/emulated/0 paths). Same-name projects from different storage tiers stop being indistinguishable.
+`crates/workspace/src/welcome.rs` split the welcome page's recent projects
+into a Workspace section (under the runtime's `~/projects`) and an External
+one (anything else, usually shared storage), so that two projects with the
+same name from different storage tiers could be told apart.
 
-**Detailed writeup: TODO.** Stub created so the index links resolve.
+It was removed to shrink the fork's edits to Zed's crates. Desktop Zed has
+the same ambiguity for same-name projects; the Recent Projects picker
+(`projects: open recent`) shows each project's full path. Projects imported
+from shared storage get distinct names (see
+[projects-workspace-import.md](projects-workspace-import.md)).

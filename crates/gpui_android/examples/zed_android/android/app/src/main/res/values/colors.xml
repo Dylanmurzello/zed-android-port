@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Zdroid brand palette. Deep indigo background reads as "modern dark
-         theme" without overlapping any specific upstream theme; warm-white
-         glyph holds visibility at small launcher sizes. -->
     <color name="zdroid_bg">#1E1E2E</color>
-    <color name="zdroid_fg">#F5F5F5</color>
 </resources>

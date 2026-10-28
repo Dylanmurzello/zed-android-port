@@ -551,12 +551,8 @@ fn android_main(app: AndroidApp) {
     //     so dpkg patches, apt Post-Invoke hooks, and bootstrap-side
     //     tooling keep working unchanged.
     //
-    //   - External Termux returns a minimal bionic env; spawns route
-    //     via Intent (Phase 7) so nothing here leaks across.
-    //
-    // The active provider also publishes a terminal env overlay that
-    // `crates/terminal/src/terminal.rs` applies when the PTY spawns,
-    // since alacritty wipes inherited env on bringup.
+    // The integrated terminal inherits this environment; the provider's
+    // `env_for_terminal` variables, registered below, go on top of it.
     //
     // SAFETY: `set_var` / `remove_var` mutate libc-shared process
     // state. The invariant is "no other thread reads/writes libc env
@@ -582,8 +578,8 @@ fn android_main(app: AndroidApp) {
         unsafe {
             for (key, op) in &ops {
                 match op {
-                    util::env::EnvOp::Set(value) => std::env::set_var(key, value),
-                    util::env::EnvOp::Remove => std::env::remove_var(key),
+                    zdroid_runtime::EnvOp::Set(value) => std::env::set_var(key, value),
+                    zdroid_runtime::EnvOp::Remove => std::env::remove_var(key),
                 }
             }
             // The app runs on the Dev channel, where zed_credentials_provider
@@ -606,27 +602,17 @@ fn android_main(app: AndroidApp) {
         log::warn!("zed_android: can't create {}: {error}", temp_dir.display());
     }
 
-    // Publish the per-adapter terminal env overlay so
-    // `crates/terminal/src/terminal.rs` can apply it when the PTY
-    // spawns. Idempotent: subsequent android_main re-entries (activity
-    // recreation) get the same overlay; the registration is OnceLock-
-    // guarded inside util::env.
-    util::env::register_terminal_env_overlay(provider.env_for_terminal(&data_path));
-
-    // Publish adapter-specific filesystem hints for editor code that
-    // historically read TERMUX__HOME / TERMUX__PREFIX env vars
-    // directly. Now those readers (workspace::welcome,
-    // node_runtime::node_runtime, gpui_android::storage) ask the
-    // active adapter via these registry slots — Bootstrap publishes
-    // its Termux-flavored paths, chroot publishes the bionic-clean
-    // equivalents, external Termux publishes None.
-    util::env::register_workspace_root(provider.workspace_root(&data_path));
-    util::env::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
+    // Publish what the active runtime adds to the integrated terminal and
+    // npm, and where its projects live. These are set once: activity
+    // recreation re-enters android_main with the same runtime.
+    zdroid_hooks::register_terminal_env(provider.env_for_terminal(&data_path));
+    zdroid_hooks::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
+    gpui_android::storage::register_workspace_root(provider.workspace_root(&data_path));
 
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
     // every subsequent execve into $PREFIX/bin/* will EACCES.
-    gpui_android::termux_bootstrap::check_selinux_context();
+    gpui_android::selinux_canary::check_selinux_context();
 
     // Best-effort runtime READ/WRITE_EXTERNAL_STORAGE prompt. Replaces the
     // MANAGE_EXTERNAL_STORAGE → Settings deep-link flow we used at
@@ -751,7 +737,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // config_dir was initialized". Guard with a static flag.
     static PATHS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let _ = PATHS_INITIALIZED.get_or_init(|| {
-        // Each runtime adapter (chroot / bootstrap / external Termux)
+        // Each runtime adapter (chroot / bootstrap)
         // gets a FULLY ISOLATED Zed install: its own config, keymap,
         // themes, sqlite db, language servers, extensions, history,
         // logs — everything. Switching adapters via the runtime picker
@@ -779,14 +765,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             );
             // Test writability before handing the path to paths::set_custom_data_dir,
             // which panics in `create_dir_all` if the path lives in another package's
-            // data dir (the ExternalTermux adapter's environment_root points at
-            // /data/data/com.termux/... which we can't write to under SELinux). On
+            // data dir (the removed External Termux adapter's root was
+            // /data/data/com.termux/..., which SELinux keeps us from writing). On
             // PermissionDenied we fall back to the bare app data dir so the editor
-            // can still boot; the adapter's spawn-side dispatch (env_for_zed_process,
-            // zd-exec routing) stays unaffected because that's a separate seam from
-            // the editor's data_dir. Without this, picking ExternalTermux in the
-            // runtime picker permanently bricks the install in a boot-time panic
-            // loop with no in-app recovery path.
+            // can still boot instead of panicking at every launch; the adapter's
+            // spawn-side dispatch (env_for_zed_process, zd-exec routing) is a
+            // separate seam from the editor's data_dir.
             let env_root_usable = match std::fs::create_dir_all(&env_root) {
                 Ok(()) => true,
                 Err(err) => {
@@ -800,19 +784,18 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     false
                 }
             };
-            // Register the env_root with util::command so absolute-path
+            // Register the env_root with zdroid_hooks so absolute-path
             // spawns under it get rewritten to route through `zd-exec`.
             // Gated on `needs_command_bridge()` so adapters whose
             // binaries run natively on the host (bootstrap's bionic-
-            // flavored Termux prefix, external Termux's Intent
-            // dispatch) skip the rewrite. Without that gate, every
+            // flavored Termux prefix) skip the rewrite. Without that gate, every
             // absolute-path spawn from a bootstrap user (PATH-resolved
             // rust-analyzer at $PREFIX/bin/rust-analyzer, downloaded
             // LSPs under <data>/languages/, etc.) would rewrite to
             // `zd-exec <abs>` and fail with ENOENT — bootstrap mode
             // doesn't put zd-exec on PATH.
             if provider.needs_command_bridge() {
-                util::command::register_environment_root(env_root.clone());
+                zdroid_hooks::register_environment_root(env_root.clone());
             }
             if env_root_usable {
                 env_root.to_string_lossy().into_owned()
@@ -996,18 +979,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
     info!("zed_android: UserStore + WorkspaceStore constructed");
 
-    // Real NodeRuntime, mirroring crates/zed/src/main.rs:496-518. The
-    // earlier port stage stubbed this out as `NodeRuntime::unavailable()`
-    // back when Termux's Node didn't run on bionic — pre L3 npm intercept
-    // architecture (project_l3_npm_intercept memory). The intercept layer
-    // (patched node platform string, npm wrapper, launcher-gen RUNPATH
-    // fixup, libtermux-exec LD_PRELOAD) plus the bundled musl loader make
-    // a Termux-installed Node usable. Wire NodeRuntime against settings
-    // so PATH-resolved Node (`pkg install nodejs` → $PREFIX/bin/node)
-    // works, and Zed's managed-node fallback download path is available
-    // for users without termux Node. Without this, npm-based LSPs
-    // (TypeScript / JavaScript / Pyright / etc.) fail at the install step
-    // with `'node' settings do not allow any way to use Node.js`.
+    // Zed's NodeRuntime, set up as in crates/zed/src/main.rs. It finds the
+    // runtime's Node and npm on PATH: the bootstrap ships Node, and npm
+    // comes from `pkg install npm`. Zed's own Node download has no Android
+    // build, so without them npm-based language servers and agents can't
+    // install.
     let (mut node_options_tx, node_options_rx) =
         watch::channel::<Option<node_runtime::NodeBinaryOptions>>(None);
     cx.observe_global::<SettingsStore>(move |cx| {
@@ -1198,9 +1174,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         );
     }
 
+    // Retain the client for public catalogs and project services, without
+    // registering Zed account actions through client::init.
     Client::set_global(client.clone(), cx);
     zed::init(cx);
-    client::init(&client, cx);
     feature_flags::FeatureFlagStore::init(cx);
     // Register the TrustedWorktrees global. git_store reads it via
     // `try_get_global` when a repo is added; without it, `is_trusted`
@@ -1229,27 +1206,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     project::trusted_worktrees::init(db_trusted_paths, cx);
     Project::init(&client, cx);
 
-    // Extensions (Phase L3 — previously deferred). Mirrors production
-    // zed/src/main.rs:623, 631–637, 741. The store creates the
-    // global ExtensionStore, watches `paths::extensions_dir()` for new
-    // installations, and asynchronously fetches the registry from
-    // Zed's API. Theme/debug-adapter proxies register against the
-    // already-installed `ExtensionHostProxy` from `extension::init`
-    // earlier in boot. extensions_ui registers the workspace observer
-    // that handles the `zed_actions::Extensions` action — taps from
-    // the title-bar settings menu open the browse/install pane.
-    //
-    // Wasmtime engine init (`crates/extension_host/src/wasm_host.rs:564`)
-    // currently uses Cranelift JIT. Whether that survives Android's
-    // `untrusted_app_27` SELinux W^X policy is open — modern Android
-    // (API 30+) typically allows anonymous executable mappings for
-    // app processes, so it MAY just work; if not, the engine init
-    // will panic at first extension load and we switch wasmtime's
-    // strategy to Pulley interpreter (one Cargo.toml feature flip +
-    // a `Config::strategy(Strategy::Pulley)` line). See
-    // `deferred-render-pipeline-perf.md` philosophy: read the actual
-    // failure first, don't preemptively configure for a problem that
-    // may not exist.
     {
         let extension_host_proxy = extension::ExtensionHostProxy::global(cx);
         extension_host::init(
@@ -1287,8 +1243,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     vim::init(cx);
     // In the order of Zed's main(). Left out: audio, call and livekit
-    // (collab), copilot and language_models (AI model providers: agent_ui
-    // runs ACP agents only), debugger_ui and repl, and telemetry and crashes.
+    // (collab), Copilot edit prediction, debugger_ui and repl, and telemetry
+    // and crashes.
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1313,18 +1269,24 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     settings_profile_selector::init(cx);
     language_tools::init(cx);
     feedback::init(cx);
-    // language_model::init only registers the GlobalLanguageModelRegistry —
-    // no actual AI runtime spins up. git_panel.rs reads from this registry
-    // for the optional commit-message generation; without it, the panel
-    // panics at first paint with "no state of type
-    // language_model::registry::GlobalLanguageModelRegistry exists".
+    // Model providers, in the order of Zed's main(). Left out: copilot_ui
+    // (Copilot edit prediction) and RefreshLlmTokenListener (Zed-hosted
+    // models, which need a Zed account). The API keys go to Android
+    // Keystore because android_main sets ZED_DEVELOPMENT_USE_KEYCHAIN.
+    copilot_chat::init(
+        app_state.client.http_client(),
+        app_state.client.credentials_provider(),
+        copilot_chat::CopilotChatConfiguration {
+            enterprise_uri: settings::CopilotSettings::get_global(cx)
+                .enterprise_uri
+                .clone(),
+        },
+        cx,
+    );
     language_model::init(cx);
-    // Agent Panel for external ACP agents (Claude Code, Codex, ...), in the
-    // same order as crates/zed/src/main.rs. On remote projects the agent runs
-    // on the remote host through the remote server, so nothing agent-related
-    // is spawned on Android. language_models::init is deliberately skipped:
-    // with no model providers registered, Zed's built-in agent and the inline
-    // assistant have no model, and only ACP agents can run.
+    language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
+    // The native agent reads this registry even without Zed-hosted web search.
+    web_search::init(cx);
     let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
     // Zed counts an install as new when it creates the installation ID; the
     // app has none, and onboarding hasn't run yet on a new install.
@@ -1370,7 +1332,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // scattered across Zed's UI) dispatch `zed_actions::OpenSettings`,
     // which normally lands the user at the settings.json editor. Without
     // a working Android runtime that panel can't solve anything: the user
-    // has to find Android Runtime > Open picker first. Skip the dead-end
+    // has to find Android > Open picker first. Skip the dead-end
     // by routing OpenSettings straight to the picker when the runtime
     // toml is missing.
     //
@@ -1483,7 +1445,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // From here to the end of boot(), as in Zed's main().
     cx.observe_global::<SettingsStore>({
         let http = app_state.client.http_client();
-        let client = app_state.client.clone();
         move |cx| {
             for &mut window in cx.windows().iter_mut() {
                 let background_appearance = cx.theme().window_background_appearance();
@@ -1507,9 +1468,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             let new_host = &client::ClientSettings::get_global(cx).server_url;
             if &http.base_url() != new_host {
                 http.set_base_url(new_host);
-                if client.status().borrow().is_connected() {
-                    client.reconnect(&cx.to_async());
-                }
             }
         }
     })

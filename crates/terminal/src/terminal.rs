@@ -664,31 +664,6 @@ pub fn insert_zed_terminal_env(
     env.insert("TERM_PROGRAM_VERSION".to_string(), version.to_string());
 }
 
-/// Alacritty's pty spawn replaces the inherited env with this map, so the
-/// local shell needs the process's HOME, PATH, SHELL, TMPDIR and LANG plus
-/// the active runtime's overlay (Termux variables, the exec preload, CA
-/// bundle paths, HOME pointing at the runtime's home). This is not part of
-/// `insert_zed_terminal_env` because that one also builds the environment
-/// sent to SSH remotes, where these paths don't exist.
-#[cfg(target_os = "android")]
-fn insert_android_terminal_env(env: &mut HashMap<String, String>) {
-    for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {
-        if let Ok(value) = std::env::var(key) {
-            env.entry(key.to_string()).or_insert(value);
-        }
-    }
-    for (key, op) in util::env::terminal_env_overlay() {
-        match op {
-            util::env::EnvOp::Set(value) => {
-                env.insert(key.clone(), value.to_string_lossy().into_owned());
-            }
-            util::env::EnvOp::Remove => {
-                env.remove(key);
-            }
-        }
-    }
-}
-
 ///Upward flowing events, for changing the title and such
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -1172,8 +1147,10 @@ impl TerminalBuilder {
             }
 
             insert_zed_terminal_env(&mut env, &version);
+            // Kept out of `insert_zed_terminal_env`, which also builds the
+            // environment of SSH remotes, where the app's paths don't exist.
             #[cfg(target_os = "android")]
-            insert_android_terminal_env(&mut env);
+            zdroid_hooks::insert_terminal_env(&mut env);
 
             #[derive(Default)]
             struct ShellParams {

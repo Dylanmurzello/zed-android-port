@@ -108,6 +108,9 @@ zeroize.workspace = true
 zlog.workspace = true
 ztracing.workspace = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+zdroid_hooks.workspace = true
+
 [dev-dependencies]
 client = { workspace = true, features = ["test-support"] }
 collections = { workspace = true, features = ["test-support"] }

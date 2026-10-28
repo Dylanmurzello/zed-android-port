@@ -408,14 +408,6 @@ mod android_impl {
             self.cached_exit_code = Some(code);
             Ok(code)
         }
-
-        fn kill(&mut self) -> Result<()> {
-            // Per protocol: shutdown the write half. Daemon reads 0,
-            // SIGKILLs the child, sends `response_exited` with -9.
-            self.conn
-                .shutdown(std::net::Shutdown::Write)
-                .context("shutdown write half to signal kill")
-        }
     }
 
     pub(super) fn spawn(config: &ChrootConfig, req: SpawnRequest) -> Result<Box<dyn SpawnHandle>> {
@@ -472,12 +464,6 @@ impl RuntimeProvider for ChrootAdapter {
              to start the daemon. Auto-install of Magisk modules from within \
              the app is not yet supported."
         )
-    }
-
-    fn uninstall(&self) -> anyhow::Result<()> {
-        // No-op by design. The chroot rootfs is the user's; Magisk
-        // module removal happens through Magisk Manager.
-        Ok(())
     }
 
     #[cfg(target_os = "android")]
@@ -567,14 +553,17 @@ impl RuntimeProvider for ChrootAdapter {
         names.into_iter().collect()
     }
 
-    fn env_for_zed_process(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_zed_process(
+        &self,
+        data_path: &std::path::Path,
+    ) -> Vec<(String, crate::port::EnvOp)> {
         // Chroot mode keeps the Zed-Rust process bionic-clean: no
         // Termux-flavored vars, no $PREFIX/etc.pem CA pointer, no
         // libtermux-exec preload. Anything spawn-target-specific gets
         // injected at the zd-spawnd boundary via
         // `sanitize_env_for_chroot`.
+        use crate::port::EnvOp;
         use std::ffi::OsString;
-        use util::env::EnvOp;
 
         // Phase 4: zd-exec + zd-runtime live at `<data>/files/bin/` and
         // `<data>/files/zd-runtime/` respectively, not under the
@@ -632,7 +621,7 @@ impl RuntimeProvider for ChrootAdapter {
         ]
     }
 
-    fn env_for_terminal(&self, _data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_terminal(&self, _data_path: &std::path::Path) -> Vec<(String, std::ffi::OsString)> {
         // No overlay in chroot mode. The integrated-terminal SHELL is
         // zd-exec; it talks to zd-spawnd which builds the chroot-side
         // env via `sanitize_env_for_chroot`. Anything the host-side

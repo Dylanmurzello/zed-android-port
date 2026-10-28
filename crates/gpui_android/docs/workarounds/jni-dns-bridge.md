@@ -6,7 +6,7 @@
 
 ## Problem
 
-The hex-patch flow (see [hex-patch-resolv-conf.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md))
+The hex-patch flow (see [DNS in the zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#dns))
 rewrites Bun-compiled CLIs' `/etc/resolv.conf` literal to
 `/sdcard/.zed/r`. That file has to **exist**, with real
 `nameserver <IP>` lines, for c-ares to find anything. Without it, queries
@@ -65,9 +65,8 @@ repeatedly (e.g. on `MainEvent::ConfigChanged` if we ever wire that).
 
 - `getActiveDnsServers` returns empty → fall back to public DNS. Works
   but loses Android's policy.
-- File write fails (storage permission revoked) → file missing →
-  c-ares localhost fallback → tool errors. Mitigation: storage
-  permission flow runs before this in `apply_runtime_patches`.
+- File write fails (storage permission not granted yet or revoked) →
+  file missing → c-ares localhost fallback → tool errors.
 - Network changes mid-session → file stale (still has old WiFi's DNS
   servers). Hasn't bitten in practice; if it does, hook
   `MainEvent::ConfigChanged` to re-populate.
@@ -82,5 +81,5 @@ no per-tool wrapper, no syscall ptrace.
 
 ## See also
 
-- [hex-patch-resolv-conf.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md)
+- [DNS in the zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#dns)
 - [sdcard-dot-zed-namespace.md](sdcard-dot-zed-namespace.md)

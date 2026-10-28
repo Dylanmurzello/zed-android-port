@@ -1,39 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Splash theme: shown by the OS from process start until gpui's
-         first surface frame, held past `super.onCreate` by AndroidX
-         SplashScreen's `setKeepOnScreenCondition` polling the gpui-
-         side `nativeIsZedReady` flag. After the splash exits (smooth
-         fade in `setOnExitAnimationListener`) the activity switches
-         to `Theme.Zdroid.Main`.
-         The icon is intentionally static — `windowSplashScreenAnimated
-         Icon` accepts AnimatedVectorDrawable but the AndroidX
-         back-port on targetSdk=28 doesn't start the AVD's animators,
-         so a fancier "breathing rings" overlay would need to live in
-         a SurfaceControl overlay (the same architecture as the
-         hardware cursor sprite) and is deferred until the targetSdk
-         move past 28 makes the native SplashScreen icon-animator path
-         render. -->
+    <!-- Match the starting window to MainActivity's splash overlay so
+         creating the Activity does not flash a different background. -->
     <style name="Theme.Zdroid.Splash" parent="Theme.AppCompat.NoActionBar">
-        <!-- Window background = the brand color, so the initial cold-
-             boot window (between zygote fork and SplashActivity
-             setContentView) is dark indigo, matching the activity's
-             FrameLayout bg color. No drawable here — the animated
-             icon lives in the activity's layout where ImageView can
-             actually start the AnimatedVectorDrawable. -->
         <item name="android:windowBackground">@color/zdroid_bg</item>
-    </style>
-
-    <!-- Theme MainActivity uses. Bridges the gap between SplashActivity
-         finishing and gpui's first paint by holding the brand sigil
-         on screen as a static icon over the brand background — same
-         visual frame the SplashActivity ImageView was rendering,
-         minus the AVD animators (window backgrounds in Android don't
-         drive `Animatable.start()`, so the icon is frozen here). The
-         GameActivity SurfaceView covers this drawable the moment
-         gpui paints, so the user sees: animated icon → frozen icon
-         → editor without a brand-color flash in between. -->
-    <style name="Theme.Zdroid.Main" parent="Theme.AppCompat.NoActionBar">
-        <item name="android:windowBackground">@drawable/splash</item>
     </style>
 </resources>

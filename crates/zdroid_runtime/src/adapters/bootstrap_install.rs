@@ -1,16 +1,12 @@
 //! Download + extract path for [`super::bootstrap::BootstrapAdapter::install`].
 //!
-//! Pulls the latest release tarball from `<release_repo>`'s GitHub
-//! releases endpoint, downloads `bootstrap-aarch64.zip`, extracts the
-//! contents into a staging dir, swaps the staging into `$PREFIX`
-//! atomically, and writes a version sentinel so subsequent boots skip
-//! re-extraction.
-//!
-//! Lives in `zdroid_runtime` rather than `gpui_android` so the adapter
-//! is self-contained — the historical extraction code in
-//! `gpui_android::termux_bootstrap` couples to APK assets and the older
-//! bundled-zip flow. Phase 8 of the Termux-divestment refactor sweeps
-//! the legacy module; this is the replacement for the install path.
+//! Downloads `bootstrap-aarch64.zip` from the latest GitHub release of
+//! `<release_repo>`, checked against the SHA-256 GitHub records for it, so a
+//! bootstrap release reaches new installs without a Zdroid release. Zdroid's
+//! own repository publishes a release only after its tests pass; pinning
+//! one in the APK would guard little, as the same GitHub account holds the
+//! APK's signing secrets. Extracts the contents into a staging dir, replaces
+//! `$PREFIX`, and records the tag and repository.
 
 use std::fs;
 use std::io::{Cursor, Read, Write as _};
@@ -25,15 +21,8 @@ use sha2::{Digest, Sha256};
 
 use crate::health::ProgressSink;
 
-/// Preferred asset name inside the GitHub release. The
-/// bootstrap-build pipeline names every release's archive identically;
-/// the version is encoded in the release TAG, not the asset filename.
-///
-/// On 404 we fall back to enumerating the release's assets via the
-/// GitHub API and picking the first whose name matches
-/// `ASSET_NAME_REGEX_PATTERN` (eg. `bootstrap-aarch64-r4.zip`). The
-/// fallback path is robust to typos at upload time; the canonical
-/// name keeps the steady-state path off `api.github.com`.
+/// Preferred asset name. Also used when GitHub's release metadata is
+/// unavailable, so the download can continue through anonymous API limits.
 const RELEASE_ASSET_NAME: &str = "bootstrap-aarch64.zip";
 
 /// Prefix + extension that any acceptable bootstrap asset must match.
@@ -44,23 +33,23 @@ const RELEASE_ASSET_NAME: &str = "bootstrap-aarch64.zip";
 const ASSET_NAME_PREFIX: &str = "bootstrap-aarch64";
 const ASSET_NAME_SUFFIX: &str = ".zip";
 
-/// Manifest entry inside the bootstrap zip carrying symlink targets
-/// the zip format itself can't represent on extraction (Android's
-/// extract path doesn't preserve mode bits + symlinks the way `unzip`
-/// does on a real Unix). Replayed after the regular extract pass.
 /// Upper bounds that keep a corrupt or hostile archive from exhausting
 /// memory or storage. The real bootstrap is ~250 MB with ~20k entries.
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 300_000;
 
+/// Termux's archive records symlink targets separately from regular files.
 const SYMLINKS_ENTRY: &str = "SYMLINKS.txt";
 const SYMLINKS_DELIM: &str = "←";
 
 /// File at `$PREFIX/.bootstrap-version` recording which release tag is
-/// currently extracted. Re-extracts only fire when this doesn't match
-/// the latest release tag at download time.
+/// currently extracted.
 const VERSION_FILE: &str = ".bootstrap-version";
+
+/// File at `$PREFIX/.bootstrap-repository` recording which repository that
+/// release came from. Installs made before Zdroid 0.9.19 don't have it.
+const REPOSITORY_FILE: &str = ".bootstrap-repository";
 
 /// Set while an install runs. Two installs at once would extract into the
 /// same staging directory, and the runtime picker can start a second one
@@ -88,16 +77,11 @@ fn http_agent(redirects: u32) -> ureq::Agent {
 /// ureq's default.
 const MAX_REDIRECTS: u32 = 5;
 
-/// Download the latest release zip + extract into `<prefix>` atomically.
-/// Idempotent against `<prefix>/.bootstrap-version` — if the on-disk
-/// sentinel matches the latest tag and the prefix still has its shell, the
-/// function returns Ok without touching the network or filesystem beyond a
-/// tag resolve.
-pub fn install_latest(
-    prefix: &Path,
-    release_repo: &str,
-    progress: &mut dyn ProgressSink,
-) -> Result<()> {
+/// Download the release ZIP and replace `<prefix>` after extraction, which
+/// both installs and reinstalls: everything in the prefix except
+/// [`PRESERVED_PREFIX_FILES`] is replaced, packages installed since
+/// included.
+pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSink) -> Result<()> {
     if INSTALL_RUNNING.swap(true, Ordering::AcqRel) {
         bail!("a bootstrap install is already running");
     }
@@ -109,17 +93,6 @@ pub fn install_latest(
     log::info!("bootstrap_install: latest release tag = {tag_name}");
 
     let version_file = prefix.join(VERSION_FILE);
-    // The sentinel is a dotfile, so clearing the prefix with `rm -rf *`
-    // leaves it behind.
-    if let Ok(existing) = fs::read_to_string(&version_file)
-        && existing.trim() == tag_name
-        && prefix.join("bin/bash").is_file()
-    {
-        log::info!("bootstrap_install: $PREFIX already at {tag_name}, skipping extract");
-        progress.step(&format!("Bootstrap {tag_name} already installed"));
-        return Ok(());
-    }
-
     progress.step(&format!("Downloading bootstrap {tag_name}"));
     let zip_bytes = download_bootstrap_asset(release_repo, &tag_name)
         .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
@@ -143,6 +116,9 @@ pub fn install_latest(
     fs::File::create(&version_file)
         .with_context(|| format!("create version sentinel at {}", version_file.display()))?
         .write_all(tag_name.as_bytes())?;
+    let repository_file = prefix.join(REPOSITORY_FILE);
+    fs::write(&repository_file, release_repo)
+        .with_context(|| format!("write {}", repository_file.display()))?;
 
     log::info!(
         "bootstrap_install: bootstrap {} ready at {}",
@@ -151,6 +127,18 @@ pub fn install_latest(
     );
     progress.step(&format!("Bootstrap {tag_name} installed"));
     Ok(())
+}
+
+/// The installed release's tag and, when recorded, the repository it came
+/// from, for the runtime picker.
+pub fn installed_release(prefix: &Path) -> Option<(String, Option<String>)> {
+    let read = |name: &str| {
+        fs::read_to_string(prefix.join(name))
+            .ok()
+            .map(|contents| contents.trim().to_owned())
+            .filter(|contents| !contents.is_empty())
+    };
+    Some((read(VERSION_FILE)?, read(REPOSITORY_FILE)))
 }
 
 /// Resolve the latest-release tag without naming any asset.
@@ -221,6 +209,29 @@ fn download_bootstrap_asset(release_repo: &str, tag: &str) -> Result<Vec<u8>> {
         validate_bootstrap_asset(&bytes, asset)?;
     }
     Ok(bytes)
+}
+
+/// The `owner/repo` slug in what the user typed into the runtime picker:
+/// the slug itself or a github.com URL of the repository or one of its
+/// pages. `None` when it names no repository.
+pub fn release_repo_from_input(input: &str) -> Option<String> {
+    let input = input.trim();
+    let path = ["https://github.com/", "http://github.com/", "github.com/"]
+        .iter()
+        .find_map(|prefix| input.strip_prefix(prefix))
+        .unwrap_or(input);
+    let mut segments = path.split('/');
+    let owner = segments.next()?;
+    let repository = segments.next()?;
+    let repository = repository.strip_suffix(".git").unwrap_or(repository);
+    let is_name = |name: &str| {
+        // Also rejects `.` and `..`, which would leave the repository's URLs.
+        !name.trim_matches('.').is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+    };
+    (is_name(owner) && is_name(repository)).then(|| format!("{owner}/{repository}"))
 }
 
 fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
@@ -561,6 +572,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn release_repo_from_input_accepts_slugs_and_github_urls() {
+        for input in [
+            "owner/repo",
+            " owner/repo ",
+            "github.com/owner/repo",
+            "https://github.com/owner/repo",
+            "https://github.com/owner/repo/",
+            "https://github.com/owner/repo.git",
+            "https://github.com/owner/repo/releases/latest",
+        ] {
+            assert_eq!(
+                release_repo_from_input(input).as_deref(),
+                Some("owner/repo"),
+                "{input:?}"
+            );
+        }
+        for input in [
+            "",
+            "owner",
+            "owner/",
+            "/repo",
+            "https://example.com/owner/repo",
+            "owner/repo name",
+            "owner/../repo",
+        ] {
+            assert_eq!(release_repo_from_input(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
     fn symlink_paths_must_stay_inside_staging() {
         assert!(safe_symlink_path("./usr/bin/sh").is_ok());
         assert!(safe_symlink_path("usr/lib/libz.so").is_ok());
@@ -604,6 +645,23 @@ mod tests {
         assert_eq!(fs::read_to_string(prefix.join("bin/sh"))?, "new");
         assert!(!prefix.join("old-file").exists());
         assert!(!staging.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn installed_release_reads_the_tag_and_repository() -> Result<()> {
+        let prefix = tempfile::tempdir()?;
+        assert_eq!(installed_release(prefix.path()), None);
+        fs::write(prefix.path().join(VERSION_FILE), "v2026.05.06-r4")?;
+        assert_eq!(
+            installed_release(prefix.path()),
+            Some(("v2026.05.06-r4".into(), None))
+        );
+        fs::write(prefix.path().join(REPOSITORY_FILE), "owner/repo\n")?;
+        assert_eq!(
+            installed_release(prefix.path()),
+            Some(("v2026.05.06-r4".into(), Some("owner/repo".into())))
+        );
         Ok(())
     }
 

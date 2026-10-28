@@ -38,30 +38,26 @@ trackpad, in both tablet mode and DeX.
 | [`targetSdk=28` for execve from /data/data](targetsdk-28-execve.md) | Active | API 29+ blocks execve on app-private storage |
 | [Termux ~/storage curated symlinks](termux-storage-symlinks.md) | Active | Surface common /sdcard subdirs without making them workspace roots |
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
-| [Noexec banner with one-tap Move action](noexec-banner-move.md) | Active | When users open from /sdcard anyway, fix in one tap |
+| [Copy projects from shared storage](noexec-banner-move.md) | Active | When users open from /sdcard anyway, copy the project into ~/projects |
 | [Trust grants restored from WorkspaceDb at boot](trust-restore-from-db.md) | Active | Production main.rs does this; we forgot |
-| [Welcome-page Workspace/External split](welcome-page-split.md) | Active | Two `rust` projects from different storage tiers were indistinguishable |
+| [Welcome-page Workspace/External split](welcome-page-split.md) | Reverted | Two `rust` projects from different storage tiers were indistinguishable |
 | [SAF picker integration](saf-picker-integration.md) | Active | gpui's prompt_for_paths needs Android Storage Access Framework + path-decoding gymnastics |
 | [Tier 2 root storage (bind-mount /mnt/pass_through)](deferred-tier2-root-storage.md) | Deferred | Wait for in-app settings UI |
 | [`CARGO_TARGET_DIR` stopgap](reverted-cargo-target-dir.md) | Reverted | Per-tool env redirect didn't generalize |
 
 ## Bootstrap / Termux userland
 
-The bootstrap-flavored workarounds (dpkg path-rewrite, apt Post-Invoke hooks,
-apt dpkg pin, musl loader bundle, node `NODE_PLATFORM` patch, npm intercept
-stack, resolv.conf hex-patch in the musl loader, patchelf + bun-binary
-classification, bootstrap-rebuild pipeline, Termux env propagation into bash)
-moved to **[`Dylanmurzello/zdroid-bootstrap/docs/`](https://github.com/Dylanmurzello/zdroid-bootstrap/tree/main/docs)**
-as part of the Termux-divestment Phase 8b refactor. They describe patches
-baked into the bootstrap zip, not editor code, so the writeups live with the
-patches.
+The bootstrap's own parts (the apt hook that repacks Termux's packages,
+the npm wrapper and launcher generator, the musl loader and its DNS
+rewrite) are described in the
+[zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#readme),
+next to the files. These are the app's side:
 
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Storage permission JNI shim](storage-permission-jni.md) | Active | `READ/WRITE_EXTERNAL_STORAGE` are runtime-prompted at targetSdk≤28 |
 | [JNI DNS bridge → `/sdcard/.zed/r`](jni-dns-bridge.md) | Active | Populates the file the bootstrap's hex-patched musl loader opens, sourced from Android's actual ConnectivityManager DNS |
 | [`/sdcard/.zed/` namespace](sdcard-dot-zed-namespace.md) | Active | Why `/sdcard` (byte-width constraint) and why `.zed/` (hidden, namespaced) for the patched paths |
-| [LD_PRELOAD `libzed-compat.so` path-redirect shim](deferred-ld-preload-shim.md) | Dropped | Doesn't apply to static-musl (no PLT/GOT); replaced by hex-patch in the bootstrap musl loader |
 
 ## Runtime env
 
@@ -69,7 +65,7 @@ patches.
 |---|---|---|
 | [HOME env dual-pointing](home-env-dual-pointing.md) | Active | Rust process needs HOME=data_path; bash needs HOME=$TERMUX__HOME |
 | [Terminal HOME override](terminal-home-override.md) | Active | Pass TERMUX__HOME into bash without disturbing Rust globals |
-| [SSL_CERT_FILE / CURL_CA_BUNDLE](ssl-cert-bundle.md) | Removed | In-process trust via webpki-roots; subprocess CA is adapter-owned |
+| [SSL_CERT_FILE / CURL_CA_BUNDLE](ssl-cert-bundle.md) | Active | Bootstrap's CA bundle for every program the app starts; Zed's own HTTPS uses webpki-roots |
 | [.gitconfig safe.directory = *](gitconfig-safe-directory.md) | Active | libgit2 dubious-ownership check fires for media_rw-owned /sdcard repos |
 | [Activity-recreation idempotency](activity-recreation-idempotency.md) | Active | `android_main` re-enters; everything must be re-entrant |
 | [SELinux context canary log](selinux-canary.md) | Active | Detect if `targetSdk` regresses by checking `untrusted_app_27` domain |

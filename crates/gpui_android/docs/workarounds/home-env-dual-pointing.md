@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** Phase 8 / L3
-**Files:** `crates/gpui_android/examples/zed_android/src/lib.rs`, `crates/terminal/src/terminal.rs`
+**Files:** `crates/gpui_android/examples/zed_android/src/lib.rs`, `crates/zdroid_hooks/src/zdroid_hooks.rs`
 
 ## Problem
 
@@ -42,9 +42,9 @@ unsafe {
 }
 ```
 
-In `terminal.rs::insert_android_terminal_env`, the bootstrap runtime's
-terminal overlay (registered through `util::env`) sets the terminal's
-`HOME` to `TERMUX__HOME`.
+In `zdroid_hooks::insert_terminal_env`, which `terminal.rs` calls, the
+bootstrap runtime's terminal overlay sets the terminal's `HOME` to
+`TERMUX__HOME`.
 
 The terminal-subprocess env override sets HOME to TERMUX__HOME just for
 that subprocess (and its descendants). The Rust globals stay untouched. LSP

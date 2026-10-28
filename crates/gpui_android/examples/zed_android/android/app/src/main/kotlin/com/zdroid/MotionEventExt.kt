@@ -73,14 +73,10 @@ internal fun Activity.forwardCapturedPointer(
     cursorY: Float,
 ) {
     val pointerCount = event.pointerCount
-    val xs = FloatArray(pointerCount)
-    val ys = FloatArray(pointerCount)
     val rxs = FloatArray(pointerCount)
     val rys = FloatArray(pointerCount)
     val rotation = displayRotation()
     for (i in 0 until pointerCount) {
-        xs[i] = event.getX(i)
-        ys[i] = event.getY(i)
         val (dx, dy) = capturedRelativeDelta(event, i, rotation)
         rxs[i] = dx
         rys[i] = dy
@@ -95,8 +91,6 @@ internal fun Activity.forwardCapturedPointer(
         // and Alt-click from the event, not from the keyboard.
         event.metaState,
         pointerCount,
-        xs,
-        ys,
         rxs,
         rys,
         event.getAxisValue(MotionEvent.AXIS_VSCROLL),

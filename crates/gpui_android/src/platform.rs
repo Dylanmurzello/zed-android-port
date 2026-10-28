@@ -968,7 +968,6 @@ impl AndroidPlatform {
                     meta_state,
                     button_state,
                     flags,
-                    event_time_millis: _,
                     vscroll,
                     hscroll,
                     positions,

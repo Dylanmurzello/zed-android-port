@@ -1,22 +1,3 @@
-//! Runtime adapter picker — lets the user pick which userland Zdroid
-//! routes its spawns through (chroot, bootstrap, external Termux).
-//!
-//! Surfaces as a centered modal triggered by the `zdroid: pick runtime`
-//! action. Mirrors Zed's welcome-page card aesthetic.
-//!
-//! v1 scope (this commit):
-//!   - Render three cards with name, tagline, live health snapshot.
-//!   - Select button per card. Click logs the choice + dismisses.
-//!     Persistence to `runtime.toml` lands once we've nailed down
-//!     where Zdroid stores adapter config (likely `$PREFIX/etc/zd-runtime.toml`)
-//!     and added the file-write helper.
-//!
-//! Future scope (queued in tasks #33/#34):
-//!   - Install / Uninstall buttons backed by adapter `install()` paths.
-//!   - "Restart Zdroid" prompt after a switch.
-//!   - First-launch auto-open when no `runtime.toml` exists yet.
-
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
@@ -29,14 +10,18 @@ use theme::ActiveTheme;
 use ui::{
     Button, ButtonCommon, ButtonSize, ButtonStyle, Chip, Clickable, Color, Disableable,
     FluentBuilder, Headline, HeadlineSize, Icon, IconName, IconSize, Label, LabelCommon, LabelSize,
-    ParentElement, Styled, h_flex, v_flex,
+    ParentElement, Styled, TintColor, h_flex, v_flex,
 };
+use ui_input::InputField;
 use util::ResultExt as _;
 use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
     HealthStatus, RuntimeId, RuntimeProvider, adapters,
-    adapters::chroot::SPAWND_RELEASE_URL,
-    config::{BootstrapConfig, ChrootConfig, ExternalTermuxConfig, RuntimeFile},
+    adapters::{
+        bootstrap_install::{installed_release, release_repo_from_input},
+        chroot::SPAWND_RELEASE_URL,
+    },
+    config::{DEFAULT_RELEASE_REPO, RuntimeFile},
     health::ProgressSink,
 };
 
@@ -52,19 +37,18 @@ struct ChannelProgressSink {
 impl ProgressSink for ChannelProgressSink {
     fn step(&mut self, label: &str) {
         log::info!("zdroid_runtime_picker: step: {}", label);
-        let _ = self.tx.unbounded_send(label.to_string());
+        self.tx.unbounded_send(label.to_string()).log_err();
     }
     fn progress(&mut self, _done: u64, _total: u64) {}
     fn warn(&mut self, message: &str) {
         log::warn!("zdroid_runtime_picker: warn: {}", message);
-        let _ = self.tx.unbounded_send(format!("warning: {message}"));
+        self.tx
+            .unbounded_send(format!("warning: {message}"))
+            .log_err();
     }
 }
 
-/// Where Zdroid stores the active-adapter selection. Lives inside
-/// `$PREFIX/etc/` so the bootstrap-extraction step doesn't clobber it
-/// (extraction doesn't touch `etc/`), and so it persists across
-/// editor APK updates the same way other user state does.
+// The bootstrap installer preserves this file when replacing the prefix.
 const RUNTIME_TOML_PATH: &str = "/data/data/com.zdroid/files/usr/etc/zd-runtime.toml";
 
 actions!(
@@ -81,7 +65,7 @@ actions!(
 /// `window.dispatch_action(...)`. Three current entry points:
 ///
 ///   - Command palette (`zdroid: pick runtime`).
-///   - Settings → "Android Runtime" → "Open picker".
+///   - Settings → "Android" → "Open picker".
 ///   - Onboarding basics page → "Configure runtime" button.
 ///
 /// The handler unconditionally opens the picker as a STANDALONE
@@ -118,7 +102,7 @@ pub fn render_onboarding_section(tab_index: &mut isize, cx: &mut App) -> AnyElem
     {
         Some(RuntimeId::Chroot) => "Current: Kali chroot",
         Some(RuntimeId::Bootstrap) => "Current: Bootstrap",
-        Some(RuntimeId::ExternalTermux) => "Current: External Termux",
+        Some(RuntimeId::ExternalTermux) => "External Termux unavailable — choose another runtime",
         None => "Not configured yet",
     };
     let button_tab_index = *tab_index;
@@ -175,14 +159,6 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
     }
 
     let app_id = ReleaseChannel::global(cx).app_id();
-    // Sized to fit all three adapter cards on a fresh open without the
-    // user having to drag the window taller. The cards (with NotInstalled
-    // detail lines visible) come in around ~165px each in DP; three
-    // stacked plus header, title bar, gap_3 spacing, and p_6 container
-    // padding lands at ~700 DP minimum content. The 800 DP height gives
-    // headroom for theme variance and Samsung DeX's chrome insets.
-    // Width stays generous so the right-hand action button doesn't
-    // wrap into the body text on the longest tagline.
     let window_size = Size {
         width: px(640.0),
         height: px(800.0),
@@ -210,7 +186,7 @@ pub fn open_runtime_picker_window(_window: &mut Window, cx: &mut App) {
             window_min_size: Some(window_min_size),
             ..Default::default()
         },
-        |_, cx| cx.new(RuntimePicker::new),
+        |window, cx| cx.new(|cx| RuntimePicker::new(window, cx)),
     )
     .log_err();
 }
@@ -219,12 +195,16 @@ struct AdapterEntry {
     id: RuntimeId,
     tagline: &'static str,
     health: HealthStatus,
+    /// Which release is installed, for runtimes the picker installs.
+    installed: Option<String>,
 }
 
 pub struct RuntimePicker {
     title_bar: Option<Entity<PlatformTitleBar>>,
     focus_handle: FocusHandle,
     entries: Vec<AdapterEntry>,
+    configuration: Option<RuntimeFile>,
+    error: Option<String>,
     /// The currently active adapter (from disk). Marked with a
     /// "Current" badge in the UI; `Select` is a no-op if the user
     /// picks the same one.
@@ -235,90 +215,142 @@ pub struct RuntimePicker {
     /// them here + calls `cx.notify()` so the install button's
     /// label re-renders without the user having to interact.
     install_status: Option<String>,
-    /// True once an adapter selection has been saved to
-    /// `runtime.toml` and the user needs to fully close and reopen
-    /// the app for the change to take effect. Drives the inline
-    /// banner at the top of the picker. We don't attempt an in-app
-    /// restart (canonical Android patterns interact poorly with
-    /// Background Activity Launch rules and per-OEM task lifecycle
-    /// policies); the user closes via Recents and reopens from the
-    /// launcher.
-    restart_required: bool,
+    /// Why the user needs to fully close and reopen the app, once an
+    /// adapter selection has been saved to `runtime.toml` or Bootstrap
+    /// reinstalled. Drives the inline banner at the top of the picker.
+    /// We don't attempt an in-app restart (canonical Android patterns
+    /// interact poorly with Background Activity Launch rules and per-OEM
+    /// task lifecycle policies); the user closes via Recents and reopens
+    /// from the launcher.
+    restart_reason: Option<&'static str>,
+    /// The GitHub repository Install downloads the bootstrap from, so
+    /// another one can be used without rebuilding Zdroid. There is no
+    /// terminal to edit `zd-runtime.toml` with before the first install.
+    repository_field: Entity<InputField>,
+    /// Reinstall was tapped once. Reinstalling deletes every package
+    /// installed since, so it shows the field and a warning and waits for
+    /// a second tap.
+    confirming_reinstall: bool,
 }
 
 impl RuntimePicker {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title_bar = if !cfg!(target_os = "macos") {
             Some(cx.new(|cx| PlatformTitleBar::new("runtime-picker-title-bar", cx)))
         } else {
             None
         };
+        let (configuration, mut error) =
+            match RuntimeFile::load(std::path::Path::new(RUNTIME_TOML_PATH)) {
+                Ok(configuration) => (configuration, None),
+                Err(error) => (
+                    None,
+                    Some(format!("Could not read runtime settings: {error:#}")),
+                ),
+            };
+        let current = configuration.as_ref().map(|file| file.runtime.kind);
+        if current == Some(RuntimeId::ExternalTermux) {
+            error = Some(
+                "External Termux is unavailable. Select Bootstrap or Chroot to run local tools."
+                    .into(),
+            );
+        }
+        let bootstrap = configuration
+            .as_ref()
+            .and_then(|file| file.bootstrap.clone())
+            .unwrap_or_default();
+        // A reinstall keeps the installed release's repository unless the
+        // user changes it.
+        let release_repo = installed_release(&bootstrap.prefix)
+            .and_then(|(_, repository)| repository)
+            .unwrap_or(bootstrap.release_repo);
+        let repository_field = cx.new(|cx| {
+            let field = InputField::new(window, cx, DEFAULT_RELEASE_REPO).label("Download from");
+            field.set_text(&release_repo, window, cx);
+            field
+        });
         Self {
             title_bar,
             focus_handle: cx.focus_handle(),
-            entries: build_entries(),
-            current: detect_current(),
+            entries: build_entries(configuration.as_ref()),
+            configuration,
+            error,
+            current,
             install_status: None,
-            restart_required: false,
+            restart_reason: None,
+            repository_field,
+            confirming_reinstall: false,
         }
     }
 
-    /// Trigger an async bootstrap install. Drops the user into a
-    /// "downloading + extracting" state on the Bootstrap card while
-    /// the background task pulls the latest release zip from GitHub
-    /// and extracts to `$PREFIX`. Refreshes adapter health on
-    /// completion so the card flips from NotInstalled → Healthy
-    /// without the user having to re-open the picker.
+    /// Trigger an async bootstrap install or reinstall. Drops the user into
+    /// a "downloading + extracting" state on the Bootstrap card while the
+    /// background task downloads the zip from the repository in the
+    /// "Download from" field and replaces `$PREFIX` with it. Refreshes
+    /// adapter health on completion so the card updates without the user
+    /// having to re-open the picker.
     fn install_bootstrap(&mut self, cx: &mut Context<Self>) {
         if self.install_status.is_some() {
             return; // already in progress
         }
+        let input = self.repository_field.read(cx).text(cx);
+        let release_repo = if input.trim().is_empty() {
+            Some(DEFAULT_RELEASE_REPO.to_owned())
+        } else {
+            release_repo_from_input(&input)
+        };
+        let error = release_repo
+            .is_none()
+            .then_some("Enter a GitHub repository as owner/repo or its github.com URL.");
+        self.repository_field
+            .update(cx, |field, cx| field.set_error(error, cx));
+        let Some(release_repo) = release_repo else {
+            return;
+        };
+        let reinstall = std::mem::take(&mut self.confirming_reinstall);
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<String>();
+        let mut config = self
+            .configuration
+            .as_ref()
+            .and_then(|file| file.bootstrap.clone())
+            .unwrap_or_default();
+        config.release_repo = release_repo;
         self.install_status = Some("Starting install".into());
+        self.error = None;
         cx.notify();
 
-        // Background: run the actual install. Blocks on ureq +
-        // zip extract. ProgressSink pushes status strings into the
-        // channel; the foreground poller below picks them up.
-        cx.background_executor()
-            .spawn(async move {
-                let config = default_bootstrap_config();
-                let adapter = match adapters::bootstrap::BootstrapAdapter::new(config) {
-                    Ok(a) => a,
-                    Err(err) => {
-                        log::error!("zdroid_runtime_picker: BootstrapAdapter::new failed: {err:#}");
-                        let _ = tx.unbounded_send(format!("Failed: {err:#}"));
-                        return;
-                    }
-                };
-                let mut sink = ChannelProgressSink { tx: tx.clone() };
-                if let Err(err) = adapter.install(&mut sink) {
-                    log::error!("zdroid_runtime_picker: BootstrapAdapter::install failed: {err:#}");
-                    let _ = tx.unbounded_send(format!("Install failed: {err:#}"));
-                }
-                // tx + sink drop here → channel closes → foreground exits.
-            })
-            .detach();
-
-        // Foreground poll: drain the channel, write each message into
-        // self.install_status + cx.notify so the card label updates.
-        // When the channel closes (background task done), refresh the
-        // adapter entries and clear the in-progress state.
+        let install = cx.background_spawn(async move {
+            let adapter = adapters::bootstrap::BootstrapAdapter::new(config)?;
+            adapter.install(&mut ChannelProgressSink { tx })
+        });
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
-            while let Some(msg) = rx.next().await {
-                let _ = this.update(cx, |this, cx| {
-                    this.install_status = Some(msg);
+            while let Some(message) = rx.next().await {
+                this.update(cx, |this, cx| {
+                    this.install_status = Some(message);
                     cx.notify();
-                });
+                })?;
             }
-            let _ = this.update(cx, |this, cx| {
+            let result = install.await;
+            if let Err(error) = &result {
+                log::error!("zdroid_runtime_picker: install failed: {error:#}");
+            }
+            this.update(cx, |this, cx| {
                 this.install_status = None;
-                this.entries = build_entries();
+                if reinstall && result.is_ok() {
+                    // The terminal, language servers and agents still run
+                    // the deleted userland's programs.
+                    this.restart_reason = Some("Bootstrap reinstalled.");
+                }
+                this.error = result
+                    .err()
+                    .map(|error| format!("Install failed: {error:#}"));
+                this.entries = build_entries(this.configuration.as_ref());
                 cx.notify();
-            });
+            })?;
+            anyhow::Ok(())
         })
-        .detach();
+        .detach_and_log_err(cx);
     }
 
     fn select(&mut self, id: RuntimeId, _window: &mut Window, cx: &mut Context<Self>) {
@@ -328,9 +360,20 @@ impl RuntimePicker {
         }
 
         let path = std::path::PathBuf::from(RUNTIME_TOML_PATH);
-        let file = RuntimeFile::with_defaults(id);
-        match file.save(&path) {
-            Ok(()) => {
+        let result = (|| {
+            // An unreadable file is replaced: the picker is how users repair it.
+            let mut file = RuntimeFile::load(&path)
+                .log_err()
+                .flatten()
+                .unwrap_or_else(|| RuntimeFile::with_defaults(id));
+            file.select(id)?;
+            file.save(&path)?;
+            anyhow::Ok(file)
+        })();
+        match result {
+            Ok(file) => {
+                self.configuration = Some(file);
+                self.error = None;
                 log::info!(
                     "zdroid_runtime_picker: selected {:?} -> wrote {}; restart Zdroid to apply",
                     id,
@@ -354,7 +397,7 @@ impl RuntimePicker {
                 // appTasks sweep) all interact poorly with Android's
                 // evolving Background Activity Launch rules and per-
                 // OEM task lifecycle policies.
-                self.restart_required = true;
+                self.restart_reason = Some("Runtime adapter switched.");
             }
             Err(err) => {
                 log::error!(
@@ -362,6 +405,8 @@ impl RuntimePicker {
                     path.display(),
                     err
                 );
+                self.error = Some(format!("Could not save runtime settings: {err:#}"));
+                cx.notify();
             }
         }
     }
@@ -386,11 +431,19 @@ impl Render for RuntimePicker {
             .iter()
             .enumerate()
             .map(|(idx, entry)| {
-                render_card(idx, entry, self.current, self.install_status.as_deref(), cx)
+                render_card(
+                    idx,
+                    entry,
+                    self.current,
+                    self.install_status.as_deref(),
+                    &self.repository_field,
+                    self.confirming_reinstall,
+                    cx,
+                )
             })
             .collect();
 
-        let banner = self.restart_required.then(|| {
+        let banner = self.restart_reason.map(|reason| {
             let border = cx.theme().colors().border;
             let banner_bg = cx.theme().colors().element_background;
             let warning = cx.theme().status().warning;
@@ -418,7 +471,7 @@ impl Render for RuntimePicker {
                                 .color(Color::Default),
                         )
                         .child(
-                            Label::new("Runtime adapter switched.")
+                            Label::new(reason)
                                 .size(LabelSize::Small)
                                 .color(Color::Muted),
                         ),
@@ -447,6 +500,9 @@ impl Render for RuntimePicker {
                     ),
             )
             .when_some(banner, |this, banner| this.child(banner))
+            .when_some(self.error.as_ref(), |this, error| {
+                this.child(Label::new(Arc::<str>::from(error.as_str())).color(Color::Error))
+            })
             .child(v_flex().gap_3().children(cards));
 
         client_side_decorations(
@@ -466,6 +522,8 @@ fn render_card(
     entry: &AdapterEntry,
     current: Option<RuntimeId>,
     install_status: Option<&str>,
+    repository_field: &Entity<InputField>,
+    confirming_reinstall: bool,
     cx: &mut Context<RuntimePicker>,
 ) -> AnyElement {
     let theme_colors = cx.theme().colors();
@@ -487,6 +545,10 @@ fn render_card(
         HealthStatus::Misconfigured { reason } => Some(reason.clone()),
         HealthStatus::Failed { error } => Some(error.clone()),
     };
+    let bootstrap = id == RuntimeId::Bootstrap;
+    let not_installed = matches!(entry.health, HealthStatus::NotInstalled { .. });
+    let show_repository_field =
+        bootstrap && install_status.is_none() && (not_installed || confirming_reinstall);
 
     h_flex()
         .id(("adapter-card", idx))
@@ -554,15 +616,36 @@ fn render_card(
                             .size(LabelSize::XSmall)
                             .color(Color::Muted),
                     )
+                })
+                .when_some(entry.installed.clone(), |this, installed| {
+                    this.child(
+                        Label::new(installed)
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+                .when(show_repository_field, |this| {
+                    this.child(repository_field.clone()).child(
+                        Label::new(
+                            "A GitHub repository whose releases include bootstrap-aarch64.zip. \
+                             Zdroid installs its latest release.",
+                        )
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                    )
+                })
+                .when(bootstrap && confirming_reinstall, |this| {
+                    this.child(
+                        Label::new(
+                            "Reinstalling deletes the runtime, and every package installed \
+                             with pkg or npm since. Your home folder and runtime choice stay.",
+                        )
+                        .size(LabelSize::XSmall)
+                        .color(Color::Warning),
+                    )
                 }),
         )
-        // Cascade priority: install actions WIN over the "Selected"
-        // decorative chip, even when the unhealthy adapter is the
-        // user's current runtime.toml selection. If Bootstrap is
-        // selected but its $PREFIX is empty (Phase 6 fresh-install
-        // state), the user needs the Install button — showing a
-        // "Selected" chip there would leave them stuck without a way
-        // to trigger the download.
+        // An unhealthy selected runtime still needs its setup action.
         .child(
             if id == RuntimeId::Chroot && !matches!(entry.health, HealthStatus::Healthy) {
                 // Chroot adapter requires the zdroid-spawnd Magisk module
@@ -579,118 +662,121 @@ fn render_card(
                         cx.open_url(SPAWND_RELEASE_URL);
                     }))
                     .into_any_element()
-            } else if id == RuntimeId::Bootstrap
-                && matches!(entry.health, HealthStatus::NotInstalled { .. })
-            {
-                // Bootstrap adapter has its 240 MB userland in a separate
-                // GitHub repo (`<release_repo>`); Phase 6 of the Termux-
-                // divestment refactor stopped bundling it in the APK and
-                // moved download to `BootstrapAdapter::install`. Tap
-                // "Install" to kick off the async download + extract; the
-                // button label switches to the live `install_status` for
-                // the duration. After completion the card flips to
-                // Healthy → normal Select.
-                if let Some(status) = install_status {
-                    Button::new(("installing", idx), status.to_string())
-                        .disabled(true)
-                        .into_any_element()
-                } else {
-                    Button::new(("install", idx), "Install")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.install_bootstrap(cx);
-                        }))
-                        .into_any_element()
-                }
-            } else if is_current {
-                // Healthy AND the active selection — decorative confirm.
-                // The header already shows an "Active" Chip; this right-
-                // hand Chip is design-language parity.
-                Chip::new("Selected")
-                    .icon(IconName::Check)
-                    .label_color(Color::Accent)
+            } else if let Some(status) = install_status.filter(|_| bootstrap) {
+                Button::new(("installing", idx), status.to_string())
+                    .disabled(true)
                     .into_any_element()
-            } else {
-                Button::new(("select", idx), "Select")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select(id, window, cx);
+            } else if bootstrap && not_installed {
+                Button::new(("install", idx), "Install")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.install_bootstrap(cx);
                     }))
                     .into_any_element()
+            } else if bootstrap && confirming_reinstall {
+                v_flex()
+                    .gap_2()
+                    .items_end()
+                    .child(
+                        Button::new(("confirm-reinstall", idx), "Delete and reinstall")
+                            .style(ButtonStyle::Tinted(TintColor::Error))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.install_bootstrap(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(("cancel-reinstall", idx), "Cancel").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.confirming_reinstall = false;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .into_any_element()
+            } else if bootstrap {
+                v_flex()
+                    .gap_2()
+                    .items_end()
+                    .child(select_or_selected(idx, entry, is_current, cx))
+                    .child(
+                        Button::new(("reinstall", idx), "Reinstall").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.confirming_reinstall = true;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .into_any_element()
+            } else {
+                select_or_selected(idx, entry, is_current, cx)
             },
         )
         .into_any_element()
 }
 
-/// Build the per-adapter health snapshot at modal-open time. Each
-/// adapter is constructed with on-device defaults so the health probe
-/// can run; the user's eventual `runtime.toml` overrides these when
-/// the adapter is actually selected.
-fn build_entries() -> Vec<AdapterEntry> {
-    let chroot_health = adapters::chroot::ChrootAdapter::new(default_chroot_config())
+fn select_or_selected(
+    idx: usize,
+    entry: &AdapterEntry,
+    is_current: bool,
+    cx: &mut Context<RuntimePicker>,
+) -> AnyElement {
+    let id = entry.id;
+    if is_current {
+        // The active selection — decorative confirm. The header
+        // already shows an "Active" Chip; this right-hand Chip is
+        // design-language parity.
+        Chip::new("Selected")
+            .icon(IconName::Check)
+            .label_color(Color::Accent)
+            .into_any_element()
+    } else {
+        Button::new(("select", idx), "Select")
+            .disabled(!entry.health.is_healthy())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select(id, window, cx);
+            }))
+            .into_any_element()
+    }
+}
+
+fn build_entries(configuration: Option<&RuntimeFile>) -> Vec<AdapterEntry> {
+    let chroot_health = adapters::chroot::ChrootAdapter::new(
+        configuration
+            .and_then(|file| file.chroot.clone())
+            .unwrap_or_default(),
+    )
+    .map(|a| a.health_check())
+    .unwrap_or_else(|err| HealthStatus::Failed {
+        error: err.to_string(),
+    });
+    let bootstrap_config = configuration
+        .and_then(|file| file.bootstrap.clone())
+        .unwrap_or_default();
+    let bootstrap_installed =
+        installed_release(&bootstrap_config.prefix).map(|(tag, repository)| match repository {
+            Some(repository) => format!("Installed: {tag} from {repository}"),
+            None => format!("Installed: {tag}"),
+        });
+    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(bootstrap_config)
         .map(|a| a.health_check())
         .unwrap_or_else(|err| HealthStatus::Failed {
             error: err.to_string(),
         });
-    let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(default_bootstrap_config())
-        .map(|a| a.health_check())
-        .unwrap_or_else(|err| HealthStatus::Failed {
-            error: err.to_string(),
-        });
-    let termux_health =
-        adapters::external_termux::ExternalTermuxAdapter::new(default_termux_config())
-            .map(|a| a.health_check())
-            .unwrap_or_else(|err| HealthStatus::Failed {
-                error: err.to_string(),
-            });
+    // A cleared prefix can keep its version file, which is a dotfile.
+    let bootstrap_installed = bootstrap_installed
+        .filter(|_| !matches!(bootstrap_health, HealthStatus::NotInstalled { .. }));
 
     vec![
         AdapterEntry {
             id: RuntimeId::Chroot,
             tagline: "Fastest. Routes through the persistent zd-spawnd daemon. Requires Magisk root + the zdroid-spawnd module.",
             health: chroot_health,
+            installed: None,
         },
         AdapterEntry {
             id: RuntimeId::Bootstrap,
             tagline: "Self-contained Termux-flavored userland inside Zdroid's sandbox. Bare or proot-wrapped. No root, no external app.",
             health: bootstrap_health,
-        },
-        AdapterEntry {
-            id: RuntimeId::ExternalTermux,
-            tagline: "Bridges to the user's installed Termux app via Intent IPC. Slowest path; uses the user's existing setup.",
-            health: termux_health,
+            installed: bootstrap_installed,
         },
     ]
-}
-
-fn default_chroot_config() -> ChrootConfig {
-    ChrootConfig {
-        root: PathBuf::from("/data/local/nhsystem/kali-arm64"),
-        home_bind: PathBuf::from("/zed"),
-        spawnd_socket: PathBuf::from("/data/data/com.zdroid/files/run/zd-spawn"),
-        su_path: PathBuf::from("/product/bin/su"),
-    }
-}
-
-fn default_bootstrap_config() -> BootstrapConfig {
-    BootstrapConfig {
-        prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
-        proot_rootfs: None,
-        release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
-    }
-}
-
-fn default_termux_config() -> ExternalTermuxConfig {
-    ExternalTermuxConfig {
-        package: "com.termux".into(),
-        prefix: PathBuf::from("/data/data/com.termux/files/usr"),
-    }
-}
-
-/// Read the active adapter id from `runtime.toml`. Returns `None` if
-/// the file is missing (first-launch state) or unparseable; the picker
-/// just doesn't render a "Current" badge in those cases.
-fn detect_current() -> Option<RuntimeId> {
-    RuntimeFile::load(std::path::Path::new(RUNTIME_TOML_PATH))
-        .ok()
-        .flatten()
-        .map(|file| file.runtime.kind)
 }

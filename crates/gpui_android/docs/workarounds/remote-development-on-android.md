@@ -80,7 +80,7 @@ function, so they reached the remote too. Glibc on the remote can't dlopen
 breaking remote `~/.ssh/`, `~/.bashrc`, command lookup and subprocess
 scratch space.
 
-Fix: the Android variables are added by `insert_android_terminal_env`,
+Fix: the Android variables are added by `zdroid_hooks::insert_terminal_env`,
 which `TerminalBuilder::new` calls for the local pty only (for a remote
 terminal that's the local `ssh` process, which needs them). Earlier
 versions instead filtered a list of names in `build_command_posix`, which
@@ -159,8 +159,8 @@ whatever ReleaseChannel inferred, so the app data dir stays put.
 
 ## What the upstream Zed code change does
 
-`crates/terminal/src/terminal.rs` gains an Android-only
-`insert_android_terminal_env`, called from `TerminalBuilder::new` right
+`crates/terminal/src/terminal.rs` gains an Android-only call to
+`zdroid_hooks::insert_terminal_env` in `TerminalBuilder::new`, right
 after upstream's `insert_zed_terminal_env`. Upstream's function, which
 also builds the environment sent to SSH remotes, is unchanged.
 
@@ -210,5 +210,5 @@ line (the Android variables reached `insert_zed_terminal_env` again) or from the
 - [phase-l10-remote-development-scope.md](../phase-l10-remote-development-scope.md)
   — original scope doc; L10a (bootstrap rebuild for openssh) is the
   permanent fix for symptom (E)
-- [termux-bootstrap-rebuild.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/termux-bootstrap-rebuild.md) — the
+- [zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#whats-in-it) — the
   bootstrap-rebuild process L10a feeds into

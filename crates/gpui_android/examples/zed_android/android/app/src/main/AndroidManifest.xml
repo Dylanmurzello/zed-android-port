@@ -85,6 +85,9 @@
           documentLaunchMode="always" implies FLAG_ACTIVITY_NEW_DOCUMENT |
           FLAG_ACTIVITY_MULTIPLE_TASK, so each open is a fresh task with its
           own Recents card and (in freeform mode) its own OS-chromed window.
+          Document tasks stay in Recents after their Activity finishes unless
+          autoRemoveFromRecents is set: windows closed with Back or the OS
+          chrome X otherwise left empty cards in One UI's Recents.
           taskAffinity differentiates from MainActivity's task. exported=false
           because only our own Rust code launches it (via JNI Intent).
         -->
@@ -93,6 +96,7 @@
             android:exported="false"
             android:resizeableActivity="true"
             android:documentLaunchMode="always"
+            android:autoRemoveFromRecents="true"
             android:taskAffinity="com.zdroid.extra"
             android:windowLayoutInDisplayCutoutMode="always"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen|grammaticalGender"

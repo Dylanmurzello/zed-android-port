@@ -59,6 +59,9 @@ libc.workspace = true
 nix = { workspace = true, features = ["resource", "user"] }
 tempfile.workspace = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+zdroid_hooks.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2.workspace = true
 which.workspace = true

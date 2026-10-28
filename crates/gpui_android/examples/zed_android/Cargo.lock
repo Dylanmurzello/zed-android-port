@@ -5255,7 +5255,6 @@ dependencies = [
  "ureq",
  "util",
  "uuid",
- "zip 2.6.1",
 ]
 
 [[package]]
@@ -5294,6 +5293,7 @@ dependencies = [
  "anyhow",
  "log",
  "which",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -8062,6 +8062,7 @@ dependencies = [
  "util",
  "watch",
  "which",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -10066,6 +10067,7 @@ dependencies = [
  "wax",
  "which",
  "worktree",
+ "zdroid_hooks",
  "zed_credentials_provider",
  "zeroize",
  "zlog",
@@ -12901,6 +12903,7 @@ dependencies = [
  "util",
  "vte",
  "windows 0.62.2",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -14059,6 +14062,7 @@ dependencies = [
  "walkdir",
  "which",
  "windows 0.62.2",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -16116,6 +16120,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdroid_hooks"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "zdroid_runtime"
 version = "0.1.0"
 dependencies = [
@@ -16127,7 +16138,6 @@ dependencies = [
  "sha2",
  "toml 0.9.8",
  "ureq",
- "util",
  "zip 2.6.1",
 ]
 
@@ -16228,6 +16238,7 @@ dependencies = [
  "client",
  "collections",
  "command_palette",
+ "copilot_chat",
  "db",
  "debug_adapter_extension",
  "diagnostics",
@@ -16257,6 +16268,7 @@ dependencies = [
  "language",
  "language_extension",
  "language_model",
+ "language_models",
  "language_onboarding",
  "language_selector",
  "language_tools",
@@ -16313,6 +16325,7 @@ dependencies = [
  "theme_settings",
  "toolchain_selector",
  "ui",
+ "ui_input",
  "ui_prompt",
  "url",
  "util",
@@ -16320,8 +16333,10 @@ dependencies = [
  "vim",
  "vim_mode_setting",
  "watch",
+ "web_search",
  "which_key",
  "workspace",
+ "zdroid_hooks",
  "zdroid_runtime",
  "zed_actions",
  "zlog",
