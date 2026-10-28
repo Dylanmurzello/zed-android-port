@@ -28,6 +28,9 @@ pub const VERSION_FILE: &str = ".rootfs-version";
 /// Dev toggle: when this file exists the loader appends diagnostics to
 /// `<data>/files/zd-engine.log`.
 pub const LOG_TOGGLE_FILE: &str = "etc/zd-engine-log";
+/// The node name `uname` reports in the guest; the installer seeds the
+/// same into `etc/hostname`.
+pub const HOSTNAME: &str = "zdroid";
 
 pub struct RootfsAdapter {
     config: RootfsConfig,
@@ -106,6 +109,7 @@ impl RootfsAdapter {
             ),
             (engine_env::BINDS.to_string(), OsString::from(self.bind_spec())),
             (engine_env::FAKE_ROOT.to_string(), OsString::from("1")),
+            (engine_env::HOSTNAME.to_string(), OsString::from(HOSTNAME)),
             (engine_env::CLOSE_FDS.to_string(), OsString::from("1")),
             (
                 engine_env::GUEST_ENV.to_string(),

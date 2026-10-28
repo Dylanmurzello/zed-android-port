@@ -20,7 +20,7 @@ use zd_engine_core::sysno::address_arg;
 use zd_engine_core::sysno::ptrace as ptrace_traps;
 use zd_engine_core::sysno::sockopt as sockopt_traps;
 use zd_engine_core::sysno::{
-    MAX_TRAPPED, PROBE_ACK, PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE, TRAP_TABLE_FAKE_ROOT,
+    MAX_TRAPPED, PROBE_ACK, PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE, TRAP_TABLE_FAKE_ROOT, TRAP_TABLE_UNAME,
     clone as clone_traps, ioctl, is_engine_tag, name as syscall_name, nr, socket as socket_traps,
 };
 use zd_engine_core::translate::{ProcExe, Translated, Translator};
@@ -176,6 +176,12 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
             count += 1;
         }
     }
+    if !config::get().hostname.is_empty() || !config::get().uname_release.is_empty() {
+        for &number in TRAP_TABLE_UNAME {
+            trapped[count] = number;
+            count += 1;
+        }
+    }
     let program = bpf::build(&FilterSpec {
         trapped: &trapped[..count],
         arg_traps: &[
@@ -311,6 +317,32 @@ fn compat_trap(number: u32, regs: &mut [u64; 31]) {
             sys::neg_errno(sys::ENOSYS)
         }
     };
+}
+
+/// `uname(buf)`: the kernel's answer with the configured node name and
+/// release written over its fields (`struct new_utsname`, six fields of
+/// 65 bytes).
+fn uname(regs: &mut [u64; 31]) {
+    let buffer = regs[0] as *mut u8;
+    regs[0] = issue(nr::UNAME, &args_of(regs));
+    if regs[0] != 0 {
+        return;
+    }
+    let config = config::get();
+    for (field, value) in [(1usize, &config.hostname), (2usize, &config.uname_release)] {
+        if value.is_empty() {
+            continue;
+        }
+        let bytes = value.as_bytes();
+        let len = bytes.len().min(64);
+        // SAFETY: the guest's utsname buffer, as handed to the kernel,
+        // which just filled it.
+        unsafe {
+            let field = buffer.add(field * 65);
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), field, len);
+            core::ptr::write_bytes(field.add(len), 0, 65 - len);
+        }
+    }
 }
 
 /// The legacy `accept` answered as `accept4` with no flags, the peer
@@ -625,6 +657,7 @@ fn dispatch_with(
             regs[0] = if result == sys::neg_errno(sys::EPERM) { 0 } else { result };
         }
         nr::CAPSET => regs[0] = 0,
+        nr::UNAME => uname(regs),
         _ => {
             if !identity_syscall(number, regs) {
                 regs[0] = sys::neg_errno(sys::ENOSYS);

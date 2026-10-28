@@ -61,6 +61,11 @@ pub mod env {
     pub const FAKE_ROOT: &str = "ZD_FAKE_ROOT";
     /// Optional file the loader appends diagnostics to.
     pub const LOG: &str = "ZD_LOG";
+    /// What `uname` reports as the node name when set (the kernel says
+    /// `localhost` for an app); `gethostname` reads the same field.
+    pub const HOSTNAME: &str = "ZD_HOSTNAME";
+    /// What `uname` reports as the kernel release when set.
+    pub const UNAME_RELEASE: &str = "ZD_UNAME_RELEASE";
     /// Guest-only environment overrides as `KEY=VALUE;KEY=VALUE`, the
     /// editor's view of `HOME`, `PATH` and friends translated into the
     /// guest's at the boundary. Applied by the loader where present (the

@@ -136,12 +136,22 @@ impl Level {
 }
 
 /// Persistent engine variables, in the order they are re-injected.
-pub const ENGINE_KEYS: [&str; 4] = [env::ROOTFS, env::BINDS, env::FAKE_ROOT, env::LOG];
+pub const ENGINE_KEYS: [&str; 6] = [
+    env::ROOTFS,
+    env::BINDS,
+    env::FAKE_ROOT,
+    env::LOG,
+    env::HOSTNAME,
+    env::UNAME_RELEASE,
+];
 
 pub struct Config {
     pub rootfs: Buf,
     pub binds: Buf,
     pub log: Buf,
+    /// `uname` fields to present when set; see `env::HOSTNAME`.
+    pub hostname: Buf,
+    pub uname_release: Buf,
     /// Full `KEY=VALUE` strings of [`ENGINE_KEYS`] as received, for
     /// re-injection into children that dropped them.
     pub engine_entries: [Buf; ENGINE_KEYS.len()],
@@ -184,6 +194,8 @@ impl Config {
     pub const fn new() -> Self {
         Self {
             rootfs: Buf::new(),
+            hostname: Buf::new(),
+            uname_release: Buf::new(),
             binds: Buf::new(),
             log: Buf::new(),
             engine_entries: [const { Buf::new() }; ENGINE_KEYS.len()],
@@ -267,6 +279,10 @@ pub fn init(
             config.binds.set(value)?;
         } else if let Some(value) = env_value(entry, env::LOG.as_bytes()) {
             config.log.set(value)?;
+        } else if let Some(value) = env_value(entry, env::HOSTNAME.as_bytes()) {
+            config.hostname.set(value)?;
+        } else if let Some(value) = env_value(entry, env::UNAME_RELEASE.as_bytes()) {
+            config.uname_release.set(value)?;
         } else if let Some(value) = env_value(entry, env::FAKE_ROOT.as_bytes()) {
             config.fake_root = value == b"1";
         } else if let Some(value) = env_value(entry, b"PATH") {

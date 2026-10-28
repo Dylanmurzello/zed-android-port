@@ -300,8 +300,12 @@ pub mod clone {
     pub const PASSED_SIZES: &[u64] = &[CLONE_ARGS_SIZE_VER0];
 }
 
+/// Trapped only when a node name or release is configured; an unconfigured
+/// engine leaves `uname` alone.
+pub const TRAP_TABLE_UNAME: &[u32] = &[nr::UNAME];
+
 /// Upper bound on the trapped set, for the loader's stack array.
-pub const MAX_TRAPPED: usize = TRAP_TABLE.len() + TRAP_TABLE_FAKE_ROOT.len();
+pub const MAX_TRAPPED: usize = TRAP_TABLE.len() + TRAP_TABLE_FAKE_ROOT.len() + TRAP_TABLE_UNAME.len();
 
 /// `SECCOMP_RET_DATA` values carried in `si_errno` of our SIGSYS. The
 /// high byte identifies the engine; Android's own filter uses data 0.
