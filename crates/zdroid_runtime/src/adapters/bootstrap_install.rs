@@ -23,7 +23,7 @@ use crate::health::ProgressSink;
 /// The release of [`DEFAULT_RELEASE_REPO`] this version of Zdroid installs,
 /// and its SHA-256. The download is checked against this value, built into
 /// the APK, instead of the digest GitHub reports for the same file.
-const PINNED_TAG: &str = "v2026.05.06-r5";
+pub const PINNED_TAG: &str = "v2026.05.06-r5";
 const PINNED_SHA256: &str = "2d5813ea1610f72d6c9af175c191bd8a67977cdf2e01758780d5be0ab57a3711";
 
 /// Preferred asset name. Also used when GitHub's release metadata is
@@ -49,8 +49,7 @@ const SYMLINKS_ENTRY: &str = "SYMLINKS.txt";
 const SYMLINKS_DELIM: &str = "←";
 
 /// File at `$PREFIX/.bootstrap-version` recording which release tag is
-/// currently extracted. Re-extracts only fire when this doesn't match
-/// the latest release tag at download time.
+/// currently extracted.
 const VERSION_FILE: &str = ".bootstrap-version";
 
 /// File at `$PREFIX/.bootstrap-repository` recording which repository that
@@ -83,11 +82,10 @@ fn http_agent(redirects: u32) -> ureq::Agent {
 /// ureq's default.
 const MAX_REDIRECTS: u32 = 5;
 
-/// Download the release ZIP and replace `<prefix>` after extraction.
-/// Idempotent against `<prefix>/.bootstrap-version` — if the on-disk
-/// sentinel matches the tag and the prefix still has its shell, the
-/// function returns Ok without touching the network or filesystem beyond a
-/// tag resolve.
+/// Download the release ZIP and replace `<prefix>` after extraction, which
+/// both installs and reinstalls: everything in the prefix except
+/// [`PRESERVED_PREFIX_FILES`] is replaced, packages installed since
+/// included.
 pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSink) -> Result<()> {
     if INSTALL_RUNNING.swap(true, Ordering::AcqRel) {
         bail!("a bootstrap install is already running");
@@ -105,17 +103,6 @@ pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSin
     log::info!("bootstrap_install: release tag = {tag_name}");
 
     let version_file = prefix.join(VERSION_FILE);
-    // The sentinel is a dotfile, so clearing the prefix with `rm -rf *`
-    // leaves it behind.
-    if let Ok(existing) = fs::read_to_string(&version_file)
-        && existing.trim() == tag_name
-        && prefix.join("bin/bash").is_file()
-    {
-        log::info!("bootstrap_install: $PREFIX already at {tag_name}, skipping extract");
-        progress.step(&format!("Bootstrap {tag_name} already installed"));
-        return Ok(());
-    }
-
     progress.step(&format!("Downloading bootstrap {tag_name}"));
     let zip_bytes = if pinned {
         download_pinned_asset(release_repo, &tag_name)
