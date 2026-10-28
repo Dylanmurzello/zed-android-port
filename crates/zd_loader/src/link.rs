@@ -9,6 +9,12 @@
 //! becomes a copy with the same content, mode and timestamps and its own
 //! inode. Writes through one name then no longer show through the other,
 //! which none of those users rely on.
+//!
+//! A socket cannot be copied: its name is the listener. OpenSSH publishes
+//! its ControlMaster socket by binding a temporary name and hard-linking
+//! it into place, then unlinking the temporary name, so for a socket the
+//! link becomes a rename that refuses to replace an existing target, which
+//! is the same atomic publish with the same EEXIST on a race.
 
 use zd_engine_core::path::{MAX_PATH, Writer};
 
@@ -104,6 +110,9 @@ fn copy(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8, flag
         match mode & sys::S_IFMT {
             sys::S_IFLNK => return copy_symlink(old_dirfd, old, new_dirfd, new),
             sys::S_IFIFO => return sys::mknodat(new_dirfd, new, sys::S_IFIFO | (mode & 0o7777), 0),
+            sys::S_IFSOCK => {
+                return sys::renameat2(old_dirfd, old, new_dirfd, new, sys::RENAME_NOREPLACE);
+            }
             sys::S_IFREG => {}
             _ => return Err(sys::EPERM),
         }

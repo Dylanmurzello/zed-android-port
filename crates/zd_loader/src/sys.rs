@@ -22,6 +22,7 @@ pub const AT_SYMLINK_FOLLOW: usize = 0x400;
 pub const O_NOFOLLOW: usize = 0o400000;
 pub const S_IFLNK: u32 = 0o120000;
 pub const S_IFIFO: u32 = 0o010000;
+pub const S_IFSOCK: u32 = 0o140000;
 pub const X_OK: usize = 1;
 
 pub const S_IFMT: u32 = 0o170000;
@@ -284,6 +285,15 @@ pub fn symlinkat(target: *const u8, dirfd: isize, path: *const u8) -> Result<(),
 pub fn mknodat(dirfd: isize, path: *const u8, mode: u32, dev: usize) -> Result<(), i32> {
     check(unsafe { syscall6(nr::MKNODAT, dirfd as usize, path as usize, mode as usize, dev, 0, 0) })
         .map(|_| ())
+}
+
+pub const RENAME_NOREPLACE: usize = 1;
+
+pub fn renameat2(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8, flags: usize) -> Result<(), i32> {
+    check(unsafe {
+        syscall6(nr::RENAMEAT2, old_dirfd as usize, old as usize, new_dirfd as usize, new as usize, flags, 0)
+    })
+    .map(|_| ())
 }
 
 pub fn faccessat(dirfd: isize, path: *const u8, mode: usize) -> Result<(), i32> {

@@ -90,9 +90,11 @@ pub mod nr {
     pub const GETTID: u32 = 178;
     pub const SOCKET: u32 = 198;
     pub const BIND: u32 = 200;
+    pub const ACCEPT: u32 = 202;
     pub const CONNECT: u32 = 203;
     pub const SENDTO: u32 = 206;
     pub const RECVFROM: u32 = 207;
+    pub const GETSOCKOPT: u32 = 209;
     pub const MUNMAP: u32 = 215;
     pub const CLONE: u32 = 220;
     pub const EXECVE: u32 = 221;
@@ -101,6 +103,7 @@ pub mod nr {
     pub const SWAPOFF: u32 = 225;
     pub const MPROTECT: u32 = 226;
     pub const RT_TGSIGQUEUEINFO: u32 = 240;
+    pub const ACCEPT4: u32 = 242;
     pub const NAME_TO_HANDLE_AT: u32 = 264;
     pub const CLOCK_ADJTIME: u32 = 266;
     pub const SETNS: u32 = 268;
@@ -262,6 +265,14 @@ pub mod ptrace {
     pub const TRAPPED_REQUESTS: &[u64] = &[TRACEME];
 }
 
+/// `getsockopt` names the filter traps, so the handler can rewrite the
+/// peer credentials the kernel reports under fake root.
+pub mod sockopt {
+    pub const SOL_SOCKET: u64 = 1;
+    pub const SO_PEERCRED: u64 = 17;
+    pub const TRAPPED_NAMES: &[u64] = &[SO_PEERCRED];
+}
+
 pub mod clone {
     pub const CLONE_CLEAR_SIGHAND: u64 = 0x1_0000_0000;
     pub const CLONE_ARGS_SIZE_VER0: u64 = 64;
@@ -371,6 +382,9 @@ pub fn name(number: u32) -> Option<&'static str> {
         nr::GETEGID => "getegid",
         nr::SOCKET => "socket",
         nr::BIND => "bind",
+        nr::ACCEPT => "accept",
+        nr::ACCEPT4 => "accept4",
+        nr::GETSOCKOPT => "getsockopt",
         nr::CONNECT => "connect",
         nr::SENDTO => "sendto",
         nr::RECVFROM => "recvfrom",

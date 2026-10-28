@@ -16,6 +16,7 @@ use zd_engine_core::compat::{self, Response};
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
 use zd_engine_core::stack::AT_NULL;
 use zd_engine_core::sysno::ptrace as ptrace_traps;
+use zd_engine_core::sysno::sockopt as sockopt_traps;
 use zd_engine_core::sysno::{
     MAX_TRAPPED, PROBE_ACK, PROBE_MAGIC, TAG_PATH, TAG_PROBE, TRAP_TABLE, TRAP_TABLE_FAKE_ROOT,
     clone as clone_traps, ioctl, is_engine_tag, name as syscall_name, nr, socket as socket_traps,
@@ -188,6 +189,12 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
                 values: ptrace_traps::TRAPPED_REQUESTS,
                 unless: false,
             },
+            ArgTrap {
+                nr: nr::GETSOCKOPT,
+                arg: 2,
+                values: sockopt_traps::TRAPPED_NAMES,
+                unless: false,
+            },
         ],
         window_start: LOADER_IMAGE_BASE,
         window_end: LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE,
@@ -272,6 +279,10 @@ fn compat_trap(number: u32, regs: &mut [u64; 31]) {
         Response::Errno(errno) => sys::neg_errno(errno),
         Response::Success => 0,
         Response::Chroot => chroot(regs),
+        Response::Accept4 => issue(
+            nr::ACCEPT4,
+            &[regs[0] as usize, regs[1] as usize, regs[2] as usize, 0, 0, 0],
+        ),
         Response::Unknown => {
             log_unknown(number);
             sys::neg_errno(sys::ENOSYS)
@@ -480,6 +491,7 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) 
         nr::SOCKET => socket(regs),
         nr::CLONE3 => clone3(regs, pc),
         nr::PTRACE => traceme(regs),
+        nr::GETSOCKOPT => peer_credentials(regs),
         nr::KILL | nr::TKILL | nr::TGKILL | nr::RT_SIGQUEUEINFO | nr::RT_TGSIGQUEUEINFO => {
             self_signal(number, regs)
         }
@@ -790,6 +802,38 @@ fn fixup_stat(result: u64, buffer: *mut u8, statx: bool) {
         if extra != 0 {
             let nlink = buffer.add(nlink_offset) as *mut u32;
             nlink.write_unaligned(nlink.read_unaligned().saturating_add(extra));
+        }
+    }
+}
+
+/// `getsockopt(SOL_SOCKET, SO_PEERCRED)`: the kernel reports the peer's real
+/// ids, which under fake root must read as the virtual identity the way
+/// stat owners do. OpenSSH's multiplexing master compares the peer's uid
+/// with its own `getuid()` and drops the client on a mismatch.
+fn peer_credentials(regs: &mut [u64; 31]) {
+    regs[0] = issue(nr::GETSOCKOPT, &args_of(regs));
+    let config = config::get();
+    if regs[0] != 0 || !config.fake_root || regs[1] != sockopt_traps::SOL_SOCKET {
+        return;
+    }
+    let buffer = regs[3] as *mut u8;
+    let length = regs[4] as *const u32;
+    if buffer.is_null() || length.is_null() {
+        return;
+    }
+    // SAFETY: the kernel just filled these guest buffers; `struct ucred` is
+    // pid, uid, gid, each 32 bits.
+    unsafe {
+        if length.read_unaligned() < 12 {
+            return;
+        }
+        let uid = buffer.add(4) as *mut u32;
+        let gid = buffer.add(8) as *mut u32;
+        if uid.read_unaligned() == config.real_uid {
+            uid.write_unaligned(config.identity.suid);
+        }
+        if gid.read_unaligned() == config.real_gid {
+            gid.write_unaligned(config.identity.sgid);
         }
     }
 }

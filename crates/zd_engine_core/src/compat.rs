@@ -13,6 +13,9 @@ pub enum Response {
     /// `chroot`: succeeds only when the target is the guest root; the
     /// caller decides after translating the path.
     Chroot,
+    /// `accept`: bionic only ever makes `accept4`, so the app allowlist lacks the
+    /// legacy number glibc uses; the caller re-issues it as `accept4` with no flags.
+    Accept4,
     /// Not in the table: `-ENOSYS` plus a one-time log line.
     Unknown,
 }
@@ -96,12 +99,20 @@ pub fn response(number: u32, fake_root: bool) -> Response {
     if number == nr::CHROOT {
         return Response::Chroot;
     }
+    if number == nr::ACCEPT {
+        return Response::Accept4;
+    }
     Response::Unknown
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_accept_becomes_accept4() {
+        assert_eq!(response(nr::ACCEPT, false), Response::Accept4);
+    }
 
     #[test]
     fn startup_probes_get_enosys() {
