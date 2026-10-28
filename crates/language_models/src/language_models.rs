@@ -248,30 +248,34 @@ fn register_language_model_providers(
         )),
         cx,
     );
-    registry.register_provider(
-        Arc::new(OllamaLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
+    // Android leaves out the local model servers (Ollama, LM Studio,
+    // llama.cpp). A remote one can be added as an OpenAI-compatible provider.
+    if !cfg!(target_os = "android") {
+        registry.register_provider(
+            Arc::new(OllamaLanguageModelProvider::new(
+                client.http_client(),
+                credentials_provider.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(LmStudioLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
+        );
+        registry.register_provider(
+            Arc::new(LmStudioLanguageModelProvider::new(
+                client.http_client(),
+                credentials_provider.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(LlamaCppLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
+        );
+        registry.register_provider(
+            Arc::new(LlamaCppLanguageModelProvider::new(
+                client.http_client(),
+                credentials_provider.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
+        );
+    }
     registry.register_provider(
         Arc::new(DeepSeekLanguageModelProvider::new(
             client.http_client(),
