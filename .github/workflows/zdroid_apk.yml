@@ -93,8 +93,8 @@ jobs:
           cargo fmt --manifest-path "$APP_DIR/Cargo.toml" -- --check
           cargo fmt --manifest-path "$APP_DIR/askpass-helper/Cargo.toml" -- --check
 
-      - name: Test zdroid_runtime
-        run: cargo test -p zdroid_runtime --locked
+      - name: Test Android host components
+        run: cargo test -p zdroid_runtime -p gpui_android --locked
 
   build:
     name: Build APK
@@ -204,7 +204,7 @@ jobs:
       - name: Build APK
         # Gradle also builds and bundles zd-exec and zed-askpass-helper.
         working-directory: ${{ env.APP_DIR }}/android
-        run: gradle --no-daemon --stacktrace assembleRelease
+        run: gradle --no-daemon --stacktrace lintDebug assembleRelease
 
       - name: Name APK
         id: apk

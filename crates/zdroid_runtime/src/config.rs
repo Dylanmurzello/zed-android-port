@@ -3,7 +3,7 @@
 //! On disk the file looks like:
 //!
 //! ```toml
-//! # Active adapter. One of: "chroot", "bootstrap", "external_termux"
+//! # Active adapter. One of: "chroot", "bootstrap"
 //! [runtime]
 //! type = "chroot"
 //!
@@ -11,17 +11,14 @@
 //! [chroot]
 //! root = "/data/local/nhsystem/kali-arm64"
 //! home_bind = "/zed"
-//! spawnd_socket = "/dev/socket/zd-spawn"
+//! spawnd_socket = "/data/data/com.zdroid/files/run/zd-spawn"
 //! su_path = "/product/bin/su"
 //!
 //! [bootstrap]
 //! prefix = "/data/data/com.zdroid/files/usr"
-//! proot_rootfs = ""  # empty = bare mode
+//! # Omit proot_rootfs for bare mode
 //! release_repo = "Dylanmurzello/zdroid-bootstrap"
 //!
-//! [external_termux]
-//! package = "com.termux"
-//! prefix = "/data/data/com.termux/files/usr"
 //! ```
 //!
 //! Loading flow:
@@ -45,6 +42,8 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeId {
     Chroot,
     Bootstrap,
+    // Keep reading this value so users who selected the old placeholder can
+    // recover through the picker without deleting their configuration.
     ExternalTermux,
 }
 
@@ -99,32 +98,48 @@ pub struct ChrootConfig {
     pub su_path: PathBuf,
 }
 
+impl Default for ChrootConfig {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("/data/local/nhsystem/kali-arm64"),
+            home_bind: PathBuf::from("/zed"),
+            spawnd_socket: PathBuf::from("/data/data/com.zdroid/files/run/zd-spawn"),
+            su_path: PathBuf::from("/product/bin/su"),
+        }
+    }
+}
+
 /// Bootstrap-adapter config. Deserialized from `[bootstrap]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapConfig {
     /// Where the bootstrap is installed. Matches the historical
     /// Termux-flavored `$PREFIX`.
     pub prefix: PathBuf,
-    /// Optional proot rootfs path. Empty / unset = bare termux mode
+    /// Optional proot rootfs path. Unset = bare termux mode
     /// (direct exec via `$PREFIX/bin/<name>`). Set = wrap each spawn in
     /// `proot -r <rootfs> -- <target>`.
     #[serde(default)]
     pub proot_rootfs: Option<PathBuf>,
     /// `owner/repo` slug of the GitHub repo that publishes
-    /// `bootstrap-aarch64-VERSION.tar.zst` releases. The adapter pulls
+    /// `bootstrap-aarch64.zip` releases. The adapter pulls
     /// from `releases/latest` for upgrade detection.
     pub release_repo: String,
 }
 
-/// External-Termux-adapter config. Deserialized from `[external_termux]`.
+impl Default for BootstrapConfig {
+    fn default() -> Self {
+        Self {
+            prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
+            proot_rootfs: None,
+            release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
+        }
+    }
+}
+
+/// Legacy configuration retained so selecting a supported runtime preserves it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalTermuxConfig {
-    /// Termux's Android package id. Usually `com.termux`; some forks
-    /// use `com.termux.x11` etc.
     pub package: String,
-    /// Termux's `$PREFIX` (host-readable from Zdroid's app context only
-    /// if `sharedUserId` is set up; otherwise this is informational and
-    /// commands are executed via `RunCommandService` intent).
     pub prefix: PathBuf,
 }
 
@@ -148,15 +163,6 @@ impl ResolvedConfig {
     }
 }
 
-/// Per-adapter config struct. Useful for settings UI to enumerate /
-/// edit individual fields without caring which is active.
-#[derive(Debug, Clone)]
-pub enum AdapterConfig {
-    Chroot(ChrootConfig),
-    Bootstrap(BootstrapConfig),
-    ExternalTermux(ExternalTermuxConfig),
-}
-
 impl RuntimeFile {
     /// Construct a `RuntimeFile` whose `[runtime] type =` is set to
     /// `id` and whose only populated section is the matching one,
@@ -168,23 +174,14 @@ impl RuntimeFile {
         match id {
             RuntimeId::Chroot => Self {
                 runtime,
-                chroot: Some(ChrootConfig {
-                    root: PathBuf::from("/data/local/nhsystem/kali-arm64"),
-                    home_bind: PathBuf::from("/zed"),
-                    spawnd_socket: PathBuf::from("/data/data/com.zdroid/files/run/zd-spawn"),
-                    su_path: PathBuf::from("/product/bin/su"),
-                }),
+                chroot: Some(ChrootConfig::default()),
                 bootstrap: None,
                 external_termux: None,
             },
             RuntimeId::Bootstrap => Self {
                 runtime,
                 chroot: None,
-                bootstrap: Some(BootstrapConfig {
-                    prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
-                    proot_rootfs: None,
-                    release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
-                }),
+                bootstrap: Some(BootstrapConfig::default()),
                 external_termux: None,
             },
             RuntimeId::ExternalTermux => Self {
@@ -197,6 +194,22 @@ impl RuntimeFile {
                 }),
             },
         }
+    }
+
+    pub fn select(&mut self, id: RuntimeId) -> anyhow::Result<()> {
+        match id {
+            RuntimeId::Chroot => {
+                self.chroot.get_or_insert_default();
+            }
+            RuntimeId::Bootstrap => {
+                self.bootstrap.get_or_insert_default();
+            }
+            RuntimeId::ExternalTermux => anyhow::bail!(
+                "External Termux is not supported. Select Bootstrap or Chroot instead."
+            ),
+        }
+        self.runtime.kind = id;
+        Ok(())
     }
 
     /// Read + parse `runtime.toml` from `path`. Returns `Ok(None)` if
@@ -251,5 +264,80 @@ impl RuntimeFile {
                     )
                 }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context as _;
+
+    #[test]
+    fn switching_runtimes_preserves_configuration() -> anyhow::Result<()> {
+        let mut file = RuntimeFile::with_defaults(RuntimeId::Chroot);
+        let chroot = file.chroot.as_mut().context("chroot configuration")?;
+        chroot.root = PathBuf::from("/custom/rootfs");
+        chroot.spawnd_socket = PathBuf::from("/custom/socket");
+        file.bootstrap = Some(BootstrapConfig {
+            prefix: PathBuf::from("/custom/prefix"),
+            release_repo: "owner/bootstrap".into(),
+            ..BootstrapConfig::default()
+        });
+
+        file.select(RuntimeId::Bootstrap)?;
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime.toml");
+        file.save(&path)?;
+        let mut file = RuntimeFile::load(&path)?.context("saved configuration")?;
+        assert_eq!(file.runtime.kind, RuntimeId::Bootstrap);
+        let bootstrap = file.bootstrap.as_ref().context("bootstrap configuration")?;
+        assert_eq!(bootstrap.prefix, PathBuf::from("/custom/prefix"));
+        assert_eq!(bootstrap.release_repo, "owner/bootstrap");
+
+        file.select(RuntimeId::Chroot)?;
+        let ResolvedConfig::Chroot(chroot) = file.resolve()? else {
+            anyhow::bail!("expected chroot configuration");
+        };
+        assert_eq!(chroot.root, PathBuf::from("/custom/rootfs"));
+        assert_eq!(chroot.spawnd_socket, PathBuf::from("/custom/socket"));
+        Ok(())
+    }
+
+    #[test]
+    fn selecting_a_new_runtime_adds_its_defaults() -> anyhow::Result<()> {
+        let mut file = RuntimeFile::with_defaults(RuntimeId::Chroot);
+        file.select(RuntimeId::Bootstrap)?;
+        assert!(file.chroot.is_some());
+        let ResolvedConfig::Bootstrap(bootstrap) = file.resolve()? else {
+            anyhow::bail!("expected bootstrap configuration");
+        };
+        assert_eq!(bootstrap.prefix, BootstrapConfig::default().prefix);
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_runtime_can_be_read_and_replaced() -> anyhow::Result<()> {
+        let mut file: RuntimeFile = toml::from_str(
+            r#"
+                [runtime]
+                type = "external_termux"
+                [external_termux]
+                package = "com.termux"
+                prefix = "/data/data/com.termux/files/usr"
+            "#,
+        )?;
+        assert!(crate::adapters::for_config(&file.clone().resolve()?).is_err());
+        file.select(RuntimeId::Bootstrap)?;
+        assert!(file.external_termux.is_some());
+        assert!(crate::adapters::for_config(&file.resolve()?).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_selection_leaves_the_active_runtime_unchanged() {
+        let mut file = RuntimeFile::with_defaults(RuntimeId::Bootstrap);
+        assert!(file.select(RuntimeId::ExternalTermux).is_err());
+        assert_eq!(file.runtime.kind, RuntimeId::Bootstrap);
+        assert!(file.external_termux.is_none());
     }
 }

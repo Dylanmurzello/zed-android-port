@@ -5255,7 +5255,6 @@ dependencies = [
  "ureq",
  "util",
  "uuid",
- "zip 2.6.1",
 ]
 
 [[package]]
@@ -16228,6 +16227,7 @@ dependencies = [
  "client",
  "collections",
  "command_palette",
+ "copilot_chat",
  "db",
  "debug_adapter_extension",
  "diagnostics",
@@ -16257,6 +16257,7 @@ dependencies = [
  "language",
  "language_extension",
  "language_model",
+ "language_models",
  "language_onboarding",
  "language_selector",
  "language_tools",
@@ -16320,6 +16321,7 @@ dependencies = [
  "vim",
  "vim_mode_setting",
  "watch",
+ "web_search",
  "which_key",
  "workspace",
  "zdroid_runtime",

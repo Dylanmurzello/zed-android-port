@@ -67,8 +67,6 @@ pub use gpui_util::new_std_command;
 /// the bridge through `util::command`.
 #[cfg(target_os = "android")]
 pub use gpui_util::register_environment_root;
-#[cfg(target_os = "android")]
-use gpui_util::{ZD_EXEC_PROGRAM, detect_env_shebang, env_root_program_path};
 
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
@@ -97,42 +95,9 @@ impl Command {
         }
         #[cfg(target_os = "android")]
         {
-            // Two rewrites, in this order:
-            //
-            //   1. env-root bridge — if `program` is an absolute path
-            //      under the active adapter's `environment_root()`,
-            //      rewrite to `zd-exec <program>`. zd-exec dispatches
-            //      the spawn into the configured runtime (chroot /
-            //      bootstrap / external Termux), so glibc-linked
-            //      binaries from inside a chroot rootfs run where
-            //      their loader actually exists. See
-            //      `env_root_program_path` for the full rationale.
-            //
-            //   2. shebang rewrite for absolute-path script invocations
-            //      that need `/usr/bin/env`. See `detect_env_shebang`
-            //      for the full rationale; tl;dr the host has no
-            //      `/usr/bin/env`, so we replace the program with the
-            //      script's declared interpreter and let kernel PATH
-            //      lookup route through `zd-runtime/<interp>` into the
-            //      chroot/bootstrap that does have it.
-            //
-            // The env-root bridge wins when both could apply (e.g. a
-            // script that lives inside env_root): routing through
-            // zd-exec is the more general fix and the chroot adapter
-            // will resolve shebangs natively once the script is exec'd
-            // inside the rootfs.
-            let program_ref = program.as_ref();
-            if let Some(program_path) = env_root_program_path(program_ref) {
-                let mut cmd = smol::process::Command::new(ZD_EXEC_PROGRAM);
-                cmd.arg(program_path);
-                return Self(cmd);
-            }
-            if let Some((interp, script)) = detect_env_shebang(program_ref) {
-                let mut cmd = smol::process::Command::new(interp);
-                cmd.arg(script);
-                return Self(cmd);
-            }
-            Self(smol::process::Command::new(program_ref))
+            // Android's synchronous and asynchronous spawns need the same
+            // runtime and shebang routing. smol preserves the std command.
+            Self(new_std_command(program).into())
         }
         #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
         Self(smol::process::Command::new(program))

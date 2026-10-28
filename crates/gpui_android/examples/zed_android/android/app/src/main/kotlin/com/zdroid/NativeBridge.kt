@@ -88,7 +88,6 @@ object NativeBridge {
         metaState: Int,
         buttonState: Int,
         flags: Int,
-        eventTimeMillis: Long,
         vscroll: Float,
         hscroll: Float,
         xs: FloatArray,
@@ -125,19 +124,13 @@ object NativeBridge {
     /// extra window's id for spawned windows.
     external fun isHoldDragActive(windowId: Long): Boolean
 
-    /// Polled every frame by the SplashScreen's
-    /// `setKeepOnScreenCondition`. Returns true once gpui has run at
-    /// least one paint cycle; the splash then exits with its
-    /// registered animation and the activity switches to
-    /// `Theme.Zdroid.Main`. The Rust side flips the atomic backing
-    /// this in `platform.rs` immediately after the first
-    /// `frame_timing::paint_finished` call.
+    /// MainActivity polls this flag to fade out its splash overlay after
+    /// gpui's first paint. The UI and gpui run on different threads.
     external fun nativeIsZedReady(): Boolean
 
     /// Captured-pointer sink, called only by [forwardCapturedPointer].
     /// `windowId` is `MainActivity.PRIMARY_WINDOW_ID` or the extra
-    /// window's id. `xs`/`ys` are absolute pointer positions in the
-    /// touchpad's coordinate space; `rxs`/`rys` are `AXIS_RELATIVE_X` /
+    /// window's id. `rxs`/`rys` are `AXIS_RELATIVE_X` /
     /// `AXIS_RELATIVE_Y` per pointer (the deltas that drive cursor
     /// motion and scroll synthesis). `vscroll`/`hscroll` carry a
     /// mouse wheel's `ACTION_SCROLL`.
@@ -148,8 +141,6 @@ object NativeBridge {
         buttonState: Int,
         metaState: Int,
         pointerCount: Int,
-        xs: FloatArray,
-        ys: FloatArray,
         rxs: FloatArray,
         rys: FloatArray,
         vscroll: Float,

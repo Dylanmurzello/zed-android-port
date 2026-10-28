@@ -68,6 +68,9 @@ internal object SecureCredentialStore {
             .commit()
     }
 
+    // GPUI credential requests run on background threads. Creating the same
+    // Android Keystore alias concurrently can replace a key already in use.
+    @Synchronized
     private fun getOrCreateKey(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }

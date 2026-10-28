@@ -8,7 +8,7 @@ This repo's diff against upstream Zed is the **Android-specific** delta:
 
 - `crates/gpui_android/` (whole crate, our platform backend)
 - `crates/gpui_platform/` (cfg-gated arm)
-- `crates/zdroid_runtime/` (runtime-adapter trait + chroot / bootstrap / external-Termux impls)
+- `crates/zdroid_runtime/` (runtime-adapter trait + chroot / bootstrap impls)
 - `crates/onboarding/` (tweaks for the Android runtime picker)
 - `crates/zed_android/` (example binary + Android Gradle project)
 - `crates/zed/Cargo.toml` (workspace `android` feature flag disabling desktop-only crates)

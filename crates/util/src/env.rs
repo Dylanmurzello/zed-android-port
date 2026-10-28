@@ -58,7 +58,7 @@ pub fn terminal_env_overlay() -> &'static [(String, EnvOp)] {
 ///
 /// Registered once at android_main from
 /// `RuntimeProvider::workspace_root`. Returns `None` when no adapter
-/// registered (external Termux, non-Android builds).
+/// registered (non-Android builds or before runtime setup).
 static WORKSPACE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn register_workspace_root(path: Option<PathBuf>) {
@@ -75,7 +75,7 @@ pub fn workspace_root() -> Option<&'static PathBuf> {
 /// LD_PRELOADs it when spawning bionic CLIs that have hardcoded
 /// `/data/data/com.termux/` paths baked in (Bun-compiled Termux npm
 /// packages: claude, codex). Bootstrap is the only adapter that
-/// returns Some; chroot / external-Termux return None.
+/// returns Some; chroot returns None.
 ///
 /// Registered once at android_main from
 /// `RuntimeProvider::npm_libtermux_exec_path`.

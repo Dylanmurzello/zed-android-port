@@ -28,9 +28,5 @@ Subprocess CA story is adapter-owned:
 
 - **Chroot adapter** : `sanitize_env_for_chroot` excludes the var.
   The rootfs ships `/etc/ssl/certs` (Debian-style), self-sufficient.
-- **External Termux adapter** : spawns via Intent; the receiver
-  lives in Termux's own process with Termux's env, self-sufficient.
-- **Bootstrap adapter** : currently inherits caller env. Subsumed
-  by Phase 3 (adapter-owned env contract). Until then, integrated
-  terminal spawns still get the bundle via `terminal.rs::185-195`'s
-  PREFIX-based setup (a Phase 5 target).
+- **Bootstrap adapter**: publishes the prefix's CA bundle through
+  `env_for_zed_process`; subprocesses inherit that environment.

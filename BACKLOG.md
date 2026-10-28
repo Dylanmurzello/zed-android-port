@@ -1,6 +1,6 @@
 # Zdroid backlog
 
-Non-blocking UX / feature gaps to revisit after the current refactor lands. Tasks in the live task list are atomic and time-bound; this file is for "noted but not yet scoped" concerns.
+Remaining Android feature gaps, device reports and unfixed review findings.
 
 ## "Open Project" on first boot: SAF picker works, post-pick handoff drops the project on the floor
 
@@ -52,55 +52,17 @@ If we see a new-window spawn line, the fix is to force `OpenMode::Activate` to r
 
 External user tried to file these and was blocked by upstream Zed's `blank_issues_enabled: false` + Discord-redirect contact_links (fixed in `244f29a455`). Logging here so they don't get lost while the user re-files via the new templates.
 
-- **Mouse scroll direction reversed**: Samsung One UI + Bluetooth mouse. Scroll works correctly everywhere else on the device but is inverted in Zdroid. Likely a sign flip in `gpui_android`'s `MotionEvent` → scroll-delta translation. Check the wheel-axis path specifically (touch-pad two-finger scroll may differ); One UI may report `AXIS_VSCROLL` with a sign that mainline Zed doesn't compensate for. **Still open.**
+- **Mouse scroll direction reversed**: Samsung One UI + Bluetooth mouse. Scroll works correctly everywhere else on the device but is inverted in Zdroid. Likely a sign flip in `gpui_android`'s `MotionEvent` → scroll-delta translation. Check the wheel-axis path specifically (touch-pad two-finger scroll may differ); One UI may report `AXIS_VSCROLL` with a sign that mainline Zed doesn't compensate for. The uncaptured mouse-wheel path now passes vertical deltas through; verify captured and uncaptured scrolling on One UI before treating the original device report as resolved.
 - ~~**Vim mode broken**~~ — **fixed in 29b29ddd63** (key events now route from `ExtraWindowActivity` to gpui via `nativeOnExtraKeyEvent` JNI bridge; the root cause was that any extra window's `dispatchKeyEvent` was never forwarded so `PlatformInput::KeyDown` never fired). Vim and any other editor in a non-Main window now accepts typing.
 - ~~**Settings searchbar typing broken**~~ — **fixed in 29b29ddd63** (same key-routing fix, plus a tap-to-focus wrapper on the search bar with `stop_propagation` so taps don't bubble to `SettingsWindow`'s focus tracker which was immediately blurring the bar).
 
-## Runtime picker: adapter install-state UX (deferred)
+## Runtime picker and Settings search: resolved implementation gaps
 
-The onboarding runtime-picker section (and the Settings page entry) currently presents all three adapters — Kali chroot, Bootstrap, External Termux — as selectable equals. On a fresh install the user almost certainly has NONE of them installed:
+The runtime picker now shows health badges and explanations, installs Bootstrap on request, links to the chroot module, and requires a restart after selection. The 2026-10-28 review removed the unusable External Termux entry, preserved saved adapter settings when switching, and made install/save errors persistent in the picker. Chroot setup remains external to the app.
 
-- **Chroot** requires Magisk + the `zdroid-spawnd` Magisk module (separate flashable zip from GitHub releases) + a Kali NetHunter chroot rootfs at `/data/local/nhsystem/kali-arm64`. None of those are bundled in our APK.
-- **Bootstrap** requires the bootstrap zip (~240 MB) extracted into `$PREFIX`. Auto-extracted from the APK asset today, but per task #17 we're moving to GitHub-release download. If the asset isn't present, "Bootstrap" doesn't work either.
-- **External Termux** requires the Termux app installed on the device AND the user granting `com.termux.permission.RUN_COMMAND`. Plus our JNI Intent bridge (task #36) needs to land.
+Open: Select is disabled for a Bootstrap the health check calls Misconfigured (`proot_rootfs` set but proot or the rootfs missing), and the picker offers no other action there, so the fix is editing `zd-runtime.toml` by hand. Before 0.9.17, selecting rewrote the file with defaults, which cleared `proot_rootfs`.
 
-The picker doesn't surface any of this. A user tapping "Bootstrap" with no bootstrap installed sees: their selection saved, restart Zdroid, nothing works, no actionable feedback. Same for chroot without the Magisk module. Worst-case UX.
-
-**Bridge needed:**
-
-- Show an install-state badge per adapter (Installed / Missing / Partial).
-- For Missing: link out to the install instructions (GitHub release page, F-Droid Magisk module link, Termux Play Store/F-Droid).
-- For Partial (e.g., chroot module installed but rootfs path is empty): explain what's missing AND what to do.
-- Consider whether to install silently (downloads bootstrap zip on selection) or surface as an opt-in download with progress.
-- "Auto-install" vs "show options" — likely the right answer is BOTH, with auto-install gated behind explicit user consent because: bootstrap is 240 MB, chroot requires Magisk + root, external Termux needs a separate app install. Silent install is hostile to discoverability and bandwidth control.
-
-The chroot adapter already has health-check hints in `RuntimeProvider::health_check()` — `HealthStatus::NotInstalled { hint }` with links to the spawnd release page. The picker UI just doesn't surface these yet. Wiring through to the inline section would give us the install-state-aware UX without inventing new infrastructure.
-
-**Related tasks already in the live list:**
-
-- #33 — wire settings UI for adapter selection
-- #34 — first-launch onboarding modal (now landed as the onboarding page's runtime section, `runtime_picker::render_onboarding_section`, but install-state UX is still TBD)
-- #36 — JNI Intent bridge for external Termux adapter
-- #37 — bootstrap install/uninstall (GitHub releases download)
-
-Resolve this AFTER the Termux-divestment refactor (tasks #74-80) lands. Once each adapter is a first-class peer with a proper install flow, the picker can surface that flow.
-
-## Settings search bar input pipeline (deferred)
-
-Tapping the settings search bar on Android doesn't bring up the soft keyboard and the Editor never receives input events. Probe instrumentation in `crates/settings_ui/src/settings_ui.rs` shows:
-
-- Editor entity is created (we see `editor created` at boot)
-- A `Blurred` event fires after the user taps, but no `Focused` event reaches the subscribe handler
-- No `InputHandled` / `InputIgnored` / `Edited` events
-
-So the Editor IS getting focused (Blurred can only fire after a Focused state), but the focus is being stolen immediately, AND the Android InputMethodManager (soft keyboard) is not being prompted. Two suspected layers:
-
-1. **GPUI / gpui_android focus handling**: the on_click handler I added (focus the editor handle on bar click) appears to set focus but lose it instantly. Could be the welcome page or some other view stealing it back via focus rules.
-2. **Android IME wiring**: even if focus stays on the Editor, the soft keyboard doesn't open. Zed-the-app needs to call `InputMethodManager.showSoftInput()` (Java/JNI) when an Editor gains focus on Android. This wiring is in gpui_android's platform layer and may be incomplete.
-
-Diagnosing requires instrumenting gpui_android's input layer too, not just the editor subscription. Probably want JNI logs on `onWindowFocusChanged`, `dispatchKeyEvent`, and `InputMethodManager` calls. Out of scope for the Termux-divestment refactor; pick up after Phase 8.
-
-Visible workaround for users today: there isn't one — search filter is effectively dead on Android. Settings remain navigable via the sidebar tree.
+Settings search input was fixed in `29b29ddd63`, and text fields now request GPUI's virtual keyboard.
 
 ## Image paste into the agent panel doesn't work on Android
 
@@ -128,34 +90,49 @@ Visible workaround for users today: there isn't one — search filter is effecti
 
 **Why deferred:** core editor flow works without it, and the agent panel feature gating depends on `supports_images` from the LLM provider anyway. Pick up once a user reports a concrete blocked workflow.
 
-## MCP / context-server integration is absent on Android
+## Complete native Zed AI integration
 
-**Repro:** add a `context_servers` block to Zdroid's `settings.json` (the syntax Zed uses upstream for stdio or HTTP MCP servers). Restart the app. Nothing happens. No server is spawned, no tools surface in any panel, no entry appears under Settings; the editor reads the JSON but no code path consumes the block. Adding the same block on desktop Zed works.
+The app initializes upstream `agent_ui` and `acp_tools`, including the agent panel and context-server UI; `agent`, `acp_thread`, and `context_server` are transitive dependencies.
 
-**Diagnosis:** the wiring is missing at three layers, in order:
+Since 0.9.17 the app also runs Zed's model providers (`copilot_chat::init`, `language_model::init`, `language_models::init`, `web_search::init`, in the order of Zed's `main()`), so the native agent and the inline assistant work with your own API keys, including OpenAI-compatible endpoints (a LiteLLM gateway, for example). An Android-gated edit to `language_models::register_language_model_providers` leaves out the local model servers (Ollama, LM Studio, llama.cpp); a remote one can be added as an OpenAI-compatible provider. The gate has to be at registration: user-defined compatible providers can share those IDs, so unregistering afterwards would remove them too. Zed accounts stay out: the app skips `client::init` (sign-in actions), `RefreshLlmTokenListener`, `web_search_providers::init` and `copilot_ui::init`, and three Android-gated edits to Zed's crates hide the rest: `language_models::register_language_model_providers` skips the Zed-hosted provider (constructing it needs `RefreshLlmTokenListener`, which panics when it isn't registered), `ai_onboarding::AgentPanelOnboarding` shows only the API-key setup, and `AgentPanel::should_render_new_user_onboarding` ignores empty history. Zed doesn't call `language_models::init_extension_proxy` at v1.26.2-pre, so extension-provided model providers stay off here too; enable them when Zed does.
 
-1. **Boot skip.** `crates/gpui_android/examples/zed_android/src/lib.rs` around line 1003 explicitly lists `agent_ui` / `copilot` / `language_models` as out-of-scope on Android ("Skipped from production"). The agent panel is the entry point that registers MCP-related actions and observes the `context_servers` settings block; without `agent_ui::init` running, none of that fires.
-2. **Cargo dep absent.** The example's `Cargo.toml` doesn't declare `agent_ui` or `context_server` as dependencies, so the upstream MCP transport implementations (`crates/context_server/src/transport/{stdio_transport,http}.rs`) aren't even linked into Zdroid's `.so`. There is no `McpClient`, no `ContextServerStore` instance in the process at any point.
-3. **Subprocess spawn gap.** Even if 1 and 2 land as-is, the upstream stdio transport spawns the configured MCP server with `tokio::process::Command`, which on Android lands as a bionic-spawn from the editor process. That path does not see the active runtime adapter's `$PATH`, `$LD_LIBRARY_PATH`, or chroot scope, so any MCP server that ships as a Bootstrap-userland or chroot binary (`npx @modelcontextprotocol/server-filesystem`, `uvx mcp-server-time`, anything else realistic) fails to exec.
+Still unverified on a device: streamed responses and tool calls through an OpenAI-compatible endpoint, inline edits, API keys surviving a restart (Android Keystore), Copilot Chat's GitHub sign-in, and local MCP servers under Bootstrap and chroot (including the sandbox fallback), as opposed to servers on an SSH host. Copilot edit prediction is not initialized. Android's API-key card in a native agent thread has no dismiss button (Zed's card has one through `ZedAiOnboarding`), so it stays until a provider is configured.
 
-**Wiring needed:**
+## Platform gaps found in the 2026-10-28 audit
 
-- Add `agent_ui` + `context_server` (and the transitive `language_models`, `assistant`, etc. that won't compile without it) to `crates/gpui_android/examples/zed_android/Cargo.toml`.
-- Initialize `agent_ui::init` in `boot()` past the "AI skipped" comment band. Confirm the agent-panel + workspace action wiring actually fires on Android; the editor compiles agent surfaces today via cfg-gates to mocks, but full init likely surfaces side effects (LLM provider registration, settings observers, etc.) that we have not exercised.
-- Route the stdio-transport spawn through `zdroid_runtime` so the configured MCP server inherits the active adapter's environment. Easiest path: replace the upstream `tokio::process::Command` invocation with a call that goes through our existing `zd-exec` wrapper (`crates/zdroid_runtime/src/bin/zd-exec.rs`); the wrapper already handles chroot/bootstrap/external Termux selection. Either patch upstream's transport with an Android cfg-gate, or wrap the `MCPCommand` config builder.
-- Decide what to do with the LLM provider gate. MCP servers are useful even without a model talking to them (tool execution, prompt management), so a "BYO key, no provider configured" mode is viable. Alternatively gate MCP UI visibility behind a configured provider so the no-key state is not confusing.
+- **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
+- **`prompt_for_paths` ignores `PathPromptOptions`.** It always opens the SAF folder picker (`ACTION_OPEN_DOCUMENT_TREE`), so requests for files or multiple paths get a single folder.
+- **`reveal_path` and `open_with_system` are empty** in `platform.rs`, so "Reveal in file manager" and "Open with system app" do nothing.
 
-**Why deferred:**
+## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
-- The README and roadmap already declare AI panels out of scope. The MCP gap is downstream of that declaration; closing it pulls the entire `agent_ui` / `language_models` surface back in scope, which is a meaningfully larger commitment than just the MCP wiring.
-- Daily-driving the editor today does not require MCP. Most of what people want from MCP on Android specifically (filesystem access, shell tools) is already reachable via the integrated terminal + the relevant runtime adapter, so users have a working workaround.
-- The right time to do this is once we either (a) ship a real LLM-panel integration so MCP arrives with a sibling consumer, or (b) deliberately decide to surface MCP tools standalone (slash commands? command palette entries?) without the assistant.
+The Android audit, the review of that week's PR stack and the two upstream-divergence audits found these. They were only in session notes until 2026-10-28, when each was rechecked against the code.
 
-**Scope estimate:** rough 2-3 days end-to-end. Cargo dep additions and `agent_ui::init` are short. The real time sink is debugging the side effects of bringing the agent surface online for the first time on Android (focus / window routing, settings store observers that assume desktop platforms, the LLM provider registration path on a platform that has historically been mock-only). Pair with [[project-zed-android-port]] phase planning when picking this up.
+**Platform**
 
-## Other deferred concerns
+- **The keyboard button's state is guessed, not read.** `requestIme` in `MainActivity` and `ExtraWindowActivity` sets `imeShown` as soon as it calls `showSoftInput`, and `confirmImeShown` clears it again if the keyboard hasn't appeared after a delay. Android reports whether the keyboard is up in the insets both Activities already receive (`WindowInsetsCompat.isVisible(Type.ime())`): set `imeShown` only from the insets listener and drop the timer. Tablet check: show and hide the keyboard by tapping text, with Back and with the status bar button, in the main window and in Settings; the button and the programming extras row must always match the keyboard.
+- **The DNS file for Bun-based CLIs goes stale.** `dns_bridge::populate_resolv_conf` writes `/sdcard/.zed/r`, which the patched `claude` and `codex` read instead of `/etc/resolv.conf`, once at startup (`lib.rs`), right after the asynchronous storage-permission request. On first launch it usually fails for lack of that permission, and it's never rewritten when the network changes, so those CLIs keep the previous network's resolver. Fix: rewrite it from `ConnectivityManager.registerDefaultNetworkCallback` (`onLinkPropertiesChanged`) and once the storage permission is granted. Tablet check: with Zdroid running, move from Wi-Fi to a phone hotspot, then run `claude` in the terminal.
+- **Extra windows return from `surfaceDestroyed` before the renderer stops.** `ExtraWindowActivity`'s `surfaceDestroyed` only queues `nativeOnExtraSurfaceDestroyed` (`multi_window.rs`), so gpui can still present to a surface Android has destroyed, which the `SurfaceHolder` contract forbids (`NativeBridge.kt` says Rust must stop inside the callback); wgpu then reports errors to its uncaptured-error handler. Fix: block, with a timeout, until the gpui thread confirms the detach, and handle that event in `create_extra_window_blocking`'s wait loop so the two can't deadlock. Tablet check: in DeX, minimize and restore the Settings window repeatedly and look for wgpu errors in logcat.
+- **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
+- **The Bootstrap download is checked against GitHub's own record.** `bootstrap_install.rs::download_bootstrap_asset` takes the expected SHA-256 from the same GitHub release that serves the file, and installs unverified when the API is unavailable (60 anonymous requests an hour per IP). The userland runs with the app's full permissions, SSH keys included. Fix: pin the bootstrap release and its digest in the APK, or verify a signature against a key built into the app.
+- **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames zd-exec for keeping stdout open: fix that in zd-exec, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
-(add new sections here as they come up; keep each one self-contained with what / why / what's-needed-to-resolve)
+**Divergence from Zed.** Each of these shrinks the fork's edits to Zed's crates, which conflict at every Zed sync. Line counts are against v1.26.2-pre.
+
+- **A `zdroid_hooks` leaf crate for the spawn hooks.** About 370 lines are added to Zed's crates for process spawning on Android: `gpui_util/src/lib.rs` (+166), `util/src/env.rs` (new, 92), `util/src/command.rs` (+70), `terminal/src/terminal.rs` (+27) and `node_runtime` (+13). Move `EnvOp`, the registries, `env_root_program_path`, `detect_env_shebang`, `android_safe_cwd`, `new_std_command` and the terminal and npm environment code into a fork crate that depends only on `log`. Those crates then make one Android-only call each, and `util/src/env.rs` goes away. `zdroid_runtime` can't host this, since `util` would then depend on it and it depends on `util`. Check: terminal, git, a language server and `npm install` on the tablet.
+- **`settings_ui/src/page_data.rs`** (+204 −14). Go back to Zed's `concat_sections!` in `general_page`, with an Android stub of `privacy_section()` that returns no items, and stop hiding the auto-update section: the in-app updater honors `auto_update` (`app_updater.rs`), but Settings doesn't show the toggle on Android. Merge the Android Runtime and Android Input pages into one gated `android_page()`.
+- **The welcome page's Workspace and External split** of recent projects (`workspace/src/welcome.rs`, +78 −18, Android-gated). Drop it, or shrink it to a header parameter on `render_recent_project_section`.
+
+## 0.9.17 device checks
+
+The 2026-10-28 audit (0.9.17) changed these paths without a device test:
+
+- Bootstrap: open an existing project; terminal, git, LSP startup, a task, and an `npm install` of a package with native binaries (npm's `--libc=musl` now applies only under Bootstrap, not chroot).
+- Runtime picker: switch runtimes and back with a customized `zd-runtime.toml` (settings must survive); a failed or offline Bootstrap install must leave an error in the picker; a saved External Termux selection must be replaceable from the picker.
+- Shared-storage import: import a project, cancel one mid-copy, import the same project twice, and close the dialog during a copy (closing cancels it). No partial tree may open, and existing projects must stay untouched.
+- Native AI: a fresh agent panel shows the API-key setup without Zed sign-in or trial prompts; the LLM Providers page lists no Ollama, LM Studio or llama.cpp; configure an OpenAI-compatible model, stream a reply with a tool call, run an inline edit, restart and check the key is still there.
+- Keyboard-cover trackpad: quick two-finger taps still right-click, slow two-finger scrolls don't, and the cursor captures and releases in the main and extra windows.
+- Files app (DocumentsProvider): search through a symlink loop in `~`; renaming or deleting the Zed root must be refused.
 
 ## Input review of 2026-10-26: open findings
 
@@ -165,7 +142,7 @@ An audit of `crates/gpui_android`'s input code found 22 problems. These are the 
 
 1. **Double- and triple-click don't work.** `events/mouse.rs::button_up` always reports `click_count: 1`, and Zed reads the click count from the up event (`ClickEvent::click_count`), so double-clicking a project-panel file or a tab does nothing. Under pointer capture, `captured_pointer.rs` also sends 1 on every down. Fix: put the count `ClickTrackState` already tracks on the up event, and have `captured_pointer` call `next_click_count`. Tablet check: with the mouse, double-click a word in the editor and a file in the project panel.
 2. **The wheel scrolls 1 line per notch on the uncaptured path and 3 under capture** (`events/mouse.rs::wheel_scroll` vs `MOUSE_WHEEL_LINES_PER_NOTCH` in `captured_pointer.rs`). Pick one.
-3. **Two-finger trackpad tap under capture has no time limit and checks motion per event.** `TWO_FINGER_TAP_WINDOW` in `captured_pointer.rs` is never read, and the 6 px check compares each move rather than the total, so a slow two-finger scroll can right-click when the fingers lift.
+3. **Captured two-finger tap bounds (fixed in code 2026-10-28; device check pending).** Right-click now requires exactly two fingers, completion within `TWO_FINGER_TAP_WINDOW`, and cumulative movement below the tap threshold. Verify quick taps still right-click and slow two-finger scrolls do not.
 4. **Gpui is never told when the pointer leaves a window.** `HOVER_EXIT` is dropped (`events.rs`), the hover-status callback is stored but never called, and `is_hovered` returns false, so hover highlights can stay after the pointer leaves.
 5. **S Pen buttons aren't mapped.** `button_from_state` ignores the stylus button bits, so the pen's side button doesn't right-click.
 
@@ -192,7 +169,7 @@ Fingers go to gpui's touch gestures since step 2 of the touch plan below, and st
 **Code health**
 
 15. Constants duplicated between `events/mouse.rs` and `captured_pointer.rs`; unchecked indexing in `touch.rs`; `lock().unwrap()` in `ime.rs`, `captured_pointer.rs` and `multi_window.rs`; `expect()` in `ime.rs`; stale comments across `events.rs`, `events/*.rs`, `touch.rs`, `window.rs` and `ime.rs`; dead `Finger` arms in `events/source.rs` and unused arguments in `touch.rs`.
-16. Per-event work on the trackpad path: a view-tree search and array allocations per event in `MainActivity`, the relative delta computed twice, four float arrays per captured event, and a JNI call plus `runOnUiThread` per trackpad-mode move.
+16. Per-event work on the trackpad path: a view-tree search and array allocations per event in `MainActivity`, the relative delta computed twice, two relative-coordinate arrays per captured event (unused absolute-coordinate arrays were removed in the 2026-10-28 review), and a JNI call plus `runOnUiThread` per trackpad-mode move.
 
 ## Post-2026-08 upstream-merge follow-ups
 
@@ -209,7 +186,7 @@ All four steps are done (2026-10). Step 1 landed behind an `android_input.legacy
 
 **Finger drag and drop of tabs and project panel entries.** gpui's drag and drop (`on_drag`, `DragMoveEvent`) has no touch source, so a finger can't reorder tabs or move project panel entries; the release caveats list it. (The deleted legacy path started gpui's drag and drop from a long press, then a drag.) Native Android and iOS reorder with a long press, then a drag. Start gpui's drag from a `LongPressEvent` on Android.
 
-Also evaluate `Application::run_embedded` as a replacement for the custom android run-loop shim, and upstream's `ThreadedDispatcher` as a replacement for the hand-rolled calloop worker pool in `gpui_android/src/dispatcher.rs`.
+`Application::run_embedded` still invokes `Platform::run`; it does not replace the Android event loop. `ThreadedDispatcher` is gated to tests and benchmarks in the tracked Zed release. Neither is a production replacement for the Android dispatcher at this tag. Recheck if upstream adds a production mobile dispatcher.
 
 **Next Zed sync.** Zed's main branch, after v1.26.2-pre and in no release tag as of 2026-10-28, adds two `Platform` methods:
 
@@ -222,4 +199,4 @@ Also evaluate `Application::run_embedded` as a replacement for the custom androi
 
 **`spawn_when_idle` support.** New defaulted `PlatformDispatcher` methods (`dispatch_on_main_thread_when_idle`, `idle_time_remaining`) are unimplemented on Android, so `BackgroundExecutor::spawn_when_idle` degrades to never-idle. Fine today; revisit if upstream starts scheduling real work through it.
 
-**`util::command` bridge doc.** The zd-exec spawn bridge (`new_std_command` android arm, env-root routing, shebang rewrite) moved into `crates/gpui_util` so upstream's `pub use gpui_util::new_std_command` re-export carries the rewrite for sync spawn sites too. Update the workarounds index entry that still points at util/command.rs internals.
+**Spawn bridge consolidation (done 2026-10-28).** Android's async `util::command::Command` now converts the existing `gpui_util::new_std_command`, sharing environment-root and shebang routing with synchronous spawns.

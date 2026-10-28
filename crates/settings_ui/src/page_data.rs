@@ -92,7 +92,7 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
 }
 
 /// Android-specific: lets the user choose which userland Zdroid routes
-/// its spawn pipeline through (chroot / bootstrap / external Termux).
+/// its spawn pipeline through (chroot or bootstrap).
 /// Lives as a top-level settings page so the option is discoverable
 /// without command-palette knowledge — chroot mode is functionally
 /// required for LSPs, terminal, and tooling, so this can't be buried.
@@ -116,9 +116,9 @@ fn android_runtime_page() -> SettingsPage {
                 title: "Pick runtime adapter".into(),
                 description: Some(
                     "Select which userland Zdroid routes commands into: kali chroot \
-                     (full Linux via zd-spawnd), bundled bootstrap (Termux-flavored \
-                     bionic), or an external Termux app. Required for the integrated \
-                     terminal, LSPs, formatters, and any spawned tool to work."
+                     (full Linux via zd-spawnd) or bundled bootstrap (Termux-flavored \
+                     bionic). Required for the integrated terminal, LSPs, formatters, \
+                     and any spawned tool to work."
                         .into(),
                 ),
                 button_text: "Open picker".into(),

@@ -121,17 +121,7 @@ pub fn setup_user_symlinks(termux_home: &Path) {
     }
 }
 
-/// Canonical local-projects root: `<termux_home>/projects`.
-///
-/// We read `TERMUX__HOME` (set by lib.rs at boot to `data_path/home`) rather
-/// than `$HOME`, because lib.rs sets `$HOME` to `data_path` itself for
-/// compatibility with code that expects HOME to point at the app's data
-/// root, while the integrated terminal lands inside `data_path/home`.
-/// Asks the active runtime adapter (via `util::env::workspace_root`)
-/// for the right path; Bootstrap returns `<data>/files/home`, chroot
-/// returns the same (visible via symmetric bind-mount). Returns None
-/// only if no adapter registered yet (lib.rs hasn't run, external
-/// Termux mode).
+/// Local projects live under the active runtime's workspace root.
 pub fn projects_dir() -> Option<PathBuf> {
     util::env::workspace_root().map(|root| root.join("projects"))
 }
@@ -220,137 +210,15 @@ pub fn is_noexec_path(path: &Path) -> bool {
     (buf.f_flag & libc::ST_NOEXEC) != 0
 }
 
-/// Outcome of a `copy_tree` invocation. The caller decides what to do with
-/// the dst path on each variant — copy_tree never deletes (callers own that
-/// because they generated the dst via the `<basename>-N` collision loop and
-/// know it's safe to remove on cancel).
-#[derive(Debug)]
-pub enum CopyOutcome {
-    /// Walk finished. `bytes` is the total successfully-copied byte count.
-    Completed { bytes: u64, files: u64 },
-    /// `cancel` flag flipped mid-walk. Caller is expected to `remove_dir_all`
-    /// the dst path it allocated.
-    Cancelled,
-}
-
-/// Snapshot pushed to the progress callback. Cheap to clone.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CopyProgress {
-    pub bytes: u64,
-    pub files: u64,
-    pub dirs: u64,
-}
-
-/// Best-effort recursive copy from `src` to `dst`. Used by the noexec banner
-/// Move action — copies a project from /storage/emulated/0 (FUSE noexec) to
-/// ~/projects/<name> (app-private, exec-allowed) so cargo / go / make /
-/// native build chains can actually run the resulting binaries.
-///
-/// Symlinks in the source are recreated as symlinks (not followed). Files
-/// preserve mode bits. Errors on individual entries are logged and skipped —
-/// a half-imported tree is more useful than a hard failure midway through.
-///
-/// `cancel`: checked between every entry. When set, the walk drops out and
-/// returns `CopyOutcome::Cancelled` without rolling back. The caller is
-/// expected to allocate `dst` via the existing `<basename>-N` collision
-/// resolver and then `remove_dir_all(dst)` on cancel — that path is
-/// guaranteed not to have contained user data before this call started.
-///
-/// `on_progress`: invoked after each entry with cumulative counters. Cheap
-/// to call — the toast renderer can throttle on its own side if it wants.
-pub fn copy_tree(
-    src: &Path,
-    dst: &Path,
-    cancel: &std::sync::atomic::AtomicBool,
-    on_progress: &dyn Fn(CopyProgress),
-) -> Result<CopyOutcome> {
-    use std::sync::atomic::Ordering;
-
-    if !src.is_dir() {
-        anyhow::bail!("copy_tree: source {} is not a directory", src.display());
-    }
-    std::fs::create_dir_all(dst).with_context(|| format!("create_dir_all {}", dst.display()))?;
-    let mut progress = CopyProgress::default();
-    let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.to_path_buf(), dst.to_path_buf())];
-    while let Some((cur_src, cur_dst)) = stack.pop() {
-        if cancel.load(Ordering::Relaxed) {
-            return Ok(CopyOutcome::Cancelled);
-        }
-        let entries = match std::fs::read_dir(&cur_src) {
-            Ok(e) => e,
-            Err(err) => {
-                log::warn!(
-                    "storage: read_dir {}: {err:#}, skipping subtree",
-                    cur_src.display()
-                );
-                continue;
-            }
-        };
-        for entry in entries.flatten() {
-            if cancel.load(Ordering::Relaxed) {
-                return Ok(CopyOutcome::Cancelled);
-            }
-            let entry_src = entry.path();
-            let entry_dst = cur_dst.join(entry.file_name());
-            let file_type = match entry.file_type() {
-                Ok(t) => t,
-                Err(err) => {
-                    log::warn!(
-                        "storage: file_type {}: {err:#}, skipping",
-                        entry_src.display()
-                    );
-                    continue;
-                }
-            };
-            if file_type.is_symlink() {
-                match std::fs::read_link(&entry_src) {
-                    Ok(target) => {
-                        let _ = std::fs::remove_file(&entry_dst);
-                        if let Err(err) = std::os::unix::fs::symlink(&target, &entry_dst) {
-                            log::warn!(
-                                "storage: symlink {} -> {}: {err:#}",
-                                entry_dst.display(),
-                                target.display()
-                            );
-                        }
-                    }
-                    Err(err) => log::warn!("storage: read_link {}: {err:#}", entry_src.display()),
-                }
-            } else if file_type.is_dir() {
-                if let Err(err) = std::fs::create_dir_all(&entry_dst) {
-                    log::warn!("storage: mkdir {}: {err:#}", entry_dst.display());
-                    continue;
-                }
-                progress.dirs += 1;
-                stack.push((entry_src, entry_dst));
-            } else if file_type.is_file() {
-                match std::fs::copy(&entry_src, &entry_dst) {
-                    Ok(n) => {
-                        progress.bytes += n;
-                        progress.files += 1;
-                    }
-                    Err(err) => log::warn!(
-                        "storage: copy {} -> {}: {err:#}",
-                        entry_src.display(),
-                        entry_dst.display()
-                    ),
-                }
-            }
-            on_progress(progress);
-        }
-    }
-    Ok(CopyOutcome::Completed {
-        bytes: progress.bytes,
-        files: progress.files,
-    })
-}
-
 fn ensure_symlink(link: &Path, target: &Path) {
     match std::fs::read_link(link) {
         Ok(existing) if existing == target => return,
         Ok(_) => {
             // Symlink points somewhere else — refresh it.
-            let _ = std::fs::remove_file(link);
+            if let Err(error) = std::fs::remove_file(link) {
+                log::warn!("storage: remove stale link {}: {error:#}", link.display());
+                return;
+            }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => {

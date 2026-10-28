@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
 license = "GPL-3.0-or-later"
-description = "Hexagonal port + adapters for the Zdroid userland runtime (chroot / bootstrap / external Termux)"
+description = "Hexagonal port + adapters for the Zdroid userland runtime (chroot / bootstrap)"
 
 [lints]
 workspace = true
