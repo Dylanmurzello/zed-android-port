@@ -56,7 +56,7 @@ impl ProjectContext {
         Self {
             worktrees,
             has_rules,
-            os: std::env::consts::OS.to_string(),
+            os: util::runtime_os().to_string(),
             arch: std::env::consts::ARCH.to_string(),
             shell: ShellKind::new(&get_default_system_shell_preferring_bash(), cfg!(windows))
                 .to_string(),
@@ -520,7 +520,7 @@ impl PromptBuilder {
         latest_output: &[String],
     ) -> Result<String, RenderError> {
         let context = TerminalAssistantPromptContext {
-            os: std::env::consts::OS.to_string(),
+            os: util::runtime_os().to_string(),
             arch: std::env::consts::ARCH.to_string(),
             shell: shell.map(|s| s.to_string()),
             working_directory: working_directory.map(|s| s.to_string()),

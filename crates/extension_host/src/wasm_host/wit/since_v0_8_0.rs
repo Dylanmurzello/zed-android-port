@@ -861,21 +861,9 @@ impl github::Host for WasmState {
 impl platform::Host for WasmState {
     async fn current_platform(&mut self) -> Result<(platform::Os, platform::Architecture)> {
         Ok((
-            match env::consts::OS {
+            match util::runtime_os() {
                 "macos" => platform::Os::Mac,
-                // Android reports `target_os = "android"` to Rust but is a
-                // Linux kernel underneath. Extensions hardcode lookup
-                // tables keyed by Os::Linux/Mac/Windows and panic on
-                // unknown — telling them we're Linux is the same trick as
-                // the Node `process.platform` hex-patch we ship at boot.
-                // Extensions then pick the linux-aarch64 release from
-                // their download tables and execve works fine because
-                // the LSP / DAP binaries we end up spawning are all
-                // bionic-loadable (or musl-loadable via our bundled
-                // `ld-musl-aarch64.so.1`). See
-                // `gpui_android/docs/workarounds/node-platform-patch.md`
-                // for the parallel reasoning.
-                "linux" | "android" => platform::Os::Linux,
+                "linux" => platform::Os::Linux,
                 "windows" => platform::Os::Windows,
                 _ => bail!("unsupported os"),
             },

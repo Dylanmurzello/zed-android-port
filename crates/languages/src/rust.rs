@@ -51,7 +51,9 @@ impl RustLspAdapter {
     const ARCH_SERVER_NAME: &str = "apple-darwin";
 }
 
-#[cfg(target_os = "linux")]
+// Android runs the Linux asset through the rootfs engine; its libc probe
+// runs there too (see `util::runtime_os`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl RustLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;
     const ARCH_SERVER_NAME: &str = "unknown-linux";
@@ -69,22 +71,9 @@ impl RustLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// Android: upstream rust-analyzer publishes `-gnu` and `-musl` aarch64
-// assets and no `aarch64-linux-android` one. Every language server runs
-// inside the Ubuntu rootfs through the engine loader (see
-// `util::command`), so the `-gnu` build is the right asset: it is a
-// Linux binary and the loader runs it as one. `check_if_user_installed`
-// still wins when rustup's `rust-analyzer` component is installed, via
-// the `zd-runtime` farm on PATH.
-#[cfg(target_os = "android")]
-impl RustLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::Gz;
-    const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
-}
-
 const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("rust-analyzer");
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 enum LibcType {
     Gnu,
     Musl,
@@ -153,7 +142,7 @@ impl RustLspAdapter {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     async fn determine_libc_type() -> LibcType {
         use futures::pin_mut;
 
@@ -203,7 +192,7 @@ impl RustLspAdapter {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     async fn build_arch_server_name_linux() -> String {
         let libc = match Self::determine_libc_type().await {
             LibcType::Musl => "musl",
@@ -273,9 +262,9 @@ impl RustLspAdapter {
             AssetKind::Zip => "zip",
         };
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let arch_server_name = Self::build_arch_server_name_linux().await;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         let arch_server_name = Self::ARCH_SERVER_NAME.to_string();
 
         format!(

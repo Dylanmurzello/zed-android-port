@@ -59,6 +59,18 @@ pub const fn is_utf8_char_boundary(u8: u8) -> bool {
     (u8 as i8) >= -0x40
 }
 
+/// The operating system Zed's subprocesses run on. On Android every spawned
+/// tool runs inside the Linux userland of the runtime through the engine
+/// loader, so prebuilt assets must be the `linux` builds; everywhere else it
+/// is the target OS.
+pub fn runtime_os() -> &'static str {
+    if cfg!(target_os = "android") {
+        "linux"
+    } else {
+        std::env::consts::OS
+    }
+}
+
 pub fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         None => s,

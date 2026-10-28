@@ -44,13 +44,13 @@ impl GoDebugAdapter {
         )
         .await?;
 
-        let os = match consts::OS {
+        let os = match util::runtime_os() {
             "macos" => "apple-darwin",
             "linux" => "unknown-linux-gnu",
             "windows" => "pc-windows-msvc",
             other => bail!("Running on unsupported os: {other}"),
         };
-        let suffix = if consts::OS == "windows" {
+        let suffix = if util::runtime_os() == "windows" {
             ".zip"
         } else {
             ".tar.gz"
@@ -76,7 +76,7 @@ impl GoDebugAdapter {
 
         match Self::fetch_latest_adapter_version(delegate).await {
             Ok(asset) => {
-                let ty = if consts::OS == "windows" {
+                let ty = if util::runtime_os() == "windows" {
                     DownloadedFileType::Zip
                 } else {
                     DownloadedFileType::GzipTar

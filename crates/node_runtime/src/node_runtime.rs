@@ -618,12 +618,9 @@ impl ManagedNodeRuntime {
     async fn install_if_needed(http: &Arc<dyn HttpClient>) -> Result<Self> {
         log::info!("Node runtime install_if_needed");
 
-        let os = match consts::OS {
+        let os = match util::runtime_os() {
             "macos" => "darwin",
             "linux" => "linux",
-            // The official linux-arm64 (glibc) build runs through the
-            // rootfs engine's loader on the Android port.
-            "android" => "linux",
             "windows" => "win",
             other => bail!("Running on unsupported os: {other}"),
         };
@@ -685,8 +682,8 @@ impl ManagedNodeRuntime {
                 .await
                 .context("error creating node containing dir")?;
 
-            let archive_type = match consts::OS {
-                "macos" | "linux" | "android" => ArchiveType::TarGz,
+            let archive_type = match util::runtime_os() {
+                "macos" | "linux" => ArchiveType::TarGz,
                 "windows" => ArchiveType::Zip,
                 other => bail!("Running on unsupported os: {other}"),
             };

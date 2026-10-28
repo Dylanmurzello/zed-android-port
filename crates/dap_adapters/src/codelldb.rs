@@ -75,9 +75,9 @@ impl CodeLldbDebugAdapter {
                 anyhow::bail!("unsupported architecture {unsupported}");
             }
         };
-        let platform = match std::env::consts::OS {
+        let platform = match util::runtime_os() {
             "macos" => "darwin",
-            "linux" | "android" => "linux",
+            "linux" => "linux",
             "windows" => "win32",
             unsupported => {
                 anyhow::bail!("unsupported operating system {unsupported}");

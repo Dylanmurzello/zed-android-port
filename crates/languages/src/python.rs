@@ -275,7 +275,7 @@ impl TyLspAdapter {
     const ARCH_SERVER_NAME: &str = "apple-darwin";
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl TyLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
     const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
@@ -293,13 +293,6 @@ impl TyLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// See the note on RustLspAdapter: the `-gnu` asset runs through the engine loader.
-#[cfg(target_os = "android")]
-impl TyLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
-    const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
-}
-
 impl TyLspAdapter {
     const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("ty");
 
@@ -313,7 +306,7 @@ impl TyLspAdapter {
             _ => consts::ARCH,
         };
         let os = Self::ARCH_SERVER_NAME;
-        let suffix = match consts::OS {
+        let suffix = match util::runtime_os() {
             "windows" => "zip",
             _ => "tar.gz",
         };
@@ -2445,7 +2438,7 @@ impl RuffLspAdapter {
     const ARCH_SERVER_NAME: &str = "apple-darwin";
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 impl RuffLspAdapter {
     const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
     const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
@@ -2463,13 +2456,6 @@ impl RuffLspAdapter {
     const ARCH_SERVER_NAME: &str = "pc-windows-msvc";
 }
 
-// See the note on RustLspAdapter: the `-gnu` asset runs through the engine loader.
-#[cfg(target_os = "android")]
-impl RuffLspAdapter {
-    const GITHUB_ASSET_KIND: AssetKind = AssetKind::TarGz;
-    const ARCH_SERVER_NAME: &str = "unknown-linux-gnu";
-}
-
 impl RuffLspAdapter {
     const SERVER_NAME: LanguageServerName = LanguageServerName::new_static("ruff");
 
@@ -2483,7 +2469,7 @@ impl RuffLspAdapter {
             _ => consts::ARCH,
         };
         let os = Self::ARCH_SERVER_NAME;
-        let suffix = match consts::OS {
+        let suffix = match util::runtime_os() {
             "windows" => "zip",
             _ => "tar.gz",
         };

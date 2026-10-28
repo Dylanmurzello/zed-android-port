@@ -49,6 +49,16 @@ These use normal 3-way merge. Expect occasional conflicts when upstream refactor
 
 Some functions were MOVED out of `crates/zed` so the Android entry point can reach them without linking the desktop binary crate: `editor::open_local_file`, `editor::open_bundled_file`, `editor::init_bundled_file_actions`, `workspace::open_settings_file`, `workspace::init_settings_file_actions`. Upstream keeps evolving its originals inside `crates/zed`, and because our copies live at different paths the merge produces NO conflict there — the extracted copies silently freeze. On every merge, diff each extracted helper against upstream's version of the original and port body/signature changes by hand (2026-08: `open_local_file` gained a `Option<Task<Result<Entity<Editor>>>>` return; `open_settings_file` was made sequential).
 
+### Asset-selection sites (runtime OS)
+
+Every upstream site that picks a download asset, an archive type or an extension platform by operating system calls `util::runtime_os()` instead of `std::env::consts::OS` (it answers `linux` on Android because the tool runs inside the rootfs). Upstream keeps adding such sites (new language servers, debug adapters, node, copilot). After each merge:
+
+```sh
+grep -rn 'consts::OS' crates --include='*.rs'
+```
+
+Anything left that feeds an asset name, archive type or platform table must call the helper; compile-time `#[cfg(target_os = "linux")]` platform blocks (rust-analyzer, ty, ruff, wasi-sdk) need `any(target_os = "linux", target_os = "android")`. Telemetry, user agents and CLI tools keep `consts::OS`. Writeup: `crates/gpui_android/docs/workarounds/runtime-os-asset-selection.md`.
+
 ### Action namespace rule
 
 `actions!(zed, [...])` is declared in BOTH `crates/zed/src/zed.rs` and `crates/zed_actions`. One home per action name, ever: an action referenced outside `crates/zed` (workspace/editor registrations, the Android app) must live in `zed_actions`, and `zed.rs` must not re-declare it. Keep-both compiles and then breaks action dispatch at runtime (the registry keys on name strings).

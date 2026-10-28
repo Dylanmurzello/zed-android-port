@@ -39,6 +39,7 @@ const WASI_SDK_ASSET_NAME: Option<&str> = cfg_select! {
     all(target_os = "macos", target_arch = "aarch64") => Some("wasi-sdk-25.0-arm64-macos.tar.gz"),
     all(target_os = "linux", target_arch = "x86_64") => Some("wasi-sdk-25.0-x86_64-linux.tar.gz"),
     all(target_os = "linux", target_arch = "aarch64") => Some("wasi-sdk-25.0-arm64-linux.tar.gz"),
+    all(target_os = "android", target_arch = "aarch64") => Some("wasi-sdk-25.0-arm64-linux.tar.gz"),
     all(target_os = "freebsd", target_arch = "x86_64") => Some("wasi-sdk-25.0-x86_64-linux.tar.gz"),
     all(target_os = "freebsd", target_arch = "aarch64") => Some("wasi-sdk-25.0-arm64-linux.tar.gz"),
     all(target_os = "windows", target_arch = "x86_64") => Some("wasi-sdk-25.0-x86_64-windows.tar.gz"),
