@@ -289,7 +289,10 @@ impl RuntimeProvider for BootstrapAdapter {
         names.into_iter().collect()
     }
 
-    fn env_for_zed_process(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_zed_process(
+        &self,
+        data_path: &std::path::Path,
+    ) -> Vec<(String, zdroid_hooks::EnvOp)> {
         // Bootstrap mode keeps the Termux-flavored env shape that
         // historical Zed-on-Android relied on: PREFIX + TERMUX__* +
         // TMPDIR under the bootstrap, PATH front-loaded with
@@ -297,7 +300,7 @@ impl RuntimeProvider for BootstrapAdapter {
         // No zd-runtime symlinks (those are chroot-only); spawns hit
         // $PREFIX/bin directly and inherit Zed-process env.
         use std::ffi::OsString;
-        use util::env::EnvOp;
+        use zdroid_hooks::EnvOp;
 
         let prefix = self.config.prefix.clone();
         let termux_home = data_path.join("home");
@@ -380,13 +383,13 @@ impl RuntimeProvider for BootstrapAdapter {
         ]
     }
 
-    fn env_for_terminal(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_terminal(&self, data_path: &std::path::Path) -> Vec<(String, zdroid_hooks::EnvOp)> {
         // PTY spawn replaces inherited env entirely; restore the
         // Termux-flavored vars the integrated terminal expects, plus
         // the libtermux-exec shim, HOME-override, and CA bundle the
         // pre-Phase-3 hardcoded block in terminal.rs used to set.
         use std::ffi::OsString;
-        use util::env::EnvOp;
+        use zdroid_hooks::EnvOp;
 
         let prefix = self.config.prefix.clone();
         let termux_home = data_path.join("home");

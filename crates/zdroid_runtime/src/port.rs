@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
-use util::env::EnvOp;
+use zdroid_hooks::EnvOp;
 
 use crate::config::RuntimeId;
 use crate::health::{HealthStatus, ProgressSink};
@@ -87,7 +87,7 @@ pub trait RuntimeProvider: Send + Sync {
     /// for the returned handle's contract.
     fn spawn(&self, req: SpawnRequest) -> anyhow::Result<Box<dyn SpawnHandle>>;
 
-    /// Whether `util::command::new_command` should rewrite absolute-path
+    /// Whether `zdroid_hooks::new_std_command` should rewrite absolute-path
     /// spawns under [`Self::environment_root`] to route through
     /// `zd-exec`. Adapters that cross a namespace boundary (e.g. chroot)
     /// return true so the spawn lands inside the right userland;

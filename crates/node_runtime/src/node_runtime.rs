@@ -1315,18 +1315,10 @@ pub fn npm_command_env(node_binary: &Path) -> HashMap<String, String> {
         }
     }
 
-    // Android Bootstrap needs rewritten shebangs and its bundled musl loader
-    // for npm's native packages. Chroot uses its own libc and shebang paths.
+    // Android's Bootstrap runtime needs rewritten shebangs and the musl
+    // builds of npm's native packages.
     #[cfg(target_os = "android")]
-    if let Some(termux_exec) = util::env::npm_libtermux_exec_path() {
-        if termux_exec.is_file() {
-            command_env.insert(
-                "LD_PRELOAD".into(),
-                termux_exec.to_string_lossy().into_owned(),
-            );
-        }
-        command_env.insert("npm_config_libc".into(), "musl".into());
-    }
+    zdroid_hooks::insert_npm_env(&mut command_env);
 
     #[cfg(windows)]
     {

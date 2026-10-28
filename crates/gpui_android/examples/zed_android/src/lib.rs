@@ -579,8 +579,8 @@ fn android_main(app: AndroidApp) {
         unsafe {
             for (key, op) in &ops {
                 match op {
-                    util::env::EnvOp::Set(value) => std::env::set_var(key, value),
-                    util::env::EnvOp::Remove => std::env::remove_var(key),
+                    zdroid_hooks::EnvOp::Set(value) => std::env::set_var(key, value),
+                    zdroid_hooks::EnvOp::Remove => std::env::remove_var(key),
                 }
             }
             // The app runs on the Dev channel, where zed_credentials_provider
@@ -607,18 +607,17 @@ fn android_main(app: AndroidApp) {
     // `crates/terminal/src/terminal.rs` can apply it when the PTY
     // spawns. Idempotent: subsequent android_main re-entries (activity
     // recreation) get the same overlay; the registration is OnceLock-
-    // guarded inside util::env.
-    util::env::register_terminal_env_overlay(provider.env_for_terminal(&data_path));
+    // guarded inside zdroid_hooks.
+    zdroid_hooks::register_terminal_env_overlay(provider.env_for_terminal(&data_path));
 
     // Publish adapter-specific filesystem hints for editor code that
     // historically read TERMUX__HOME / TERMUX__PREFIX env vars
-    // directly. Now those readers (workspace::welcome,
-    // node_runtime::node_runtime, gpui_android::storage) ask the
-    // active adapter via these registry slots — Bootstrap publishes
-    // its Termux-flavored paths, chroot publishes the bionic-clean
-    // equivalents.
-    util::env::register_workspace_root(provider.workspace_root(&data_path));
-    util::env::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
+    // directly. Now those readers (node_runtime::node_runtime,
+    // gpui_android::storage) ask the active adapter via these registry
+    // slots — Bootstrap publishes its Termux-flavored paths, chroot
+    // publishes the bionic-clean equivalents.
+    zdroid_hooks::register_workspace_root(provider.workspace_root(&data_path));
+    zdroid_hooks::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
 
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
@@ -795,7 +794,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     false
                 }
             };
-            // Register the env_root with util::command so absolute-path
+            // Register the env_root with zdroid_hooks so absolute-path
             // spawns under it get rewritten to route through `zd-exec`.
             // Gated on `needs_command_bridge()` so adapters whose
             // binaries run natively on the host (bootstrap's bionic-
@@ -806,7 +805,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             // `zd-exec <abs>` and fail with ENOENT — bootstrap mode
             // doesn't put zd-exec on PATH.
             if provider.needs_command_bridge() {
-                util::command::register_environment_root(env_root.clone());
+                zdroid_hooks::register_environment_root(env_root.clone());
             }
             if env_root_usable {
                 env_root.to_string_lossy().into_owned()

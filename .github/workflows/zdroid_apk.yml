@@ -94,7 +94,7 @@ jobs:
           cargo fmt --manifest-path "$APP_DIR/askpass-helper/Cargo.toml" -- --check
 
       - name: Test Android host components
-        run: cargo test -p zdroid_runtime -p gpui_android --locked
+        run: cargo test -p zdroid_hooks -p zdroid_runtime -p gpui_android --locked
 
   build:
     name: Build APK

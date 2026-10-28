@@ -123,14 +123,14 @@ pub fn setup_user_symlinks(termux_home: &Path) {
 
 /// Local projects live under the active runtime's workspace root.
 pub fn projects_dir() -> Option<PathBuf> {
-    util::env::workspace_root().map(|root| root.join("projects"))
+    zdroid_hooks::workspace_root().map(|root| root.join("projects"))
 }
 
 /// Path of the JSON file storing per-folder "suppress noexec warning"
 /// entries. Lives under `<workspace_root>/.cache/zed-android/`. Returns
 /// `None` only if no adapter registered a workspace_root yet.
 fn noexec_suppressed_file() -> Option<PathBuf> {
-    let root = util::env::workspace_root()?;
+    let root = zdroid_hooks::workspace_root()?;
     let dir = root.join(".cache").join("zed-android");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("noexec-suppressed.json"))

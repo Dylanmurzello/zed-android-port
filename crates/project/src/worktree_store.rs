@@ -479,7 +479,7 @@ impl WorktreeStore {
             // and /data/user/0/<package>, bind mounts of one directory that
             // canonicalize doesn't unify, so on a miss compare file identity.
             #[cfg(target_os = "android")]
-            if let Some(suffix) = util::path_equivalence::strip_prefix_by_identity(
+            if let Some(suffix) = zdroid_hooks::path_equivalence::strip_prefix_by_identity(
                 abs_path.as_ref(),
                 tree.read(cx).abs_path().as_ref(),
             ) {

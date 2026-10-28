@@ -1,0 +1,18 @@
+[package]
+name = "zdroid_hooks"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+description = "Android process-spawn hooks that Zed's crates call into, kept out of them to shrink the fork's edits"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/zdroid_hooks.rs"
+
+# Only `log`: `util` and `gpui_util` depend on this crate, so it can't depend
+# on them or on `zdroid_runtime`, which depends on `util`.
+[dependencies]
+log.workspace = true

@@ -170,7 +170,7 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String]) -> Result<
 
     // Always include `zd-exec` itself in the symlink set so kernel PATH
     // lookup of the bare name `zd-exec` resolves to this dir first.
-    // The env-root bridge in `util::command::Command::new` invokes
+    // The env-root bridge in `zdroid_hooks::new_std_command` invokes
     // `Command::new("zd-exec").arg(<abs_path>)` for absolute paths
     // under env_root; without this symlink that lookup would either
     // miss entirely or fall through to a wrong binary on PATH.
