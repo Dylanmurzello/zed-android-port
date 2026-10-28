@@ -33,9 +33,43 @@ pub fn write_unix(path: &[u8], out: &mut [u8]) -> Option<usize> {
     Some(len)
 }
 
+/// `/proc/<pid>/fd/<n>/<entry>`: the spelling a path too long for
+/// `sun_path` is bound under (the directory stays open on descriptor
+/// `n` of that process). Returns the link and the entry.
+pub fn proc_fd_link(path: &[u8]) -> Option<(&[u8], &[u8])> {
+    let rest = path.strip_prefix(b"/proc/")?;
+    let (_, rest) = split_digits(rest)?;
+    let rest = rest.strip_prefix(b"/fd/")?;
+    let (_, rest) = split_digits(rest)?;
+    let entry = rest.strip_prefix(b"/")?;
+    if entry.is_empty() || entry.contains(&b'/') {
+        return None;
+    }
+    Some((&path[..path.len() - entry.len() - 1], entry))
+}
+
+fn split_digits(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    let count = bytes.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    if count == 0 { None } else { Some(bytes.split_at(count)) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptor_spellings() {
+        assert_eq!(
+            proc_fd_link(b"/proc/4711/fd/9/sock"),
+            Some((&b"/proc/4711/fd/9"[..], &b"sock"[..]))
+        );
+        assert_eq!(proc_fd_link(b"/proc/self/fd/9/sock"), None);
+        assert_eq!(proc_fd_link(b"/proc/4711/fd/x/sock"), None);
+        assert_eq!(proc_fd_link(b"/proc/4711/fd/9/"), None);
+        assert_eq!(proc_fd_link(b"/proc/4711/fd/9/a/b"), None);
+        assert_eq!(proc_fd_link(b"/proc/4711/cwd/sock"), None);
+        assert_eq!(proc_fd_link(b"/tmp/sock"), None);
+    }
 
     #[test]
     fn filesystem_paths_only() {

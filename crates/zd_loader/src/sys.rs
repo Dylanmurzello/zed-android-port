@@ -13,6 +13,7 @@ pub const O_WRONLY: usize = 1;
 pub const O_CREAT: usize = 0o100;
 pub const O_APPEND: usize = 0o2000;
 pub const O_CLOEXEC: usize = 0o2000000;
+pub const O_DIRECTORY: usize = 0o40000;
 pub const O_ACCMODE: usize = 0o3;
 pub const O_EXCL: usize = 0o200;
 
