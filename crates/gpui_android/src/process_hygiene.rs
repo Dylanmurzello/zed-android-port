@@ -8,8 +8,26 @@
 //! pair) closes the child's stdin, stdout or stderr instead. bash then
 //! starts non-interactive and shows no prompt. Holding `/dev/null` on
 //! every missing standard fd keeps fd numbers 0 to 2 out of circulation.
+//!
+//! The same process starts in the host's `/`, and a child spawned without
+//! an explicit directory inherits it. Inside the rootfs engine that
+//! directory has no guest spelling (`getcwd` reports it unreachable), so
+//! node died in `uv_cwd` before npm could run `npm info`. The files dir is
+//! the one directory with the same path on both sides.
 
 use std::ffi::CString;
+use std::path::Path;
+
+/// Move the process to `dir`, the directory children without one of their
+/// own will run in.
+pub fn ensure_working_directory(dir: &Path) {
+    if let Err(error) = std::env::set_current_dir(dir) {
+        log::warn!(
+            "process_hygiene: cannot chdir to {}: {error}",
+            dir.display()
+        );
+    }
+}
 
 /// Open `/dev/null` on any of fds 0, 1, 2 that is currently closed.
 pub fn ensure_standard_fds() {

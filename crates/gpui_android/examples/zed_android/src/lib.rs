@@ -139,6 +139,7 @@ fn android_main(app: AndroidApp) {
         .unwrap_or_else(|| PathBuf::from(runtime_config::DEFAULT_DATA_PATH));
     info!("zed_android: data_path = {}", data_path.display());
     runtime_config::set_data_path(data_path.clone());
+    gpui_android::process_hygiene::ensure_working_directory(&data_path);
     // The rootfs installer seeds the guest's /etc/resolv.conf from the
     // device's active resolvers; Android has no resolv.conf of its own.
     runtime_config::set_nameservers(gpui_android::dns_bridge::android_dns_servers(&app));
