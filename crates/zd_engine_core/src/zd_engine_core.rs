@@ -16,6 +16,7 @@ pub mod identity;
 pub mod path;
 pub mod procfs;
 pub mod shebang;
+pub mod sockaddr;
 pub mod stack;
 pub mod sysno;
 pub mod translate;

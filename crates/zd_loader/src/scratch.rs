@@ -17,11 +17,13 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use zd_engine_core::path::MAX_PATH;
 
+use crate::socket::SocketScratch;
 use crate::sys;
 
 pub struct Scratch {
     pub paths: [[u8; MAX_PATH]; 5],
     pub bytes: [u8; 1024],
+    pub sockets: SocketScratch,
 }
 
 impl Scratch {
@@ -29,6 +31,7 @@ impl Scratch {
         Self {
             paths: [[0; MAX_PATH]; 5],
             bytes: [0; 1024],
+            sockets: SocketScratch::new(),
         }
     }
 }

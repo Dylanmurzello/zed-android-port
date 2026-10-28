@@ -19,6 +19,7 @@ mod load;
 mod mem;
 mod scratch;
 mod selftest;
+mod socket;
 mod sys;
 
 use core::arch::{asm, global_asm};

@@ -273,6 +273,45 @@ mod tests {
     }];
 
     #[test]
+    fn address_outputs_trap_only_with_a_buffer() {
+        use crate::sysno::address_arg;
+        const TRAPS: &[ArgTrap<'static>] = &[
+            ArgTrap {
+                nr: nr::RECVFROM,
+                arg: 4,
+                values: address_arg::NULL,
+                unless: true,
+            },
+            ArgTrap {
+                nr: nr::ACCEPT4,
+                arg: 1,
+                values: address_arg::NULL,
+                unless: true,
+            },
+        ];
+        let program = build(&FilterSpec {
+            trapped: TRAP_TABLE_CHUNK1,
+            arg_traps: TRAPS,
+            window_start: LOADER_IMAGE_BASE,
+            window_end: LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE,
+            probe_nr: nr::GETPID,
+            probe_magic: PROBE_MAGIC,
+            path_tag: TAG_PATH,
+            probe_tag: TAG_PROBE,
+        })
+        .unwrap();
+        let trap = SECCOMP_RET_TRAP | u32::from(TAG_PATH);
+        let mut call = data(nr::RECVFROM, GUEST_IP, 3);
+        assert_eq!(evaluate(&program, &call), SECCOMP_RET_ALLOW);
+        call.args[4] = 0x7000;
+        assert_eq!(evaluate(&program, &call), trap);
+        let mut call = data(nr::ACCEPT4, GUEST_IP, 3);
+        assert_eq!(evaluate(&program, &call), SECCOMP_RET_ALLOW);
+        call.args[1] = 0x7000;
+        assert_eq!(evaluate(&program, &call), trap);
+    }
+
+    #[test]
     fn clone3_traps_unless_the_struct_is_ver0_sized() {
         use crate::sysno::clone;
         const TRAPS: &[ArgTrap<'static>] = &[

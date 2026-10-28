@@ -94,8 +94,12 @@ pub mod nr {
     pub const BIND: u32 = 200;
     pub const ACCEPT: u32 = 202;
     pub const CONNECT: u32 = 203;
+    pub const GETSOCKNAME: u32 = 204;
+    pub const GETPEERNAME: u32 = 205;
     pub const SENDTO: u32 = 206;
     pub const RECVFROM: u32 = 207;
+    pub const SENDMSG: u32 = 211;
+    pub const RECVMSG: u32 = 212;
     pub const GETSOCKOPT: u32 = 209;
     pub const MUNMAP: u32 = 215;
     pub const CLONE: u32 = 220;
@@ -106,6 +110,8 @@ pub mod nr {
     pub const MPROTECT: u32 = 226;
     pub const RT_TGSIGQUEUEINFO: u32 = 240;
     pub const ACCEPT4: u32 = 242;
+    pub const RECVMMSG: u32 = 243;
+    pub const SENDMMSG: u32 = 269;
     pub const NAME_TO_HANDLE_AT: u32 = 264;
     pub const CLOCK_ADJTIME: u32 = 266;
     pub const SETNS: u32 = 268;
@@ -185,10 +191,16 @@ pub const TRAP_TABLE: &[u32] = &[
     nr::RENAMEAT,
     nr::RENAMEAT2,
     nr::GETCWD,
-    // sockaddr_un
+    // sockaddr_un, handed in and reported back
     nr::BIND,
     nr::CONNECT,
     nr::SENDTO,
+    nr::GETSOCKNAME,
+    nr::GETPEERNAME,
+    nr::SENDMSG,
+    nr::RECVMSG,
+    nr::SENDMMSG,
+    nr::RECVMMSG,
     // SIGSYS must never be blocked
     nr::RT_SIGACTION,
     nr::RT_SIGPROCMASK,
@@ -251,6 +263,12 @@ pub mod ioctl {
 pub mod socket {
     pub const AF_NETLINK: u64 = 16;
     pub const TRAPPED_FAMILIES: &[u64] = &[AF_NETLINK];
+}
+
+/// `recvfrom` and `accept4` report an address only into a buffer the
+/// caller passed; without one there is nothing to map back.
+pub mod address_arg {
+    pub const NULL: &[u64] = &[0];
 }
 
 /// `clone3` is trapped unless its size argument is the VER0 struct size.
@@ -391,6 +409,12 @@ pub fn name(number: u32) -> Option<&'static str> {
         nr::CONNECT => "connect",
         nr::SENDTO => "sendto",
         nr::RECVFROM => "recvfrom",
+        nr::GETSOCKNAME => "getsockname",
+        nr::GETPEERNAME => "getpeername",
+        nr::SENDMSG => "sendmsg",
+        nr::RECVMSG => "recvmsg",
+        nr::SENDMMSG => "sendmmsg",
+        nr::RECVMMSG => "recvmmsg",
         nr::MUNMAP => "munmap",
         nr::CLONE => "clone",
         nr::EXECVE => "execve",

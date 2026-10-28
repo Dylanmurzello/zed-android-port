@@ -16,6 +16,7 @@ use zd_engine_core::compat::{self, Response};
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
 use zd_engine_core::procfs;
 use zd_engine_core::stack::AT_NULL;
+use zd_engine_core::sysno::address_arg;
 use zd_engine_core::sysno::ptrace as ptrace_traps;
 use zd_engine_core::sysno::sockopt as sockopt_traps;
 use zd_engine_core::sysno::{
@@ -29,6 +30,7 @@ use crate::config;
 use crate::exec;
 use crate::link;
 use crate::scratch::{self, Scratch, Working};
+use crate::socket;
 use crate::log;
 use crate::sys::{self, KernelSigaction};
 
@@ -207,6 +209,18 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
                 values: sockopt_traps::TRAPPED_NAMES,
                 unless: false,
             },
+            ArgTrap {
+                nr: nr::RECVFROM,
+                arg: 4,
+                values: address_arg::NULL,
+                unless: true,
+            },
+            ArgTrap {
+                nr: nr::ACCEPT4,
+                arg: 1,
+                values: address_arg::NULL,
+                unless: true,
+            },
         ],
         window_start: LOADER_IMAGE_BASE,
         window_end: LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE,
@@ -291,15 +305,28 @@ fn compat_trap(number: u32, regs: &mut [u64; 31]) {
         Response::Errno(errno) => sys::neg_errno(errno),
         Response::Success => 0,
         Response::Chroot => chroot(regs),
-        Response::Accept4 => issue(
-            nr::ACCEPT4,
-            &[regs[0] as usize, regs[1] as usize, regs[2] as usize, 0, 0, 0],
-        ),
+        Response::Accept4 => accept_compat(regs),
         Response::Unknown => {
             log_unknown(number);
             sys::neg_errno(sys::ENOSYS)
         }
     };
+}
+
+/// The legacy `accept` answered as `accept4` with no flags, the peer
+/// address mapped back like any other.
+#[inline(never)]
+fn accept_compat(regs: &[u64; 31]) -> u64 {
+    let mut as_accept4 = *regs;
+    as_accept4[3] = 0;
+    let Some(translator) = config::translator() else {
+        return issue(nr::ACCEPT4, &args_of(&as_accept4));
+    };
+    let Some(mut claim) = scratch::claim() else {
+        return issue(nr::ACCEPT4, &args_of(&as_accept4));
+    };
+    socket::address_out(translator, nr::ACCEPT4, &mut as_accept4, 1, 2, claim.get());
+    as_accept4[0]
 }
 
 #[inline(never)]
@@ -440,7 +467,7 @@ pub unsafe fn cstr_bounded<'a>(pointer: *const u8, max: usize) -> Option<&'a [u8
     None
 }
 
-fn args_of(regs: &[u64; 31]) -> [usize; 6] {
+pub(crate) fn args_of(regs: &[u64; 31]) -> [usize; 6] {
     [
         regs[0] as usize,
         regs[1] as usize,
@@ -451,7 +478,7 @@ fn args_of(regs: &[u64; 31]) -> [usize; 6] {
     ]
 }
 
-fn issue(number: u32, args: &[usize; 6]) -> u64 {
+pub(crate) fn issue(number: u32, args: &[usize; 6]) -> u64 {
     unsafe { sys::syscall6(number, args[0], args[1], args[2], args[3], args[4], args[5]) as u64 }
 }
 
@@ -571,8 +598,14 @@ fn dispatch_with(
         nr::SYMLINKAT => symlinkat(translator, regs, working.get()),
         nr::LINKAT | nr::RENAMEAT | nr::RENAMEAT2 => two_paths(translator, number, regs, working.get()),
         nr::GETCWD => getcwd(translator, regs, working.get()),
-        nr::BIND | nr::CONNECT => sockaddr(translator, number, regs, 1, 2, working.get()),
-        nr::SENDTO => sockaddr(translator, number, regs, 4, 5, working.get()),
+        nr::BIND | nr::CONNECT => socket::address_in(translator, number, regs, 1, 2, working.get()),
+        nr::SENDTO => socket::address_in(translator, number, regs, 4, 5, working.get()),
+        nr::GETSOCKNAME | nr::GETPEERNAME | nr::ACCEPT4 => {
+            socket::address_out(translator, number, regs, 1, 2, working.get())
+        }
+        nr::RECVFROM => socket::address_out(translator, number, regs, 4, 5, working.get()),
+        nr::SENDMSG | nr::RECVMSG => socket::message(translator, number, regs, working.get()),
+        nr::SENDMMSG | nr::RECVMMSG => socket::multi_message(translator, number, regs, working.get()),
         nr::RT_SIGACTION => sigaction(regs),
         nr::RT_SIGPROCMASK => sigprocmask(regs, blocked),
         nr::IOCTL => termios2(regs),
@@ -1066,59 +1099,6 @@ fn getcwd(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &mut 
     // SAFETY: a guest buffer of `size` bytes, as handed to the kernel.
     unsafe { core::ptr::copy_nonoverlapping(guest.as_ptr(), buffer, guest_len + 1) };
     regs[0] = (guest_len + 1) as u64;
-}
-
-/// Filesystem `sockaddr_un` paths in `bind`, `connect` and `sendto`.
-#[inline(never)]
-fn sockaddr(
-    translator: &Translator<'static>,
-    number: u32,
-    regs: &mut [u64; 31],
-    addr_index: usize,
-    len_index: usize,
-    scratch: &mut Scratch,
-) {
-    let mut args = args_of(regs);
-    let address = regs[addr_index] as *const u8;
-    let len = regs[len_index] as usize;
-    if address.is_null() || len < 3 {
-        regs[0] = issue(number, &args);
-        return;
-    }
-    // SAFETY: a guest sockaddr of `len` bytes, as handed to the kernel.
-    let bytes = unsafe { core::slice::from_raw_parts(address, len.min(2 + sys::SUN_PATH_MAX)) };
-    let family = u16::from_le_bytes([bytes[0], bytes[1]]);
-    let path = &bytes[2..];
-    let path = match path.iter().position(|&byte| byte == 0) {
-        Some(end) => &path[..end],
-        None => path,
-    };
-    if family != sys::AF_UNIX || path.is_empty() {
-        regs[0] = issue(number, &args);
-        return;
-    }
-    let [host, link, target, ..] = &mut scratch.paths;
-    let host_len = match translate(translator, path, host, link, target) {
-        Ok(Translated::Host(len)) => len,
-        Ok(_) => {
-            regs[0] = issue(number, &args);
-            return;
-        }
-        Err(errno) => {
-            regs[0] = sys::neg_errno(errno);
-            return;
-        }
-    };
-    if host_len >= sys::SUN_PATH_MAX {
-        regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
-        return;
-    }
-    let mut sun = [0u8; 2 + sys::SUN_PATH_MAX];
-    sun[..2].copy_from_slice(&sys::AF_UNIX.to_le_bytes());
-    sun[2..2 + host_len].copy_from_slice(&host[..host_len]);
-    args[addr_index] = sun.as_ptr() as usize;
-    args[len_index] = 2 + host_len + 1;
-    regs[0] = issue(number, &args);
 }
 
 /// Kernel `struct termios` (asm-generic): 36 bytes, no speed fields.
