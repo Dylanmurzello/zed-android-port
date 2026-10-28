@@ -124,7 +124,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 0.9.19 downloads Bootstrap from Zdroid's fork, pinned by SHA-256, adds the picker's **Download from** field, and gives the whole app Bootstrap's CA bundle. Check on the tablet:
 
-- With Claude Code and Codex installed globally and no `agent_servers` settings, after a restart, a Codex thread answers (it did with the settings), and so does a Claude Agent thread.
+- With Claude Code installed globally and no `agent_servers` settings, after a restart, a Claude Agent thread answers. Codex passed this on 2026-10-28.
 - On a fresh install (or another device), the Bootstrap card shows **Download from** with `ilkersigirci/zdroid-bootstrap`, and Install succeeds; the log shows "verified bootstrap-aarch64.zip against the pinned sha256". Typing `Dylanmurzello/zdroid-bootstrap` installs his latest release instead, and a typo shows the field's error.
 - rust-analyzer's first `cargo metadata` in a new project downloads the crates.io index without a certificate error.
 
