@@ -40,7 +40,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/D
 ### First launch
 
 1. **Storage permissions.** The system prompts for read/write to `/sdcard` so the editor can reach anything outside its app-private dir. Grant it. Without it, "Open Project" can't see your files.
-2. **Runtime adapter.** Open **Configure runtime** in onboarding (or **Settings → Android Runtime** later). Choose **Bootstrap** for a Termux-derived userland without root, or **Kali chroot** for an existing Magisk and Kali NetHunter installation. The picker shows whether each runtime is ready.
+2. **Runtime adapter.** Open **Configure runtime** in onboarding (or **Settings → Android** later). Choose **Bootstrap** for a Termux-derived userland without root, or **Kali chroot** for an existing Magisk and Kali NetHunter installation. The picker shows whether each runtime is ready.
 3. **Bootstrap download.** Tap **Install** on the Bootstrap card to download the userland from [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap). When it is ready, select it and restart Zdroid. Installation errors remain visible in the picker.
 
 ### Setting up your shell environment (Bootstrap)
@@ -73,7 +73,7 @@ Prerequisites: a rooted device with Magisk installed.
 
 Every subprocess the editor spawns (`bash`, `git`, LSPs, terminal shells) goes over a Unix socket to the `zd-spawnd` daemon, which `fork`s, `chroot`s, drops privileges, and `execve`s on your behalf. Sub-millisecond spawn versus ~200 ms for `su`-mediated alternatives. All the bionic-vs-glibc gotchas (`/usr/bin/env`, `/tmp`, `dlopen libfoo.so`) disappear because subprocesses run inside a real distro.
 
-External Termux integration is unavailable. If an older version saved that placeholder choice, open **Settings → Android Runtime**, select Bootstrap or Kali chroot, and restart. Existing runtime settings are preserved when switching.
+External Termux integration is unavailable. If an older version saved that placeholder choice, open **Settings → Android**, select Bootstrap or Kali chroot, and restart. Existing runtime settings are preserved when switching.
 
 ### Working with projects
 
@@ -93,7 +93,7 @@ Three workflows that work with this constraint:
 
 ## <img src="https://api.iconify.design/lucide:hand.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Gestures & input
 
-Each surface toggles in **Settings → Android Input** (or on the first-run onboarding card).
+Each surface toggles in **Settings → Android** (or on the first-run onboarding card).
 
 ### Touch (default)
 - **Tap** to position the cursor
@@ -138,7 +138,7 @@ The editor is bionic-linked and runs as the Android app process. Every subproces
 | **Bootstrap** _(no root)_ | Termux userland rebuilt under `com.zdroid`: apt/dpkg/bash with our package name baked into RUNPATHs and shebangs. Pure bionic, no glibc; same trade-offs as any Termux install. `apt` and `pkg install` work for everything Termux ships. | Downloaded from [`Dylanmurzello/zdroid-bootstrap`](https://github.com/Dylanmurzello/zdroid-bootstrap) using **Install** on the Bootstrap card in the runtime picker. |
 | **Kali chroot** _(needs Magisk)_ | Real glibc Linux. Every spawn goes over a Unix socket to `zd-spawnd` (a small privileged daemon) which does `fork` + `chroot` + `setuid` + `execve` on the editor's behalf. ~5 ms per spawn vs ~200 ms for `su`-mediated. All the bionic gotchas (`/usr/bin/env`, `/tmp`, `dlopen libfoo.so`) disappear because subprocesses run inside a real distro. | Flash the Magisk module from [`Dylanmurzello/zdroid-spawnd`](https://github.com/Dylanmurzello/zdroid-spawnd), plus drop a Kali NetHunter aarch64 rootfs at `/data/local/nhsystem/kali-arm64`. |
 
-Switching is one tap (Settings → Android Runtime). Selection persists in `$PREFIX/etc/zd-runtime.toml`. **Restart Zdroid after switching adapters.** The editor caches environment state (PATH, HOME, library search paths, spawn-router config) from whichever adapter was active at boot; without a restart, subprocesses spawned post-switch can land with stale env and fail in cryptic ways (LSPs not found, `git` claiming HOME doesn't exist, `pkg install` writing to the wrong rootfs, etc.).
+Switching is one tap (Settings → Android). Selection persists in `$PREFIX/etc/zd-runtime.toml`. **Restart Zdroid after switching adapters.** The editor caches environment state (PATH, HOME, library search paths, spawn-router config) from whichever adapter was active at boot; without a restart, subprocesses spawned post-switch can land with stale env and fail in cryptic ways (LSPs not found, `git` claiming HOME doesn't exist, `pkg install` writing to the wrong rootfs, etc.).
 
 ### When to pick which
 

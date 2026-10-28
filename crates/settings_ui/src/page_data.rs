@@ -19,6 +19,9 @@ use crate::{
     },
 };
 
+#[cfg(target_os = "android")]
+mod android;
+
 const DEFAULT_STRING: String = String::new();
 /// A default empty string reference. Useful in `pick` functions for cases either in dynamic item fields, or when dealing with `settings::Maybe`
 /// to avoid the "NO DEFAULT" case.
@@ -63,7 +66,7 @@ macro_rules! concat_sections {
 }
 
 pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
-    let mut pages = vec![
+    vec![
         general_page(cx),
         appearance_page(),
         keymap_page(),
@@ -78,189 +81,10 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
         collaboration_page(),
         ai_page(cx),
         network_page(),
-    ];
-
-    #[cfg(target_os = "android")]
-    pages.push(android_runtime_page());
-
-    #[cfg(target_os = "android")]
-    pages.push(android_input_page());
-
-    pages.push(developer_page(cx));
-
-    pages
-}
-
-/// Android-specific: lets the user choose which userland Zdroid routes
-/// its spawn pipeline through (chroot or bootstrap).
-/// Lives as a top-level settings page so the option is discoverable
-/// without command-palette knowledge — chroot mode is functionally
-/// required for LSPs, terminal, and tooling, so this can't be buried.
-///
-/// The click handler dispatches the `zdroid_runtime::PickRuntime`
-/// action registered in `crates/gpui_android/examples/zed_android/src/
-/// runtime_picker.rs::register`. The action handler unconditionally
-/// calls `cx.open_window` to spawn the picker as its own window
-/// (ExtraWindowActivity on Android), so it doesn't matter that this
-/// dispatch starts in the Settings window — the picker is a peer
-/// window, not nested inside Settings. Dispatched via
-/// `with_active_or_new_workspace` so the action lands on the workspace
-/// where the handler is registered.
-#[cfg(target_os = "android")]
-fn android_runtime_page() -> SettingsPage {
-    SettingsPage {
-        title: "Android Runtime",
-        items: Box::new([
-            SettingsPageItem::SectionHeader("Runtime adapter"),
-            SettingsPageItem::ActionLink(ActionLink {
-                title: "Pick runtime adapter".into(),
-                description: Some(
-                    "Select which userland Zdroid routes commands into: kali chroot \
-                     (full Linux via zd-spawnd) or bundled bootstrap (Termux-flavored \
-                     bionic). Required for the integrated terminal, LSPs, formatters, \
-                     and any spawned tool to work."
-                        .into(),
-                ),
-                button_text: "Open picker".into(),
-                on_click: Arc::new(|_settings_window, _window, cx| {
-                    workspace::with_active_or_new_workspace(cx, |_workspace, window, cx| match cx
-                        .build_action("zdroid_runtime::PickRuntime", None)
-                    {
-                        Ok(action) => window.dispatch_action(action, cx),
-                        Err(err) => log::warn!(
-                            "settings_ui::android_runtime_page: \
-                                     zdroid_runtime::PickRuntime not registered: {err}"
-                        ),
-                    });
-                }),
-                files: USER,
-            }),
-        ]),
-    }
-}
-
-/// Android-specific: touch / on-screen-keyboard preferences.
-/// Currently exposes one toggle but the page is structured so we
-/// can add more touch-control settings (trackpad sensitivity,
-/// long-press timings, etc.) without re-plumbing.
-#[cfg(target_os = "android")]
-fn android_input_page() -> SettingsPage {
-    SettingsPage {
-        title: "Android Input",
-        items: Box::new([
-            SettingsPageItem::SectionHeader("On-Screen Keyboard"),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable On-Screen Keyboard",
-                description: "Auto-show the soft IME on text-input \
-                    focus and expose its toggle in the pane tab bar. \
-                    Turn off when using a hardware keyboard.",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("android_input.on_screen_keyboard"),
-                    pick: |settings_content| {
-                        settings_content
-                            .android_input
-                            .as_ref()?
-                            .on_screen_keyboard
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .android_input
-                            .get_or_insert_default()
-                            .on_screen_keyboard = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Show Programming Keys Row",
-                description: "Render a row above the soft keyboard \
-                    with Esc, Tab, Ctrl, Alt, and arrow keys. Ctrl \
-                    and Alt are sticky: tap once for next key, \
-                    double-tap to lock until tapped again.",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("android_input.programming_extras_row"),
-                    pick: |settings_content| {
-                        settings_content
-                            .android_input
-                            .as_ref()?
-                            .programming_extras_row
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .android_input
-                            .get_or_insert_default()
-                            .programming_extras_row = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SectionHeader("Touch Behavior"),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Enable Virtual Trackpad",
-                description: "Add a status bar toggle that switches \
-                    the screen into VNC-style trackpad mode: drag \
-                    moves an on-screen cursor, tap clicks, \
-                    two-finger tap is right-click, two-finger drag \
-                    scrolls. While trackpad mode is active, standard \
-                    Android touch (direct-tap on UI elements, scroll, \
-                    splitter drag) is disabled; toggle off from the \
-                    status bar icon to go back.",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("android_input.trackpad_mode"),
-                    pick: |settings_content| {
-                        settings_content
-                            .android_input
-                            .as_ref()?
-                            .trackpad_mode
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .android_input
-                            .get_or_insert_default()
-                            .trackpad_mode = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Invert Scroll Direction",
-                description: "Reverse the scroll direction of the \
-                    trackpad (two-finger) and the mouse wheel \
-                    (macOS-style natural vs traditional). Affects the \
-                    hardware trackpad, the mouse wheel, and the virtual \
-                    trackpad. Direct-touch finger scrolling is never \
-                    inverted.",
-                field: Box::new(SettingField {
-                    organization_override: None,
-                    json_path: Some("android_input.invert_scroll"),
-                    pick: |settings_content| {
-                        settings_content
-                            .android_input
-                            .as_ref()?
-                            .invert_scroll
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .android_input
-                            .get_or_insert_default()
-                            .invert_scroll = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-        ]),
-    }
+        #[cfg(target_os = "android")]
+        android::android_page(),
+        developer_page(cx),
+    ]
 }
 
 fn developer_page(cx: &App) -> SettingsPage {
@@ -679,7 +503,13 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
-    #[cfg(not(target_os = "android"))]
+    // Android doesn't start Zed's telemetry or offer Zed's hosted models, so
+    // these toggles would do nothing.
+    #[cfg(target_os = "android")]
+    fn privacy_section() -> [SettingsPageItem; 0] {
+        []
+    }
+
     fn auto_update_section() -> [SettingsPageItem; 2] {
         [
             SettingsPageItem::SectionHeader("Auto Update"),
@@ -722,24 +552,17 @@ fn general_page(cx: &App) -> SettingsPage {
 
     SettingsPage {
         title: "General",
-        items: {
-            // Open-coded instead of `concat_sections!` so we can cfg-gate
-            // privacy + auto-update off on Android: telemetry features
-            // are stubbed to mocks in this build (so the toggles do
-            // nothing) and the auto-update path points at Zed's update
-            // server which we don't use.
-            let mut items: Vec<SettingsPageItem> = Vec::new();
-            items.extend(general_settings_section(cx));
-            items.extend(security_section());
-            items.extend(workspace_restoration_section());
-            items.extend(scoped_settings_section());
-            #[cfg(not(target_os = "android"))]
-            items.extend(privacy_section());
-            #[cfg(not(target_os = "android"))]
-            items.extend(auto_update_section());
-            items.extend(extensions_section());
-            items.into()
-        },
+        items: concat_sections!(
+            @vec,
+            general_settings_section(cx),
+            security_section(),
+            workspace_restoration_section(),
+            scoped_settings_section(),
+            privacy_section(),
+            auto_update_section(),
+            extensions_section(),
+        )
+        .into(),
     }
 }
 

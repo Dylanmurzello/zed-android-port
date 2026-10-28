@@ -1349,7 +1349,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // scattered across Zed's UI) dispatch `zed_actions::OpenSettings`,
     // which normally lands the user at the settings.json editor. Without
     // a working Android runtime that panel can't solve anything: the user
-    // has to find Android Runtime > Open picker first. Skip the dead-end
+    // has to find Android > Open picker first. Skip the dead-end
     // by routing OpenSettings straight to the picker when the runtime
     // toml is missing.
     //
