@@ -12,15 +12,16 @@ use ndk::native_window::NativeWindow;
 use raw_window_handle as rwh;
 
 use gpui::{
-    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, FrameRequestSource,
-    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    AnyWindowHandle, Bounds, Capslock, Corners, DevicePixels, DispatchEventResult, Edges,
+    FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
     Scene, Size, TextInputStateChange, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowParams, WindowVisibility, point, px, size,
+    WindowControlArea, WindowInsets, WindowParams, WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
 use crate::display::AndroidDisplay;
+use crate::insets::PhysicalInsets;
 use crate::platform::{frame_presented, request_frame_callback, set_native_window_frame_rate};
 
 /// Raw window handle wrapper for Android. Holds a `*mut ANativeWindow` pointer
@@ -68,11 +69,14 @@ pub(crate) struct Callbacks {
     pub(crate) close: Option<Box<dyn FnOnce()>>,
     pub(crate) appearance_changed: Option<Box<dyn FnMut()>>,
     pub(crate) visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
+    pub(crate) insets_changed: Option<Box<dyn FnMut(WindowInsets)>>,
 }
 
 pub(crate) struct AndroidWindowState {
+    /// The whole surface. gpui lays out in [`Self::layout_bounds`].
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) scale_factor: f32,
+    pub(crate) insets: PhysicalInsets,
     pub(crate) renderer: Option<WgpuRenderer>,
     pub(crate) raw_window: AndroidRawWindow,
     pub(crate) display: Rc<dyn PlatformDisplay>,
@@ -192,6 +196,42 @@ pub(crate) struct AndroidWindowState {
     /// diff we re-push so the IME observes touch-driven cursor moves
     /// in this specific window.
     pub(crate) last_pushed_selection: Option<(usize, usize)>,
+}
+
+impl AndroidWindowState {
+    /// The part of the surface above the on-screen keyboard and the
+    /// programming extras row on it, where gpui lays out. Edge-to-edge
+    /// windows don't get `adjustResize`, so this shrinks the layout the way
+    /// it shrinks native views. The surface keeps its size: gpui draws from
+    /// the top-left corner, and the keyboard and the row cover the rest.
+    pub(crate) fn layout_bounds(&self) -> Bounds<Pixels> {
+        let obscured_height = self.to_logical(self.insets.obscured_bottom);
+        let mut bounds = self.bounds;
+        bounds.size.height = (bounds.size.height - obscured_height).max(Pixels::ZERO);
+        bounds
+    }
+
+    fn to_logical(&self, physical: i32) -> Pixels {
+        px(physical as f32 / self.scale_factor)
+    }
+
+    fn window_insets(&self) -> WindowInsets {
+        let insets = self.insets;
+        WindowInsets {
+            safe_area: Edges {
+                top: self.to_logical(insets.safe_area_top),
+                right: self.to_logical(insets.safe_area_right),
+                // Measured from the layout area's bottom edge, which is the
+                // keyboard's or the extras row's top edge while it's up.
+                bottom: self.to_logical((insets.safe_area_bottom - insets.obscured_bottom).max(0)),
+                left: self.to_logical(insets.safe_area_left),
+            },
+            // Consumed, as `adjustResize` consumes it: the layout area
+            // already ends above the keyboard.
+            ime: Edges::default(),
+            corner_radii: Corners::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -398,7 +438,7 @@ impl AndroidWindowStatePtr {
     /// Fires the `on_resize` callback that gpui registered so it relays out
     /// the element tree at the new size + DPI.
     pub(crate) fn resize_surface(&self, width: u32, height: u32, scale_factor: f32) {
-        let content_size = {
+        {
             let mut state = self.state.borrow_mut();
             state.scale_factor = scale_factor;
             state.bounds = Bounds {
@@ -414,11 +454,70 @@ impl AndroidWindowStatePtr {
                     DevicePixels(height.max(1) as i32),
                 ));
             }
-            state.bounds.size
-        };
+        }
+        self.notify_resize();
+    }
 
-        if let Some(callback) = self.callbacks.borrow_mut().resize.as_mut() {
-            callback(content_size, scale_factor);
+    /// Records the insets the window's Activity reported. While the keyboard
+    /// slides, each frame resizes gpui's layout area, like a live window
+    /// resize; the surface stays as it is.
+    pub(crate) fn set_insets(&self, insets: PhysicalInsets) {
+        let (previous, previous_layout_size, layout_size, extra_window_id) = {
+            let mut state = self.state.borrow_mut();
+            if state.insets == insets {
+                return;
+            }
+            let previous_layout_size = state.layout_bounds().size;
+            let previous = std::mem::replace(&mut state.insets, insets);
+            // gpui has already removed a closed window, so its callbacks
+            // would only fail with "window not found".
+            if state.closed {
+                return;
+            }
+            (
+                previous,
+                previous_layout_size,
+                state.layout_bounds().size,
+                state.extra_window_id,
+            )
+        };
+        // Every frame of the keyboard's slide lands here, so only its start
+        // and end are logged at info.
+        let obscured_toggled = (previous.obscured_bottom > 0) != (insets.obscured_bottom > 0);
+        let safe_area_changed = PhysicalInsets {
+            obscured_bottom: insets.obscured_bottom,
+            ..previous
+        } != insets;
+        if obscured_toggled || safe_area_changed {
+            log::info!(
+                "AndroidWindow(extra={extra_window_id:?}): {insets:?}, layout size {layout_size:?}"
+            );
+        } else {
+            log::debug!(
+                "AndroidWindow(extra={extra_window_id:?}): {insets:?}, layout size {layout_size:?}"
+            );
+        }
+        if layout_size != previous_layout_size {
+            self.notify_resize();
+        }
+        let callback = self.callbacks.borrow_mut().insets_changed.take();
+        if let Some(mut callback) = callback {
+            let window_insets = self.state.borrow().window_insets();
+            callback(window_insets);
+            self.callbacks.borrow_mut().insets_changed = Some(callback);
+        }
+    }
+
+    /// Tells gpui to lay out again at [`AndroidWindowState::layout_bounds`].
+    fn notify_resize(&self) {
+        let (layout_size, scale_factor) = {
+            let state = self.state.borrow();
+            (state.layout_bounds().size, state.scale_factor)
+        };
+        let callback = self.callbacks.borrow_mut().resize.take();
+        if let Some(mut callback) = callback {
+            callback(layout_size, scale_factor);
+            self.callbacks.borrow_mut().resize = Some(callback);
         }
     }
 
@@ -615,6 +714,7 @@ impl AndroidWindow {
         let state = AndroidWindowState {
             bounds,
             scale_factor: 1.0,
+            insets: PhysicalInsets::default(),
             renderer: None,
             raw_window: AndroidRawWindow {
                 native_window: std::ptr::null_mut(),
@@ -702,7 +802,7 @@ impl rwh::HasDisplayHandle for AndroidWindow {
 
 impl PlatformWindow for AndroidWindow {
     fn bounds(&self) -> Bounds<Pixels> {
-        self.ptr.state.borrow().bounds
+        self.ptr.state.borrow().layout_bounds()
     }
 
     fn is_maximized(&self) -> bool {
@@ -710,11 +810,13 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn window_bounds(&self) -> WindowBounds {
+        // Zed saves this to restore the window, which shouldn't depend on
+        // whether the keyboard was up.
         WindowBounds::Maximized(self.ptr.state.borrow().bounds)
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        self.ptr.state.borrow().bounds.size
+        self.ptr.state.borrow().layout_bounds().size
     }
 
     fn resize(&mut self, _size: Size<Pixels>) {}
@@ -868,6 +970,14 @@ impl PlatformWindow for AndroidWindow {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>) {
         self.ptr.callbacks.borrow_mut().appearance_changed = Some(callback);
+    }
+
+    fn insets(&self) -> WindowInsets {
+        self.ptr.state.borrow().window_insets()
+    }
+
+    fn on_insets_changed(&self, callback: Box<dyn FnMut(WindowInsets)>) {
+        self.ptr.callbacks.borrow_mut().insets_changed = Some(callback);
     }
 
     fn show_soft_keyboard(&self) {
