@@ -861,15 +861,6 @@ pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -
         .child(render_theme_section(&mut tab_index, cx))
         .child(render_base_keymap_section(&mut tab_index, cx));
 
-    // Android-specific: inline runtime-adapter picker. Lives in the
-    // basics page (alongside Theme and Base Keymap) instead of as a
-    // modal-on-top so the user sees their adapter choice as part of
-    // the initial setup form, not as a blocking overlay. Without an
-    // adapter selected, no spawn pipeline works (LSPs, terminal,
-    // tooling), so this is functionally required.
-    #[cfg(target_os = "android")]
-    let page = page.child(render_android_runtime_section(&mut tab_index, cx));
-
     // On Android we swap the Agent Setup section for a discoverability-
     // focused row of input toggles (on-screen keyboard, programming
     // keys row, virtual trackpad). The AI agent setup flow assumes a
@@ -904,58 +895,3 @@ pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -
     page
 }
 
-/// Hand off the Android runtime setup to the rich picker window
-/// instead of trying to render install / progress UX inline in the
-/// onboarding form. The picker window has health badges and the
-/// install flow for the runtime.
-///
-/// The "Current: <adapter>" label is reactive — it reads the
-/// `runtime_global::ActiveRuntime` global. The `Onboarding` entity
-/// owns a `_runtime_subscription` that calls `cx.notify()` whenever
-/// the picker writes a new selection via `cx.set_global`, so the
-/// label updates immediately even though the picker lives in a
-/// separate window.
-#[cfg(target_os = "android")]
-fn render_android_runtime_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
-    use zdroid_runtime::RuntimeId;
-
-    let current = cx
-        .try_global::<crate::runtime_global::ActiveRuntime>()
-        .and_then(|state| state.current);
-    let current_label: SharedString = match current {
-        Some(RuntimeId::Rootfs) => "Current: Ubuntu rootfs".into(),
-        Some(RuntimeId::Chroot) => "Current: Kali chroot".into(),
-        None => "Not configured yet".into(),
-    };
-
-    v_flex()
-        .gap_2()
-        .child(Label::new("Android Runtime"))
-        .child(
-            Label::new(current_label)
-                .size(LabelSize::Small)
-                .color(Color::Muted),
-        )
-        .child(
-            Button::new("configure-android-runtime", "Configure runtime")
-                .style(ButtonStyle::OutlinedGhost)
-                .size(ButtonSize::Medium)
-                .label_size(LabelSize::Small)
-                .end_icon(Icon::new(IconName::ArrowUpRight).size(IconSize::Small))
-                .tab_index({
-                    *tab_index += 1;
-                    *tab_index - 1
-                })
-                .on_click(|_, window, cx| {
-                    match cx.build_action("zdroid_runtime::PickRuntime", None) {
-                        Ok(action) => window.dispatch_action(action, cx),
-                        Err(err) => {
-                            zlog::warn!(
-                                "onboarding::android_runtime: \
-                                 zdroid_runtime::PickRuntime not registered: {err}"
-                            );
-                        }
-                    }
-                }),
-        )
-}

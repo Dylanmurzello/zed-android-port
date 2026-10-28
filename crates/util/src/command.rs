@@ -62,15 +62,15 @@ fn android_safe_cwd(dir: &Path) -> PathBuf {
 
 pub use gpui_util::new_std_command;
 
-/// The zd-exec spawn bridge itself (env-root routing, shebang rewrite,
-/// boot-time root registration) lives in `gpui_util` so the sync
-/// `new_std_command` path upstream re-exports above carries the Android
-/// rewrite too. Re-exported here so app-side callers keep addressing
-/// the bridge through `util::command`.
+/// The spawn bridge itself (env-root routing, boot-time root
+/// registration) lives in `gpui_util` so the sync `new_std_command` path
+/// upstream re-exports above carries the Android rewrite too.
+/// Re-exported here so app-side callers keep addressing the bridge
+/// through `util::command`.
 #[cfg(target_os = "android")]
 pub use gpui_util::register_environment_root;
 #[cfg(target_os = "android")]
-use gpui_util::{ZD_EXEC_PROGRAM, env_root_program_path};
+use gpui_util::{BRIDGE_PROGRAM, env_root_program_path};
 
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
@@ -99,15 +99,14 @@ impl Command {
         }
         #[cfg(target_os = "android")]
         {
-            // The env-root bridge: an absolute `program` under the active
-            // adapter's `environment_root()` is rewritten to `zd-exec
-            // <program>`, which is the engine loader, so Linux binaries
-            // from the rootfs run inside it. Scripts need nothing here:
-            // the loader handles `#!` lines itself, including
-            // `#!/usr/bin/env`. See `env_root_program_path`.
+            // The env-root bridge: an absolute `program` under the app
+            // files dir is rewritten to `zdload <program>`, the engine
+            // loader, so Linux binaries run inside the rootfs. Scripts
+            // need nothing here: the loader handles `#!` lines itself,
+            // including `#!/usr/bin/env`. See `env_root_program_path`.
             let program_ref = program.as_ref();
             if let Some(program_path) = env_root_program_path(program_ref) {
-                let mut cmd = smol::process::Command::new(ZD_EXEC_PROGRAM);
+                let mut cmd = smol::process::Command::new(BRIDGE_PROGRAM);
                 cmd.arg(program_path);
                 return Self(cmd);
             }

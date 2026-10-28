@@ -42,14 +42,5 @@ workspace.workspace = true
 zed_actions.workspace = true
 zlog.workspace = true
 
-# Android-only: onboarding basics_page renders a minimal inline runtime
-# adapter picker (ToggleButtonGroup) so the user picks one as part of
-# the initial setup form. Reads/writes runtime.toml directly via
-# RuntimeFile. The richer detailed view (health badges + install hints)
-# lives in `crates/gpui_android/examples/zed_android/src/runtime_picker.rs`
-# and is reached from Settings → Android Runtime.
-[target.'cfg(target_os = "android")'.dependencies]
-zdroid_runtime = { path = "../zdroid_runtime" }
-
 [dev-dependencies]
 db = {workspace = true, features = ["test-support"]}

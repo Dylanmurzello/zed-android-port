@@ -22,7 +22,7 @@ body:
         - On app launch (never reaches the editor)
         - When opening a project / file
         - In the integrated terminal
-        - When switching runtime adapters
+        - During runtime setup or reset
         - During a specific editor action (LSP, search, etc.)
         - Random / no consistent trigger
     validations:

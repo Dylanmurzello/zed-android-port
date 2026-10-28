@@ -14,8 +14,7 @@ use std::time::{Duration, Instant};
 use gpui::{App, AppContext as _, Context, actions};
 use workspace::Workspace;
 use workspace::notifications::{NotificationId, simple_message_notification::MessageNotification};
-use zdroid_runtime::adapters::rootfs::RootfsAdapter;
-use zdroid_runtime::config::{self, ResolvedConfig, RootfsConfig, RuntimeState};
+use zdroid_runtime::Runtime;
 
 actions!(
     zdroid_runtime,
@@ -33,7 +32,7 @@ pub fn register(cx: &mut App) {
 }
 
 fn run(_workspace: &mut Workspace, _: &EngineSelfTest, _window: &mut gpui::Window, cx: &mut Context<Workspace>) {
-    let data_path = config::data_path();
+    let data_path = zdroid_runtime::data_path();
     let log_path = paths::logs_dir().join("engine-self-test.log");
     log::info!("engine_self_test: starting; report at {}", log_path.display());
     let task = cx.background_spawn(async move { run_steps(&data_path, &log_path) });
@@ -80,16 +79,8 @@ impl Report {
     }
 }
 
-fn adapter_for(data_path: &Path) -> RootfsAdapter {
-    let rootfs_config = match RuntimeState::load(data_path) {
-        RuntimeState::Configured(ResolvedConfig::Rootfs(config)) => config,
-        _ => RootfsConfig::defaults(data_path),
-    };
-    RootfsAdapter::new(rootfs_config, data_path)
-}
-
-fn loader_command(adapter: &RootfsAdapter, program: &str, args: &[&str]) -> Command {
-    let mut command = adapter.command(program);
+fn loader_command(runtime: &Runtime, program: &str, args: &[&str]) -> Command {
+    let mut command = runtime.command(program);
     command.args(args).stdin(Stdio::null());
     command
 }
@@ -127,14 +118,14 @@ fn time_runs(mut make: impl FnMut() -> Command, runs: usize) -> Result<(f64, f64
 }
 
 fn run_steps(data_path: &Path, log_path: &Path) -> Report {
-    let adapter = adapter_for(data_path);
+    let runtime = Runtime::new(data_path);
     let mut report = Report {
         passed: 0,
         total: 0,
         lines: Vec::new(),
     };
 
-    let loader = adapter.loader_path();
+    let loader = runtime.loader_path();
     match std::fs::read_link(&loader).and_then(|target| std::fs::metadata(&target).map(|meta| (target, meta))) {
         Ok((target, meta)) => {
             use std::os::unix::fs::PermissionsExt;
@@ -148,15 +139,15 @@ fn run_steps(data_path: &Path, log_path: &Path) -> Report {
         Err(error) => report.record("loader", false, format!("{}: {error}", loader.display())),
     }
 
-    match std::fs::read_to_string(adapter.version_file()) {
+    match std::fs::read_to_string(runtime.version_file()) {
         Ok(version) => report.record("rootfs", true, version.replace('\n', " ")),
-        Err(error) => report.record("rootfs", false, format!("{}: {error}", adapter.version_file().display())),
+        Err(error) => report.record("rootfs", false, format!("{}: {error}", runtime.version_file().display())),
     }
 
     if report.passed == 2 {
-        run_true_timing(&adapter, &mut report);
-        run_loader_selftest(&adapter, &mut report);
-        run_shell_builtins(&adapter, data_path, &mut report);
+        run_true_timing(&runtime, &mut report);
+        run_loader_selftest(&runtime, &mut report);
+        run_shell_builtins(&runtime, data_path, &mut report);
     }
 
     let mut text = String::new();
@@ -177,7 +168,7 @@ fn run_steps(data_path: &Path, log_path: &Path) -> Report {
 /// `/bin/true` through the loader against `/system/bin/true` spawned the
 /// same way: Zed's `Command` forks this large process, which costs the
 /// same for both, so the difference is the engine's own start-up.
-fn run_true_timing(adapter: &RootfsAdapter, report: &mut Report) {
+fn run_true_timing(runtime: &Runtime, report: &mut Report) {
     let baseline = time_runs(
         || {
             let mut command = Command::new("/system/bin/true");
@@ -186,7 +177,7 @@ fn run_true_timing(adapter: &RootfsAdapter, report: &mut Report) {
         },
         20,
     );
-    let engine = time_runs(|| loader_command(adapter, "/bin/true", &[]), 20);
+    let engine = time_runs(|| loader_command(runtime, "/bin/true", &[]), 20);
     match (baseline, engine) {
         (Ok((base_min, base_median, base_p95)), Ok((min, median, p95))) => {
             let delta = median - base_median;
@@ -205,9 +196,9 @@ fn run_true_timing(adapter: &RootfsAdapter, report: &mut Report) {
     }
 }
 
-fn run_loader_selftest(adapter: &RootfsAdapter, report: &mut Report) {
+fn run_loader_selftest(runtime: &Runtime, report: &mut Report) {
     let started = Instant::now();
-    let mut command = loader_command(adapter, "/bin/ls", &["-la", "/"]);
+    let mut command = loader_command(runtime, "/bin/ls", &["-la", "/"]);
     command.env(zd_engine_core::env::SELFTEST, "1");
     let output = command.output();
     let elapsed = started.elapsed();
@@ -234,10 +225,10 @@ fn run_loader_selftest(adapter: &RootfsAdapter, report: &mut Report) {
     }
 }
 
-fn run_shell_builtins(adapter: &RootfsAdapter, data_path: &Path, report: &mut Report) {
+fn run_shell_builtins(runtime: &Runtime, data_path: &Path, report: &mut Report) {
     let cwd: PathBuf = data_path.join("home");
     let script = "echo HOME=$HOME; echo USER=$USER; pwd; read host < /etc/hostname; echo hostname=$host";
-    let run = adapter.run_captured("/bin/sh", &["-c", script], Some(&cwd), Duration::from_secs(10));
+    let run = runtime.run_captured("/bin/sh", &["-c", script], Some(&cwd), Duration::from_secs(10));
     match run {
         Ok(run) => {
             let stdout = run.stdout_text();

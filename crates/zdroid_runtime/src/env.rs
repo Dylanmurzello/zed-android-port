@@ -24,13 +24,19 @@ pub fn baseline_env(data_path: &Path) -> Vec<(String, EnvOp)> {
         // HOME stays the app's data root for upstream `dirs::home_dir()`
         // consumers; adapters map the same path into their guest.
         ("HOME".into(), EnvOp::Set(data_path.as_os_str().to_owned())),
-        ("TMPDIR".into(), EnvOp::Set(data_path.join("tmp").into_os_string())),
+        (
+            "TMPDIR".into(),
+            EnvOp::Set(data_path.join("tmp").into_os_string()),
+        ),
         ("TERM".into(), EnvOp::Set(OsString::from("xterm-256color"))),
         ("COLORTERM".into(), EnvOp::Set(OsString::from("truecolor"))),
         ("LANG".into(), EnvOp::Set(OsString::from("en_US.UTF-8"))),
         // Cross-compiling a remote server on the device is never viable;
         // force upstream's CDN-or-existing-on-remote path.
-        ("ZED_BUILD_REMOTE_SERVER".into(), EnvOp::Set(OsString::from("never"))),
+        (
+            "ZED_BUILD_REMOTE_SERVER".into(),
+            EnvOp::Set(OsString::from("never")),
+        ),
         // A leaked preload from an ancestor shell would make every remote
         // SSH subprocess print `cannot be preloaded`.
         ("LD_PRELOAD".into(), EnvOp::Remove),

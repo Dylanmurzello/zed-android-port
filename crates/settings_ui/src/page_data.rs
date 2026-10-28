@@ -91,52 +91,64 @@ pub(crate) fn settings_data(cx: &App) -> Vec<SettingsPage> {
     pages
 }
 
-/// Android-specific: lets the user choose which userland Zdroid routes
-/// its spawn pipeline through.
-/// Lives as a top-level settings page so the option is discoverable
-/// without command-palette knowledge — chroot mode is functionally
-/// required for LSPs, terminal, and tooling, so this can't be buried.
-///
-/// The click handler dispatches the `zdroid_runtime::PickRuntime`
-/// action registered in `crates/gpui_android/examples/zed_android/src/
-/// runtime_picker.rs::register`. The action handler unconditionally
-/// calls `cx.open_window` to spawn the picker as its own window
-/// (ExtraWindowActivity on Android), so it doesn't matter that this
-/// dispatch starts in the Settings window — the picker is a peer
-/// window, not nested inside Settings. Dispatched via
-/// `with_active_or_new_workspace` so the action lands on the workspace
-/// where the handler is registered.
+/// Dispatch an action the Android app registers on every workspace
+/// (`crates/gpui_android/examples/zed_android/src/runtime_setup.rs`,
+/// `runtime_background.rs`) from the settings window, which has no
+/// workspace of its own.
+#[cfg(target_os = "android")]
+fn dispatch_runtime_action(name: &'static str, cx: &mut App) {
+    workspace::with_active_or_new_workspace(cx, move |_workspace, window, cx| {
+        match cx.build_action(name, None) {
+            Ok(action) => window.dispatch_action(action, cx),
+            Err(err) => log::warn!("settings_ui::android_runtime_page: {name} not registered: {err}"),
+        }
+    });
+}
+
+/// Android-specific: the Ubuntu runtime every spawned tool runs in, and
+/// how the app behaves in the background. The runtime sets itself up on
+/// first launch; this page covers the cases after that (a reset, the
+/// network-bound essentials step, survival in the background).
 #[cfg(target_os = "android")]
 fn android_runtime_page() -> SettingsPage {
+    let runtime = zdroid_runtime::Runtime::new(&zdroid_runtime::data_path());
+    let installed = runtime.installed_image();
+    let reset_description: ui::SharedString = match &installed {
+        Some(image) => format!(
+            "Installed from {}. Resetting extracts the bundled image again and removes \
+             everything installed inside the runtime with apt, cargo, pip or npm. \
+             Projects and editor settings are kept.",
+            image.name
+        )
+        .into(),
+        None => "The runtime is not installed, so the terminal and language servers \
+                 cannot start. Extract the bundled Ubuntu image."
+            .into(),
+    };
     SettingsPage {
         title: "Android Runtime",
         items: Box::new([
-            SettingsPageItem::SectionHeader("Runtime adapter"),
+            SettingsPageItem::SectionHeader("Ubuntu runtime"),
             SettingsPageItem::ActionLink(ActionLink {
-                title: "Pick runtime adapter".into(),
+                title: "Reset runtime".into(),
+                description: Some(reset_description),
+                button_text: if installed.is_some() { "Reset" } else { "Install" }.into(),
+                on_click: Arc::new(|_settings_window, _window, cx| {
+                    dispatch_runtime_action("zdroid_runtime::ResetRuntime", cx);
+                }),
+                files: USER,
+            }),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Install git and certificates".into(),
                 description: Some(
-                    "Select which userland Zdroid routes commands into. Required for \
-                     the integrated terminal, LSPs, formatters, and any spawned tool \
-                     to work."
+                    "Run apt-get inside the runtime for ca-certificates and git, which \
+                     the base image does not ship. Runs on first launch; use this if it \
+                     failed without a network, or after a reset."
                         .into(),
                 ),
-                button_text: "Open picker".into(),
+                button_text: "Install".into(),
                 on_click: Arc::new(|_settings_window, _window, cx| {
-                    workspace::with_active_or_new_workspace(
-                        cx,
-                        |_workspace, window, cx| {
-                            match cx.build_action(
-                                "zdroid_runtime::PickRuntime",
-                                None,
-                            ) {
-                                Ok(action) => window.dispatch_action(action, cx),
-                                Err(err) => log::warn!(
-                                    "settings_ui::android_runtime_page: \
-                                     zdroid_runtime::PickRuntime not registered: {err}"
-                                ),
-                            }
-                        },
-                    );
+                    dispatch_runtime_action("zdroid_runtime::InstallEssentials", cx);
                 }),
                 files: USER,
             }),
@@ -176,21 +188,7 @@ fn android_runtime_page() -> SettingsPage {
                 ),
                 button_text: "Request".into(),
                 on_click: Arc::new(|_settings_window, _window, cx| {
-                    workspace::with_active_or_new_workspace(
-                        cx,
-                        |_workspace, window, cx| {
-                            match cx.build_action(
-                                "zdroid_runtime::AllowBackgroundActivity",
-                                None,
-                            ) {
-                                Ok(action) => window.dispatch_action(action, cx),
-                                Err(err) => log::warn!(
-                                    "settings_ui::android_runtime_page: \
-                                     zdroid_runtime::AllowBackgroundActivity not registered: {err}"
-                                ),
-                            }
-                        },
-                    );
+                    dispatch_runtime_action("zdroid_runtime::AllowBackgroundActivity", cx);
                 }),
                 files: USER,
             }),

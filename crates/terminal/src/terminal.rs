@@ -682,9 +682,8 @@ pub fn insert_zed_terminal_env(
     // libtermux-exec preload, CA bundle paths, HOME=TERMUX__HOME
     // override — comes from the active runtime adapter's
     // `env_for_terminal` registered into `util::env` at android_main.
-    // For chroot mode the overlay is empty (the zd-exec wrapper
-    // handles env at the chroot boundary). For bootstrap mode it
-    // carries the historical Termux-flavored shape.
+    // The rootfs runtime's overlay is empty: the engine block every
+    // child needs is already in the process env.
     #[cfg(target_os = "android")]
     {
         for key in ["HOME", "PATH", "SHELL", "TMPDIR", "LANG"] {

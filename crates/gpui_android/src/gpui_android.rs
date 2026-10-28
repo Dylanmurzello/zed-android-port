@@ -23,9 +23,15 @@ pub mod storage;
 pub mod selinux_canary;
 mod touch;
 mod window;
-pub mod zd_exec_install;
+pub mod runtime_links;
 
 pub use platform::AndroidPlatform;
+
+/// The `AndroidApp` handle `run` registered, for code that runs inside
+/// the gpui `App` without access to the one `android_main` received.
+pub fn android_app() -> anyhow::Result<&'static android_activity::AndroidApp> {
+    updater::android_app()
+}
 
 /// Push the user's `android_input.on_screen_keyboard` setting into
 /// the runtime atomic the IME reconcile loop reads when deciding

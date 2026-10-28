@@ -28,3 +28,4 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 util.workspace = true
 uuid.workspace = true
 zd_engine_core.workspace = true
+zdroid_runtime = { path = "../zdroid_runtime" }

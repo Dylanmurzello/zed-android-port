@@ -7,7 +7,6 @@
 use gpui::{App, Context, actions};
 use settings::{Settings as _, SettingsStore};
 use workspace::Workspace;
-use zdroid_runtime::config;
 
 actions!(
     zdroid_runtime,
@@ -44,12 +43,11 @@ fn allow_background_activity(
     request_battery_exemption();
 }
 
-/// Ask once, after the first successful rootfs install, when the user has
-/// just seen what the runtime is for. The marker keeps the dialog from
-/// returning on every reinstall; the settings page has the button for
-/// later.
+/// Ask once, on the launch that set the runtime up. The marker keeps the
+/// dialog from returning after a reset; the settings page has the button
+/// for later.
 pub fn prompt_battery_exemption_once() {
-    let marker = config::data_path()
+    let marker = zdroid_runtime::data_path()
         .join("etc")
         .join("battery-exemption-asked");
     if marker.exists() {

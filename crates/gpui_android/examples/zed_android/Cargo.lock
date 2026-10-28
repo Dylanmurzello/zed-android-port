@@ -5853,6 +5853,7 @@ dependencies = [
  "util",
  "uuid",
  "zd_engine_core",
+ "zdroid_runtime",
 ]
 
 [[package]]
@@ -9165,7 +9166,6 @@ dependencies = [
  "util",
  "vim_mode_setting",
  "workspace",
- "zdroid_runtime",
  "zed_actions",
  "zlog",
 ]
@@ -12636,6 +12636,7 @@ dependencies = [
  "url",
  "util",
  "workspace",
+ "zdroid_runtime",
  "zed_actions",
  "zed_credentials_provider",
 ]
@@ -14938,8 +14939,6 @@ dependencies = [
  "once_cell",
  "rustls 0.23.40",
  "rustls-pki-types",
- "serde",
- "serde_json",
  "url",
  "webpki-roots 0.26.11",
 ]
@@ -17300,12 +17299,7 @@ dependencies = [
  "flate2",
  "libc",
  "log",
- "nix 0.29.0",
- "serde",
- "sha2 0.10.9",
  "tar",
- "toml 0.8.23",
- "ureq",
  "util",
  "zd_engine_core",
 ]

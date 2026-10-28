@@ -19,7 +19,7 @@
 //! `termux_bootstrap::install_askpass_helper`. That path was tied to
 //! the bootstrap-flavored layout — chroot-only users still got a
 //! redundant copy in their bootstrap $PREFIX, and Phase 4 (relocate
-//! zd-exec/zd-runtime off $PREFIX) would have needed a follow-up sweep.
+//! the bridge off $PREFIX) would have needed a follow-up sweep.
 //! Installing to `<data>/files/zed-askpass-helper` decouples the
 //! helper from any adapter's userland; it's just an app-private binary
 //! the gpui process knows where to find.

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
 license = "GPL-3.0-or-later"
-description = "Hexagonal port + adapters for the Zdroid userland runtime"
+description = "The Zdroid runtime: an Ubuntu rootfs run through the engine loader"
 
 [lints]
 workspace = true
@@ -12,35 +12,16 @@ workspace = true
 [lib]
 path = "src/zdroid_runtime.rs"
 
-[[bin]]
-# Generic spawn wrapper. Symlinked from `$PREFIX/zd-runtime/<name>` for
-# every program name we want PATH-routed through the active adapter
-# (bash, git, rust-analyzer, …). Reads `runtime.toml`, builds a
-# `SpawnRequest` from current process state, dispatches via
-# `RuntimeProvider::spawn`. Same code path as explicit editor-side
-# callers, so dispatch logic lives in one place.
-name = "zd-exec"
-path = "src/bin/zd-exec.rs"
-
 [dependencies]
 anyhow.workspace = true
 flate2.workspace = true
 log.workspace = true
-serde.workspace = true
-sha2.workspace = true
 tar.workspace = true
-toml.workspace = true
 util.workspace = true
 zd_engine_core.workspace = true
-
-# Adapter installers download their userland on demand. `ureq` is a
-# tiny sync HTTPS client (rustls TLS stack, webpki-roots bundled, no
-# JNI init needed).
-ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 [dev-dependencies]
 tempfile.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
-nix = { workspace = true, features = ["socket", "uio"] }
 libc.workspace = true

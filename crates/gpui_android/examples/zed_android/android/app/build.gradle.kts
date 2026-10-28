@@ -1,3 +1,5 @@
+import java.net.URL
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -18,83 +20,87 @@ val signingProps = Properties().apply {
 }
 val hasReleaseSigning = signingPropsFile.exists()
 
-// zd-exec bundling.
+// Ubuntu base image bundling.
 //
-// `zd-exec` is the Rust spawn wrapper (in crates/zdroid_runtime/src/
-// bin/zd-exec.rs) the editor invokes as `terminal.shell` for chroot
-// mode, and as the symlink target for `$PREFIX/zd-runtime/<name>`
-// in chroot+other modes. It MUST be in the APK so fresh installs
-// have it. Without bundling, end users hit
-// `failed to spawn $PREFIX/bin/zd-exec — no such file or directory`
-// the first time they open the integrated terminal in chroot mode.
-//
-// Build flow:
-//   1. `buildZdExec` runs `cargo ndk … build --release -p
-//      zdroid_runtime --bin zd-exec` from the workspace root, with
-//      $ANDROID_NDK_HOME pointed at the same NDK the lib build uses.
-//   2. The resulting ELF at
-//      `target/aarch64-linux-android/release/zd-exec` is copied to
-//      `app/src/main/assets/zd-exec`.
-//   3. `preBuild` depends on it, so gradle picks the asset up during
-//      `mergeAssets` before APK packaging.
-//
-// Rust-side counterpart: `gpui_android::zd_exec_install::ensure_installed`
-// reads this asset at boot and extracts to `$PREFIX/bin/zd-exec` with
-// 0755 perms when missing or out of date.
+// The rootfs the engine runs is extracted on first launch from an APK
+// asset, so the app is complete without a network. `fetchRootfsImage`
+// downloads the tarball named in crates/zdroid_runtime/rootfs-image.properties
+// into build/rootfs/ and verifies its SHA-256 (the Rust side compiles the
+// same file in and writes name and digest to the rootfs sentinel);
+// `stageRootfsAsset` copies it to assets/rootfs/image.tgz, which is
+// gitignored. The asset is stored uncompressed in the APK (`noCompress
+// tgz` below): it is gzip already, and AAssetManager serves a stored
+// asset by mmap.
 val workspaceRoot = file("../../../../../..").canonicalFile
-val zdExecBin = file("${workspaceRoot}/target/aarch64-linux-android/release/zd-exec")
-val zdExecAsset = file("src/main/assets/zd-exec")
-val zdExecSrc = fileTree("${workspaceRoot}/crates/zdroid_runtime/src") {
-    include("**/*.rs")
+val rootfsImageProps = Properties().apply {
+    file("${workspaceRoot}/crates/zdroid_runtime/rootfs-image.properties").inputStream().use { load(it) }
 }
+val rootfsImageName: String = rootfsImageProps.getProperty("name")
+val rootfsImageUrl: String = rootfsImageProps.getProperty("url")
+val rootfsImageSha256: String = rootfsImageProps.getProperty("sha256").lowercase()
+val rootfsImageDownload = file("build/rootfs/${rootfsImageName}")
+// Staged under a fixed name without a `.gz` suffix: aapt gunzips `.gz`
+// assets at packaging time and drops the suffix, which would turn the
+// 33 MB image into a 120 MB tar.
+val rootfsImageAsset = file("src/main/assets/rootfs/image.tgz")
 
-tasks.register<Exec>("buildZdExec") {
-    description = "Build zd-exec via cargo-ndk and stage into assets/."
-    group = "build setup"
-
-    workingDir(workspaceRoot)
-    commandLine(
-        "cargo",
-        "ndk",
-        "-t",
-        "arm64-v8a",
-        "-P",
-        "26",
-        "build",
-        "--release",
-        "-p",
-        "zdroid_runtime",
-        "--bin",
-        "zd-exec",
-    )
-
-    // Honor whatever the developer's `cargo ndk` lib build uses.
-    // ANDROID_NDK_HOME has to be the same NDK or the prebuilts mismatch.
-    providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
-        environment("ANDROID_NDK_HOME", ndk)
+fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(1 shl 16)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
     }
-
-    inputs.files(zdExecSrc)
-    inputs.file("${workspaceRoot}/crates/zdroid_runtime/Cargo.toml")
-    outputs.file(zdExecBin)
+    return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-tasks.register<Copy>("stageZdExecAsset") {
-    description = "Copy the freshly-built zd-exec into assets/ for APK packaging."
+tasks.register("fetchRootfsImage") {
+    description = "Download the Ubuntu base image named in rootfs-image.properties and verify its SHA-256."
     group = "build setup"
 
-    dependsOn("buildZdExec")
-    from(zdExecBin)
-    into(zdExecAsset.parentFile)
-    rename { zdExecAsset.name }
-    // Don't bother re-running on every gradle invocation when the
-    // source binary hasn't changed.
-    inputs.file(zdExecBin)
-    outputs.file(zdExecAsset)
+    inputs.property("sha256", rootfsImageSha256)
+    inputs.property("url", rootfsImageUrl)
+    outputs.file(rootfsImageDownload)
+    doLast {
+        if (rootfsImageDownload.isFile && sha256Of(rootfsImageDownload) == rootfsImageSha256) {
+            return@doLast
+        }
+        rootfsImageDownload.parentFile.mkdirs()
+        val partial = File(rootfsImageDownload.path + ".part")
+        logger.lifecycle("fetchRootfsImage: downloading $rootfsImageUrl")
+        URL(rootfsImageUrl).openStream().use { input ->
+            partial.outputStream().use { output -> input.copyTo(output) }
+        }
+        val actual = sha256Of(partial)
+        if (actual != rootfsImageSha256) {
+            partial.delete()
+            throw GradleException(
+                "fetchRootfsImage: SHA-256 mismatch for $rootfsImageName: expected $rootfsImageSha256, got $actual"
+            )
+        }
+        if (!partial.renameTo(rootfsImageDownload)) {
+            throw GradleException("fetchRootfsImage: cannot move ${partial.path} into place")
+        }
+    }
+}
+
+tasks.register<Copy>("stageRootfsAsset") {
+    description = "Copy the verified Ubuntu base image into assets/rootfs/ for APK packaging."
+    group = "build setup"
+
+    dependsOn("fetchRootfsImage")
+    from(rootfsImageDownload)
+    into(rootfsImageAsset.parentFile)
+    rename { rootfsImageAsset.name }
+    inputs.file(rootfsImageDownload)
+    outputs.file(rootfsImageAsset)
 }
 
 tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn("stageZdExecAsset")
+    dependsOn("stageRootfsAsset")
 }
 
 // zed-askpass-helper bundling.
@@ -294,6 +300,12 @@ android {
             useLegacyPackaging = true
             keepDebugSymbols += "**/libzdload.so"
         }
+    }
+
+    // The bundled rootfs image is gzip already; storing it lets the
+    // installer stream it straight out of the APK.
+    androidResources {
+        noCompress += listOf("tgz")
     }
 
     compileOptions {

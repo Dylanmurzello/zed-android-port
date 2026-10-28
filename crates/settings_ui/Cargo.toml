@@ -74,6 +74,9 @@ workspace.workspace = true
 zed_actions.workspace = true
 zed_credentials_provider.workspace = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+zdroid_runtime = { path = "../zdroid_runtime" }
+
 [dev-dependencies]
 fs = { workspace = true, features = ["test-support"] }
 futures.workspace = true

@@ -26,11 +26,11 @@ pub mod translate;
 pub const LOADER_FILE_NAME: &str = "libzdload.so";
 
 /// `argv[0]` basenames the loader treats as itself: the file in the
-/// APK, the stable `<data>/files/bin/zdload` symlink the supervisor
-/// execs through, and the `zd-exec` name the farm inherits. With any
-/// other basename the loader is being run through a symlink farm entry
-/// and that basename is the guest program to run.
-pub const LOADER_SELF_NAMES: &[&str] = &["libzdload.so", "zdload", "zd-exec"];
+/// APK and the stable `<data>/files/bin/zdload` symlink the supervisor
+/// and the spawn bridge exec through. With any other basename the
+/// loader is being run through a symlink farm entry and that basename
+/// is the guest program to run.
+pub const LOADER_SELF_NAMES: &[&str] = &["libzdload.so", "zdload"];
 
 /// Name of the stable symlink under `<data>/files/bin` that points at
 /// the current install's loader. The native library dir moves on every

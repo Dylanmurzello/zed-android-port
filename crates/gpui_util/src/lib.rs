@@ -31,35 +31,25 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     std::process::Command::new(program)
 }
 
-/// Path to the `zd-exec` binary the bridge dispatches through. zd-exec
-/// itself reads `zd-runtime.toml`, picks the active adapter, and routes
-/// the spawn into the chroot / bootstrap / external-Termux world. We
-/// invoke it by short name so kernel PATH lookup finds the
-/// `$PREFIX/zd-runtime/zd-exec` symlink first (matching how every other
-/// PATH-resolved spawn enters the bridge) instead of hardcoding
-/// `$PREFIX/bin/zd-exec` — short name keeps this lib free of app-package
-/// assumptions.
+/// The program the bridge dispatches through: the rootfs engine loader,
+/// by the short name of its stable `<data>/files/bin/zdload` link, which
+/// kernel PATH lookup finds because that directory is on the editor's
+/// PATH. A short name keeps this lib free of app-package assumptions.
 #[cfg(target_os = "android")]
-pub const ZD_EXEC_PROGRAM: &str = "zd-exec";
+pub const BRIDGE_PROGRAM: &str = "zdload";
 
-/// Active adapter's host-side environment root. Set once at boot from
-/// `lib.rs` (after `RuntimeProvider::environment_root()` is known); any
-/// absolute-path spawn whose program lives under this root is rewritten
-/// to route through `zd-exec` so it lands inside the right userland.
+/// The app files dir, the host side of the guest view. Set once at boot
+/// from `lib.rs`; any absolute-path spawn whose program lives under it
+/// is rewritten to route through the loader so it runs in the rootfs.
 ///
 /// `OnceLock` so the slot is initialized exactly once and reads are
 /// lock-free for every subsequent `Command::new`.
 #[cfg(target_os = "android")]
 static ENVIRONMENT_ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
 
-/// Called from `lib.rs` after the runtime adapter is resolved.
-/// Subsequent `Command::new` calls will detect absolute paths under
-/// `root` and rewrite them to `zd-exec <abs_path> <args…>`.
-///
-/// Idempotent in spirit but enforced by `OnceLock`: a second call after
-/// the slot is set is a no-op. Don't try to "switch adapter at runtime"
-/// by re-registering — adapter switches require a restart so paths /
-/// settings / extensions get re-read from the new root.
+/// Called from `lib.rs` at boot. Subsequent `Command::new` calls detect
+/// absolute paths under `root` and rewrite them to
+/// `zdload <abs_path> <args…>`. A second call is a no-op.
 #[cfg(target_os = "android")]
 pub fn register_environment_root(root: std::path::PathBuf) {
     if ENVIRONMENT_ROOT.set(root).is_err() {
@@ -69,35 +59,30 @@ pub fn register_environment_root(root: std::path::PathBuf) {
 
 /// Android-only env-root bridge helper.
 ///
-/// Zed-the-app runs on Android's bionic libc (the only libc the platform
-/// linker loads for APK processes), but every spawn target that lives
-/// under the active adapter's `environment_root()` is meant to run in
-/// that adapter's userland — a glibc rootfs for the chroot adapter, a
-/// Termux-flavored bionic prefix for the bootstrap adapter, etc. If we
-/// let the host kernel exec a chroot-side absolute path directly, the
-/// process either fails because the binary's `PT_INTERP` (`/lib/ld-
-/// linux-aarch64.so.1`) doesn't exist on bionic, or because the script's
-/// shebang resolves against a non-existent host `/usr/bin/env`. Either
-/// way the user sees a bare "No such file or directory" error and the
-/// LSP / language tool silently dies.
+/// Zed-the-app runs on Android's bionic libc, but every spawn target
+/// that lives under the app files dir (managed Node, downloaded language
+/// servers, debug adapters) is a Linux binary meant to run in the
+/// rootfs. If the host kernel exec'd such a path directly, the process
+/// would fail because the binary's `PT_INTERP`
+/// (`/lib/ld-linux-aarch64.so.1`) does not exist on bionic, or because a
+/// script's shebang resolves against a non-existent host `/usr/bin/env`.
+/// Either way the user sees a bare "No such file or directory" and the
+/// language tool silently dies.
 ///
 /// This helper detects the case: program is an absolute path that lives
 /// strictly under the registered environment root. When it matches we
 /// return `Some(program_path)` and the caller rewrites the spawn to
-/// `zd-exec <program_path> <original_args…>`. `zd-exec` then reads
-/// `zd-runtime.toml`, picks the active adapter, and dispatches the
-/// spawn into the right userland — chroot users land inside the chroot
-/// where ld-linux exists, bootstrap users land in their prefix, etc.
+/// `zdload <program_path> <original_args…>`; the loader maps the binary
+/// into the rootfs and runs it there.
 ///
 /// Cost: one read of a `OnceLock` plus a `starts_with` byte-compare on
 /// every `Command::new` invocation. Cache-hot, < 1µs.
 ///
-/// Returns `None` when `register_environment_root` was never called
-/// (e.g. during init before adapter is picked), when `program` is a
-/// relative path / short name (kernel PATH lookup handles those via the
-/// `zd-runtime/<name>` symlinks already), or when the path doesn't live
-/// under env_root (system binaries like `/system/bin/sh` keep their
-/// native exec semantics).
+/// Returns `None` when `register_environment_root` was never called,
+/// when `program` is a relative path / short name (kernel PATH lookup
+/// handles those via the `zd-runtime/<name>` symlinks already), or when
+/// the path doesn't live under env_root (system binaries like
+/// `/system/bin/sh` keep their native exec semantics).
 #[cfg(target_os = "android")]
 pub fn env_root_program_path(program: &OsStr) -> Option<std::path::PathBuf> {
     let root = ENVIRONMENT_ROOT.get()?;
@@ -110,8 +95,8 @@ pub fn env_root_program_path(program: &OsStr) -> Option<std::path::PathBuf> {
     if !path.starts_with(root) {
         return None;
     }
-    // The farm and `bin/` hold the bridge itself. Routing a farm entry
-    // through `zd-exec` would make the loader open its own symlink as
+    // The farm and `bin/` hold the loader itself. Routing a farm entry
+    // through the bridge would make the loader open its own symlink as
     // the guest program; the kernel execs these directly.
     if path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin")) {
         return None;
@@ -229,7 +214,7 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     // so synchronous spawn sites get the rewrite too.
     let program = program.as_ref();
     if let Some(program_path) = env_root_program_path(program) {
-        let mut cmd = std::process::Command::new(ZD_EXEC_PROGRAM);
+        let mut cmd = std::process::Command::new(BRIDGE_PROGRAM);
         cmd.arg(program_path);
         return cmd;
     }
