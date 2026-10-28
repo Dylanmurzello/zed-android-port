@@ -203,7 +203,7 @@ To add an OpenAI-compatible endpoint, open **Settings → AI → LLM Providers �
 }
 ```
 
-Requests come from the tablet, even in an SSH project, so the endpoint must be reachable from it. See [Zed's gateway documentation](https://zed.dev/docs/ai/use-a-gateway). Streaming, tool calls and inline edits through these providers haven't been tested on a device yet.
+Requests come from the tablet, even in an SSH project, so the endpoint must be reachable from it. See [Zed's gateway documentation](https://zed.dev/docs/ai/use-a-gateway).
 
 ---
 
