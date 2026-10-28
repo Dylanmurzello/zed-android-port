@@ -18,7 +18,7 @@ use workspace::{Workspace, client_side_decorations};
 use zdroid_runtime::{
     HealthStatus, RuntimeId, RuntimeProvider, adapters,
     adapters::{
-        bootstrap_install::{PINNED_TAG, installed_release, release_repo_from_input},
+        bootstrap_install::{installed_release, release_repo_from_input},
         chroot::SPAWND_RELEASE_URL,
     },
     config::{DEFAULT_RELEASE_REPO, RuntimeFile},
@@ -628,8 +628,7 @@ fn render_card(
                     this.child(repository_field.clone()).child(
                         Label::new(
                             "A GitHub repository whose releases include bootstrap-aarch64.zip. \
-                             Only Zdroid's own repository is checked against a SHA-256 built \
-                             into the app.",
+                             Zdroid installs its latest release.",
                         )
                         .size(LabelSize::XSmall)
                         .color(Color::Muted),
@@ -753,19 +752,9 @@ fn build_entries(configuration: Option<&RuntimeFile>) -> Vec<AdapterEntry> {
         .and_then(|file| file.bootstrap.clone())
         .unwrap_or_default();
     let bootstrap_installed =
-        installed_release(&bootstrap_config.prefix).map(|(tag, repository)| {
-            let mut installed = match &repository {
-                Some(repository) => format!("Installed: {tag} from {repository}."),
-                None => format!("Installed: {tag}."),
-            };
-            // Installs without a recorded repository predate Zdroid's own.
-            let from_default = repository
-                .as_deref()
-                .is_none_or(|repository| repository == DEFAULT_RELEASE_REPO);
-            if from_default && tag != PINNED_TAG {
-                installed.push_str(&format!(" Reinstall to get {PINNED_TAG}."));
-            }
-            installed
+        installed_release(&bootstrap_config.prefix).map(|(tag, repository)| match repository {
+            Some(repository) => format!("Installed: {tag} from {repository}"),
+            None => format!("Installed: {tag}"),
         });
     let bootstrap_health = adapters::bootstrap::BootstrapAdapter::new(bootstrap_config)
         .map(|a| a.health_check())

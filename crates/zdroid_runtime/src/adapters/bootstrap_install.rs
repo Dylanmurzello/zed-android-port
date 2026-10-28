@@ -1,10 +1,12 @@
 //! Download + extract path for [`super::bootstrap::BootstrapAdapter::install`].
 //!
-//! Downloads `bootstrap-aarch64.zip` from a GitHub release of
-//! `<release_repo>`: the release pinned below for Zdroid's own repository,
-//! the latest one for any other. Extracts the contents into a staging dir,
-//! replaces `$PREFIX`, and writes a version sentinel so repeated
-//! installations of the same version skip extraction.
+//! Downloads `bootstrap-aarch64.zip` from the latest GitHub release of
+//! `<release_repo>`, checked against the SHA-256 GitHub records for it, so a
+//! bootstrap release reaches new installs without a Zdroid release. Zdroid's
+//! own repository publishes a release only after its tests pass; pinning
+//! one in the APK would guard little, as the same GitHub account holds the
+//! APK's signing secrets. Extracts the contents into a staging dir, replaces
+//! `$PREFIX`, and records the tag and repository.
 
 use std::fs;
 use std::io::{Cursor, Read, Write as _};
@@ -17,14 +19,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::config::DEFAULT_RELEASE_REPO;
 use crate::health::ProgressSink;
-
-/// The release of [`DEFAULT_RELEASE_REPO`] this version of Zdroid installs,
-/// and its SHA-256. The download is checked against this value, built into
-/// the APK, instead of the digest GitHub reports for the same file.
-pub const PINNED_TAG: &str = "v2026.05.06-r7";
-const PINNED_SHA256: &str = "74c3dbaa1d5e235cf8828cb94369477e8eb4835f4ab60e9282517bcdc98d9d72";
 
 /// Preferred asset name. Also used when GitHub's release metadata is
 /// unavailable, so the download can continue through anonymous API limits.
@@ -92,24 +87,15 @@ pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSin
     }
     let _install_running = InstallRunning;
 
-    let pinned = release_repo == DEFAULT_RELEASE_REPO;
-    let tag_name = if pinned {
-        PINNED_TAG.to_owned()
-    } else {
-        progress.step("Resolving latest bootstrap release");
-        resolve_latest_tag(release_repo)
-            .with_context(|| format!("resolve latest release tag for {release_repo}"))?
-    };
-    log::info!("bootstrap_install: release tag = {tag_name}");
+    progress.step("Resolving latest bootstrap release");
+    let tag_name = resolve_latest_tag(release_repo)
+        .with_context(|| format!("resolve latest release tag for {release_repo}"))?;
+    log::info!("bootstrap_install: latest release tag = {tag_name}");
 
     let version_file = prefix.join(VERSION_FILE);
     progress.step(&format!("Downloading bootstrap {tag_name}"));
-    let zip_bytes = if pinned {
-        download_pinned_asset(release_repo, &tag_name)
-    } else {
-        download_bootstrap_asset(release_repo, &tag_name)
-    }
-    .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
+    let zip_bytes = download_bootstrap_asset(release_repo, &tag_name)
+        .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
     log::info!(
         "bootstrap_install: downloaded {} bytes for tag {}",
         zip_bytes.len(),
@@ -222,21 +208,6 @@ fn download_bootstrap_asset(release_repo: &str, tag: &str) -> Result<Vec<u8>> {
     if let Some(asset) = &asset {
         validate_bootstrap_asset(&bytes, asset)?;
     }
-    Ok(bytes)
-}
-
-fn download_pinned_asset(release_repo: &str, tag: &str) -> Result<Vec<u8>> {
-    let url =
-        format!("https://github.com/{release_repo}/releases/download/{tag}/{RELEASE_ASSET_NAME}");
-    log::info!("bootstrap_install: fetching {RELEASE_ASSET_NAME}");
-    let bytes = fetch_asset_bytes(&url)?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if actual != PINNED_SHA256 {
-        bail!("bootstrap asset SHA-256 mismatch for {RELEASE_ASSET_NAME} of {tag}");
-    }
-    log::info!(
-        "bootstrap_install: verified {RELEASE_ASSET_NAME} against the pinned sha256:{actual}"
-    );
     Ok(bytes)
 }
 
