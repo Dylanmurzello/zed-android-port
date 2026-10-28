@@ -7797,6 +7797,7 @@ dependencies = [
  "anyhow",
  "log",
  "which",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -11489,6 +11490,7 @@ dependencies = [
  "util",
  "watch",
  "which",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -14162,6 +14164,7 @@ dependencies = [
  "wax",
  "which",
  "worktree",
+ "zdroid_hooks",
  "zed_credentials_provider",
  "zeroize",
  "zlog",
@@ -18245,6 +18248,7 @@ dependencies = [
  "util_macros",
  "vte",
  "windows 0.62.2",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -19754,6 +19758,7 @@ dependencies = [
  "walkdir",
  "which",
  "windows 0.62.2",
+ "zdroid_hooks",
 ]
 
 [[package]]
@@ -22681,6 +22686,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdroid_hooks"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "zdroid_runtime"
 version = "0.1.0"
 dependencies = [
@@ -22693,7 +22705,6 @@ dependencies = [
  "tempfile",
  "toml 0.9.8",
  "ureq",
- "util",
  "zip 2.6.1",
 ]
 

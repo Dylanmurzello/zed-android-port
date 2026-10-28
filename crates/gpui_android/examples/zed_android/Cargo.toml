@@ -105,6 +105,7 @@ util = { path = "../../../util" }
 watch = { path = "../../../watch" }
 web_search = { path = "../../../web_search" }
 workspace = { path = "../../../workspace" }
+zdroid_hooks = { path = "../../../zdroid_hooks" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
 platform_title_bar = { path = "../../../platform_title_bar" }
 release_channel = { path = "../../../release_channel" }

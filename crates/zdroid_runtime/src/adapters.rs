@@ -11,7 +11,7 @@ pub fn for_config(config: &ResolvedConfig) -> anyhow::Result<Box<dyn RuntimeProv
         ResolvedConfig::Bootstrap(cfg) => bootstrap::BootstrapAdapter::new(cfg.clone()).map(box_it),
         ResolvedConfig::ExternalTermux(_) => {
             anyhow::bail!(
-                "External Termux is not supported. Select Bootstrap or Chroot in Android Runtime settings."
+                "External Termux is not supported. Select Bootstrap or Chroot in the runtime picker, under Settings → Android."
             )
         }
     }

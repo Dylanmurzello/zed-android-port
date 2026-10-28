@@ -5,4 +5,4 @@ pub mod port;
 
 pub use config::{ResolvedConfig, RuntimeId};
 pub use health::{HealthStatus, ProgressSink};
-pub use port::{RuntimeProvider, SpawnHandle, SpawnRequest};
+pub use port::{EnvOp, RuntimeProvider, SpawnHandle, SpawnRequest};

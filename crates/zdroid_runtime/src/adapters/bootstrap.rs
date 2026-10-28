@@ -289,15 +289,18 @@ impl RuntimeProvider for BootstrapAdapter {
         names.into_iter().collect()
     }
 
-    fn env_for_zed_process(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_zed_process(
+        &self,
+        data_path: &std::path::Path,
+    ) -> Vec<(String, crate::port::EnvOp)> {
         // Bootstrap mode keeps the Termux-flavored env shape that
         // historical Zed-on-Android relied on: PREFIX + TERMUX__* +
         // TMPDIR under the bootstrap, PATH front-loaded with
         // .zed/bin / $PREFIX/bin so bootstrap-installed tools win.
         // No zd-runtime symlinks (those are chroot-only); spawns hit
         // $PREFIX/bin directly and inherit Zed-process env.
+        use crate::port::EnvOp;
         use std::ffi::OsString;
-        use util::env::EnvOp;
 
         let prefix = self.config.prefix.clone();
         let termux_home = data_path.join("home");
@@ -380,36 +383,25 @@ impl RuntimeProvider for BootstrapAdapter {
         ]
     }
 
-    fn env_for_terminal(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
-        // PTY spawn replaces inherited env entirely; restore the
-        // Termux-flavored vars the integrated terminal expects, plus
-        // the libtermux-exec shim, HOME-override, and CA bundle the
-        // pre-Phase-3 hardcoded block in terminal.rs used to set.
+    fn env_for_terminal(&self, data_path: &std::path::Path) -> Vec<(String, std::ffi::OsString)> {
         use std::ffi::OsString;
-        use util::env::EnvOp;
 
+        // On top of the inherited process env: the Termux-flavored vars
+        // the integrated terminal expects, the libtermux-exec shim, the
+        // HOME override and the CA bundle.
         let prefix = self.config.prefix.clone();
         let termux_home = data_path.join("home");
 
-        let mut ops = vec![
-            ("PREFIX".into(), EnvOp::Set(prefix.as_os_str().to_owned())),
-            (
-                "TERMUX__ROOTFS".into(),
-                EnvOp::Set(data_path.as_os_str().to_owned()),
-            ),
-            (
-                "TERMUX__PREFIX".into(),
-                EnvOp::Set(prefix.as_os_str().to_owned()),
-            ),
-            (
-                "TERMUX__HOME".into(),
-                EnvOp::Set(termux_home.as_os_str().to_owned()),
-            ),
+        let mut variables = vec![
+            ("PREFIX".into(), prefix.as_os_str().to_owned()),
+            ("TERMUX__ROOTFS".into(), data_path.as_os_str().to_owned()),
+            ("TERMUX__PREFIX".into(), prefix.as_os_str().to_owned()),
+            ("TERMUX__HOME".into(), termux_home.as_os_str().to_owned()),
             (
                 "TERMUX_APP__PACKAGE_NAME".into(),
-                EnvOp::Set(OsString::from("com.zdroid")),
+                OsString::from("com.zdroid"),
             ),
-            ("HOME".into(), EnvOp::Set(termux_home.into_os_string())),
+            ("HOME".into(), termux_home.into_os_string()),
             // termux-exec.so hooks execve to translate hardcoded
             // /data/data/com.termux/... shebangs in upstream maintainer
             // scripts to our prefix. Without this, `pkg install` of
@@ -417,9 +409,7 @@ impl RuntimeProvider for BootstrapAdapter {
             // shebang fails with EACCES.
             (
                 "LD_PRELOAD".into(),
-                EnvOp::Set(OsString::from(
-                    "/data/data/com.zdroid/files/usr/lib/libtermux-exec.so",
-                )),
+                OsString::from("/data/data/com.zdroid/files/usr/lib/libtermux-exec.so"),
             ),
         ];
         let cert_path = prefix.join("etc/tls/cert.pem");
@@ -428,16 +418,10 @@ impl RuntimeProvider for BootstrapAdapter {
             // curl). Without this, `cargo metadata` from rust-analyzer
             // dies with "unable to get local issuer certificate" on
             // first crates.io index update.
-            ops.push((
-                "SSL_CERT_FILE".into(),
-                EnvOp::Set(cert_path.as_os_str().to_owned()),
-            ));
-            ops.push((
-                "CURL_CA_BUNDLE".into(),
-                EnvOp::Set(cert_path.into_os_string()),
-            ));
+            variables.push(("SSL_CERT_FILE".into(), cert_path.as_os_str().to_owned()));
+            variables.push(("CURL_CA_BUNDLE".into(), cert_path.into_os_string()));
         }
-        ops
+        variables
     }
 
     fn terminal_shell(&self, _data_path: &std::path::Path) -> Option<std::path::PathBuf> {

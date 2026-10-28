@@ -551,9 +551,8 @@ fn android_main(app: AndroidApp) {
     //     so dpkg patches, apt Post-Invoke hooks, and bootstrap-side
     //     tooling keep working unchanged.
     //
-    // The active provider also publishes a terminal env overlay that
-    // `crates/terminal/src/terminal.rs` applies when the PTY spawns,
-    // since alacritty wipes inherited env on bringup.
+    // The integrated terminal inherits this environment; the provider's
+    // `env_for_terminal` variables, registered below, go on top of it.
     //
     // SAFETY: `set_var` / `remove_var` mutate libc-shared process
     // state. The invariant is "no other thread reads/writes libc env
@@ -579,8 +578,8 @@ fn android_main(app: AndroidApp) {
         unsafe {
             for (key, op) in &ops {
                 match op {
-                    util::env::EnvOp::Set(value) => std::env::set_var(key, value),
-                    util::env::EnvOp::Remove => std::env::remove_var(key),
+                    zdroid_runtime::EnvOp::Set(value) => std::env::set_var(key, value),
+                    zdroid_runtime::EnvOp::Remove => std::env::remove_var(key),
                 }
             }
             // The app runs on the Dev channel, where zed_credentials_provider
@@ -603,22 +602,12 @@ fn android_main(app: AndroidApp) {
         log::warn!("zed_android: can't create {}: {error}", temp_dir.display());
     }
 
-    // Publish the per-adapter terminal env overlay so
-    // `crates/terminal/src/terminal.rs` can apply it when the PTY
-    // spawns. Idempotent: subsequent android_main re-entries (activity
-    // recreation) get the same overlay; the registration is OnceLock-
-    // guarded inside util::env.
-    util::env::register_terminal_env_overlay(provider.env_for_terminal(&data_path));
-
-    // Publish adapter-specific filesystem hints for editor code that
-    // historically read TERMUX__HOME / TERMUX__PREFIX env vars
-    // directly. Now those readers (workspace::welcome,
-    // node_runtime::node_runtime, gpui_android::storage) ask the
-    // active adapter via these registry slots — Bootstrap publishes
-    // its Termux-flavored paths, chroot publishes the bionic-clean
-    // equivalents.
-    util::env::register_workspace_root(provider.workspace_root(&data_path));
-    util::env::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
+    // Publish what the active runtime adds to the integrated terminal and
+    // npm, and where its projects live. These are set once: activity
+    // recreation re-enters android_main with the same runtime.
+    zdroid_hooks::register_terminal_env(provider.env_for_terminal(&data_path));
+    zdroid_hooks::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
+    gpui_android::storage::register_workspace_root(provider.workspace_root(&data_path));
 
     // Surface the SELinux domain in logcat — this is the canary for the
     // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
@@ -795,7 +784,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     false
                 }
             };
-            // Register the env_root with util::command so absolute-path
+            // Register the env_root with zdroid_hooks so absolute-path
             // spawns under it get rewritten to route through `zd-exec`.
             // Gated on `needs_command_bridge()` so adapters whose
             // binaries run natively on the host (bootstrap's bionic-
@@ -806,7 +795,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             // `zd-exec <abs>` and fail with ENOENT — bootstrap mode
             // doesn't put zd-exec on PATH.
             if provider.needs_command_bridge() {
-                util::command::register_environment_root(env_root.clone());
+                zdroid_hooks::register_environment_root(env_root.clone());
             }
             if env_root_usable {
                 env_root.to_string_lossy().into_owned()
@@ -1350,7 +1339,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // scattered across Zed's UI) dispatch `zed_actions::OpenSettings`,
     // which normally lands the user at the settings.json editor. Without
     // a working Android runtime that panel can't solve anything: the user
-    // has to find Android Runtime > Open picker first. Skip the dead-end
+    // has to find Android > Open picker first. Skip the dead-end
     // by routing OpenSettings straight to the picker when the runtime
     // toml is missing.
     //

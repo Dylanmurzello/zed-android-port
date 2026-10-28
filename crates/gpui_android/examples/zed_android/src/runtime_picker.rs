@@ -59,7 +59,7 @@ actions!(
 /// `window.dispatch_action(...)`. Three current entry points:
 ///
 ///   - Command palette (`zdroid: pick runtime`).
-///   - Settings → "Android Runtime" → "Open picker".
+///   - Settings → "Android" → "Open picker".
 ///   - Onboarding basics page → "Configure runtime" button.
 ///
 /// The handler unconditionally opens the picker as a STANDALONE

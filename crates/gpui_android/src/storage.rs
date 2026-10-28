@@ -121,16 +121,31 @@ pub fn setup_user_symlinks(termux_home: &Path) {
     }
 }
 
+static WORKSPACE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Registers the active runtime's workspace root at startup. Switching
+/// runtimes restarts the app, so a second registration, when the Activity
+/// is recreated, is ignored.
+pub fn register_workspace_root(root: Option<PathBuf>) {
+    if WORKSPACE_ROOT.set(root).is_err() {
+        log::debug!("storage: workspace root already registered; ignoring the new value");
+    }
+}
+
+fn workspace_root() -> Option<&'static PathBuf> {
+    WORKSPACE_ROOT.get().and_then(Option::as_ref)
+}
+
 /// Local projects live under the active runtime's workspace root.
 pub fn projects_dir() -> Option<PathBuf> {
-    util::env::workspace_root().map(|root| root.join("projects"))
+    workspace_root().map(|root| root.join("projects"))
 }
 
 /// Path of the JSON file storing per-folder "suppress noexec warning"
 /// entries. Lives under `<workspace_root>/.cache/zed-android/`. Returns
 /// `None` only if no adapter registered a workspace_root yet.
 fn noexec_suppressed_file() -> Option<PathBuf> {
-    let root = util::env::workspace_root()?;
+    let root = workspace_root()?;
     let dir = root.join(".cache").join("zed-android");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("noexec-suppressed.json"))

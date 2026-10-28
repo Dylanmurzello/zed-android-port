@@ -8,10 +8,18 @@ use std::ffi::OsString;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
-use util::env::EnvOp;
-
 use crate::config::RuntimeId;
 use crate::health::{HealthStatus, ProgressSink};
+
+/// One change to the app process's environment, from
+/// [`RuntimeProvider::env_for_zed_process`].
+#[derive(Debug, Clone)]
+pub enum EnvOp {
+    /// Set the variable, replacing any existing value.
+    Set(OsString),
+    /// Remove the variable if it's set.
+    Remove,
+}
 
 /// A spawn request handed to the active provider. Mirrors the data a
 /// `Command::new` carries plus the inheritable fds (passed via
@@ -87,7 +95,7 @@ pub trait RuntimeProvider: Send + Sync {
     /// for the returned handle's contract.
     fn spawn(&self, req: SpawnRequest) -> anyhow::Result<Box<dyn SpawnHandle>>;
 
-    /// Whether `util::command::new_command` should rewrite absolute-path
+    /// Whether `zdroid_hooks::new_std_command` should rewrite absolute-path
     /// spawns under [`Self::environment_root`] to route through
     /// `zd-exec`. Adapters that cross a namespace boundary (e.g. chroot)
     /// return true so the spawn lands inside the right userland;
@@ -180,16 +188,13 @@ pub trait RuntimeProvider: Send + Sync {
         Vec::new()
     }
 
-    /// Mutations to overlay on the integrated terminal's env at spawn
-    /// time. Applied on top of whatever the Zed-Rust process env
-    /// already has (i.e. on top of [`Self::env_for_zed_process`]).
-    ///
-    /// Used by `crates/terminal/src/terminal.rs` via the static
-    /// `register_terminal_env_contributor` slot. Adapters that want
-    /// the terminal to behave identically to the editor process can
-    /// return an empty Vec — the inherited process env is then the
-    /// terminal's env.
-    fn env_for_terminal(&self, _data_path: &Path) -> Vec<(String, EnvOp)> {
+    /// Variables to set in the integrated terminal. The shell inherits
+    /// the Zed-Rust process env (after [`Self::env_for_zed_process`]),
+    /// and these replace what they name in it. The app registers them
+    /// with `zdroid_hooks::register_terminal_env`. Adapters that want
+    /// the terminal to behave identically to the editor process return
+    /// an empty Vec.
+    fn env_for_terminal(&self, _data_path: &Path) -> Vec<(String, OsString)> {
         Vec::new()
     }
 
@@ -205,10 +210,9 @@ pub trait RuntimeProvider: Send + Sync {
     }
 
     /// Where the user's projects and Zdroid-managed cache live.
-    /// Recent-project UI groups paths under this dir as "Workspace"
-    /// (vs. SAF-picked "External"); `gpui_android::storage` derives
-    /// the `~/projects` mkdir target and the noexec-suppression cache
-    /// from this. Returns `None` when the adapter has no workspace root.
+    /// `gpui_android::storage` derives the `~/projects` mkdir target
+    /// and the noexec-suppression cache from this. Returns `None` when
+    /// the adapter has no workspace root.
     fn workspace_root(&self, _data_path: &Path) -> Option<PathBuf> {
         None
     }

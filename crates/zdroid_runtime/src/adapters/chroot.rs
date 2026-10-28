@@ -553,14 +553,17 @@ impl RuntimeProvider for ChrootAdapter {
         names.into_iter().collect()
     }
 
-    fn env_for_zed_process(&self, data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_zed_process(
+        &self,
+        data_path: &std::path::Path,
+    ) -> Vec<(String, crate::port::EnvOp)> {
         // Chroot mode keeps the Zed-Rust process bionic-clean: no
         // Termux-flavored vars, no $PREFIX/etc.pem CA pointer, no
         // libtermux-exec preload. Anything spawn-target-specific gets
         // injected at the zd-spawnd boundary via
         // `sanitize_env_for_chroot`.
+        use crate::port::EnvOp;
         use std::ffi::OsString;
-        use util::env::EnvOp;
 
         // Phase 4: zd-exec + zd-runtime live at `<data>/files/bin/` and
         // `<data>/files/zd-runtime/` respectively, not under the
@@ -618,7 +621,7 @@ impl RuntimeProvider for ChrootAdapter {
         ]
     }
 
-    fn env_for_terminal(&self, _data_path: &std::path::Path) -> Vec<(String, util::env::EnvOp)> {
+    fn env_for_terminal(&self, _data_path: &std::path::Path) -> Vec<(String, std::ffi::OsString)> {
         // No overlay in chroot mode. The integrated-terminal SHELL is
         // zd-exec; it talks to zd-spawnd which builds the chroot-side
         // env via `sanitize_env_for_chroot`. Anything the host-side

@@ -52,7 +52,7 @@ pub(crate) fn physical_keyboard_blocks_ime() -> bool {
 /// auto-show on text-input focus. Defaults to false so the early-
 /// boot window (before the SettingsStore observer fires) doesn't
 /// trip a stray auto-show; the observer overwrites with the user's
-/// real setting within ms. Onboarding card + Android Input settings
+/// real setting within ms. Onboarding card + Android settings
 /// page surface the toggle so opt-in is obvious.
 pub(crate) static ON_SCREEN_KEYBOARD_ENABLED: AtomicBool = AtomicBool::new(false);
 

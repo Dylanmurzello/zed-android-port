@@ -40,7 +40,7 @@ trackpad, in both tablet mode and DeX.
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
 | [Copy projects from shared storage](noexec-banner-move.md) | Active | When users open from /sdcard anyway, copy the project into ~/projects |
 | [Trust grants restored from WorkspaceDb at boot](trust-restore-from-db.md) | Active | Production main.rs does this; we forgot |
-| [Welcome-page Workspace/External split](welcome-page-split.md) | Active | Two `rust` projects from different storage tiers were indistinguishable |
+| [Welcome-page Workspace/External split](welcome-page-split.md) | Reverted | Two `rust` projects from different storage tiers were indistinguishable |
 | [SAF picker integration](saf-picker-integration.md) | Active | gpui's prompt_for_paths needs Android Storage Access Framework + path-decoding gymnastics |
 | [Tier 2 root storage (bind-mount /mnt/pass_through)](deferred-tier2-root-storage.md) | Deferred | Wait for in-app settings UI |
 | [`CARGO_TARGET_DIR` stopgap](reverted-cargo-target-dir.md) | Reverted | Per-tool env redirect didn't generalize |
