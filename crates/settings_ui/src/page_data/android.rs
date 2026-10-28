@@ -36,9 +36,7 @@ pub(super) fn android_page() -> SettingsPage {
             SettingsPageItem::SectionHeader("On-Screen Keyboard"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Enable On-Screen Keyboard",
-                description: "Auto-show the soft IME on text-input \
-                    focus and expose its toggle in the pane tab bar. \
-                    Turn off when using a hardware keyboard.",
+                description: "Show the on-screen keyboard when a text field gets focus, and its button in the status bar. Turn off when using a hardware keyboard.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.on_screen_keyboard"),
@@ -61,10 +59,7 @@ pub(super) fn android_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Show Programming Keys Row",
-                description: "Render a row above the soft keyboard \
-                    with Esc, Tab, Ctrl, Alt, and arrow keys. Ctrl \
-                    and Alt are sticky: tap once for next key, \
-                    double-tap to lock until tapped again.",
+                description: "Show Esc, Tab, Ctrl, Alt and arrow keys above the on-screen keyboard. Tap Ctrl or Alt once for the next key, or twice to lock it.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.programming_extras_row"),
@@ -85,17 +80,10 @@ pub(super) fn android_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
-            SettingsPageItem::SectionHeader("Touch Behavior"),
+            SettingsPageItem::SectionHeader("Trackpad and Mouse"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Enable Virtual Trackpad",
-                description: "Add a status bar toggle that switches \
-                    the screen into VNC-style trackpad mode: drag \
-                    moves an on-screen cursor, tap clicks, \
-                    two-finger tap is right-click, two-finger drag \
-                    scrolls. While trackpad mode is active, standard \
-                    Android touch (direct-tap on UI elements, scroll, \
-                    splitter drag) is disabled; toggle off from the \
-                    status bar icon to go back.",
+                description: "Add a status bar button that turns the screen into a trackpad: drag moves the pointer, tap clicks, two-finger tap right-clicks and two-finger drag scrolls. Tapping the button again restores direct touch.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.trackpad_mode"),
@@ -118,12 +106,7 @@ pub(super) fn android_page() -> SettingsPage {
             }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Invert Scroll Direction",
-                description: "Reverse the scroll direction of the \
-                    trackpad (two-finger) and the mouse wheel \
-                    (macOS-style natural vs traditional). Affects the \
-                    hardware trackpad, the mouse wheel, and the virtual \
-                    trackpad. Direct-touch finger scrolling is never \
-                    inverted.",
+                description: "Reverse the scroll direction of trackpads, the mouse wheel and the virtual trackpad. Scrolling with a finger isn't affected.",
                 field: Box::new(SettingField {
                     organization_override: None,
                     json_path: Some("android_input.invert_scroll"),
