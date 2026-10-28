@@ -59,6 +59,10 @@ grep -rn 'consts::OS' crates --include='*.rs'
 
 Anything left that feeds an asset name, archive type or platform table must call the helper; compile-time `#[cfg(target_os = "linux")]` platform blocks (rust-analyzer, ty, ruff, wasi-sdk) need `any(target_os = "linux", target_os = "android")`. Telemetry, user agents and CLI tools keep `consts::OS`. Writeup: `crates/gpui_android/docs/workarounds/runtime-os-asset-selection.md`.
 
+### Vendored crates
+
+`crates/gpui_android/vendor/async-task` is upstream async-task at the revision the root `Cargo.toml` pins, plus one line in `src/raw.rs::RawTask::run` (the run-time waker takes its vtable pointer from the task header). Only the Android app's `[patch.crates-io]` points at it. When upstream Zed bumps the async-task revision, refresh the vendored copy from the new revision and re-apply that line; the writeup is `crates/gpui_android/docs/workarounds/async-task-waker-identity.md`.
+
 ### Action namespace rule
 
 `actions!(zed, [...])` is declared in BOTH `crates/zed/src/zed.rs` and `crates/zed_actions`. One home per action name, ever: an action referenced outside `crates/zed` (workspace/editor registrations, the Android app) must live in `zed_actions`, and `zed.rs` must not re-declare it. Keep-both compiles and then breaks action dispatch at runtime (the registry keys on name strings).

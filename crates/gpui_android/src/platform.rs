@@ -1149,8 +1149,14 @@ impl Platform for AndroidPlatform {
             // Drain main-thread runnables enqueued from background threads. The
             // AndroidAppWaker wakes poll_events above when there's work; we drain
             // each tick regardless to catch anything between waker and poll.
+            // Only the runnables already queued run in this pass. One that
+            // re-enqueues itself from inside `run()` (a future whose own waker
+            // fires during its poll) would otherwise keep the iterator going
+            // and starve the input and paint steps below: the window freezes
+            // at full CPU instead of merely running hot.
             let receiver = self.common.borrow().main_receiver.clone();
-            for runnable in receiver.try_iter() {
+            let batch: Vec<_> = receiver.try_iter().collect();
+            for runnable in batch {
                 if let Ok(runnable) = runnable {
                     runnable.run();
                 }

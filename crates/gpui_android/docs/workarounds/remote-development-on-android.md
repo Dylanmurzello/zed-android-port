@@ -1,8 +1,11 @@
 # Remote development on Android — env, channel, and CDN gotchas
 
 **Status:** Active (working end-to-end against a Linux-x86_64 Vultr remote
-from Tab S9 Ultra; Zed protocol, file tree, terminal, file ops all flow)
-**Phase / Commit:** L10b
+from Tab S9 Ultra; Zed protocol, file tree, terminal, file ops all flow.
+Re-verified 2026-10-28 on the rootfs engine against a macOS arm64 host with
+password auth through the static askpass helper: the server processes on the
+host carried no `ZD_*`, `LD_PRELOAD`, or the tablet's `HOME`/`TMPDIR`)
+**Phase / Commit:** L10b; rootfs engine chunk 2 for the engine gaps below
 **Files:**
 - `crates/gpui_android/examples/zed_android/src/lib.rs`
 - `crates/gpui_android/examples/zed_android/Cargo.toml`
@@ -219,3 +222,27 @@ line (filter regressed) or from the remote's own bash startup
   permanent fix for symptom (E)
 - [termux-bootstrap-rebuild.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/termux-bootstrap-rebuild.md) — the
   bootstrap-rebuild process L10a feeds into
+
+## Rootfs engine: what ssh needed from the loader
+
+Three sandbox refusals sat between the password prompt and a working
+ControlMaster, each fixed in the engine rather than in ssh (2026-10-28):
+
+- ssh publishes its mux socket by binding a temporary name and hard-linking
+  it to `ControlPath`; the sandbox refuses hard links and a socket cannot be
+  copied, so the loader turns a refused `linkat` on a socket into a
+  `renameat2(RENAME_NOREPLACE)`, the same atomic publish with the same
+  `EEXIST` on a race (`crates/zd_loader/src/link.rs`).
+- The master waits with `ppoll` and calls the legacy `accept`, which bionic
+  never issues and the app seccomp policy therefore omits; the untagged SIGSYS
+  used to come back as ENOSYS and the master spun on the readable listener.
+  The compat table answers it with `accept4(fd, addr, len, 0)`
+  (`crates/zd_engine_core/src/compat.rs`).
+- The master checks the mux client's `getpeereid` against its own `getuid()`;
+  under fake root `getuid()` is 0 while `SO_PEERCRED` reported the real app
+  uid, so every client was dropped with "master hello exchange failed". The
+  handler maps the peer credentials the way it maps stat owners
+  (`crates/zd_loader/src/handler.rs::peer_credentials`).
+
+The password prompt itself depended on a waker identity bug in async-task that
+froze the main loop; see `async-task-waker-identity.md`.

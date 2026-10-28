@@ -458,13 +458,16 @@ impl remote::RemoteClientDelegate for RemoteClientDelegate {
         if let Some(password) = known_password.take() {
             tx.send(password).ok();
         } else {
-            self.window
-                .update(cx, |_, window, cx| {
-                    self.ui.update(cx, |modal, cx| {
-                        modal.set_prompt(prompt, tx, window, cx);
-                    })
+            match self.window.update(cx, |_, window, cx| {
+                self.ui.update(cx, |modal, cx| {
+                    modal.set_prompt(prompt, tx, window, cx);
                 })
-                .ok();
+            }) {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) | Err(error) => {
+                    log::error!("remote connection: could not show the password prompt: {error:#}");
+                }
+            }
         }
     }
 
