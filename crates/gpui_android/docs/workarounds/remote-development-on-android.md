@@ -210,5 +210,5 @@ line (the Android variables reached `insert_zed_terminal_env` again) or from the
 - [phase-l10-remote-development-scope.md](../phase-l10-remote-development-scope.md)
   — original scope doc; L10a (bootstrap rebuild for openssh) is the
   permanent fix for symptom (E)
-- [termux-bootstrap-rebuild.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/termux-bootstrap-rebuild.md) — the
+- [zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#whats-in-it) — the
   bootstrap-rebuild process L10a feeds into

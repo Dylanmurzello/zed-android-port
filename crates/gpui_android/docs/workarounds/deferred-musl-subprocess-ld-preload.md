@@ -4,7 +4,7 @@
 
 ## What breaks
 
-The Stage-3 wrapper our `install_npm_launcher_generator` writes for musl-static binaries (claude, codex, anything Bun-compiled) looks like:
+The `$PREFIX/bin` wrapper the bootstrap's launcher generator (`etc/apt/zed-launcher-gen.sh`) writes for musl binaries (Claude Code, anything Bun-compiled) looks like:
 
 ```sh
 #!/data/data/com.zdroid/files/usr/bin/sh
@@ -75,7 +75,7 @@ The musl wrapper would then carry the original LD_PRELOAD value in `ZED_LD_PRELO
 exec env -u LD_PRELOAD "ZED_LD_PRELOAD=$LD_PRELOAD" "$bin" "$@"
 ```
 
-Children that go through our wrapped shells re-discover LD_PRELOAD; direct execves of non-shell binaries don't. Costs: extra fork/exec per shell invocation, several small wrapper scripts, and the wrappers need to coexist with apt-installed `pkg install bash` which would clobber them (handle via dpkg path-exclude similar to [protect-baseline-libs](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/protect-baseline-libs.md) in zdroid-bootstrap).
+Children that go through our wrapped shells re-discover LD_PRELOAD; direct execves of non-shell binaries don't. Costs: extra fork/exec per shell invocation, several small wrapper scripts, and the wrappers need to coexist with apt-installed `pkg install bash` which would clobber them (handle with a dpkg `path-exclude`).
 
 ### B. Compile a musl-flavored libtermux-exec
 

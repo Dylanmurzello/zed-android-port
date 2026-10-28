@@ -6,4 +6,4 @@
 - A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints) but haven't been tested on a device yet. Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
 - Under Bootstrap, the agent panel's Claude Agent and Codex need npm and the Claude Code and Codex CLIs installed in the terminal, then a restart of Zdroid. See "Setting up your shell environment (Bootstrap)" in the README. Claude Agent hasn't been tested on a device yet.
-- A Bootstrap installed before Zdroid 0.9.19 can break apt when you run `pkg upgrade`: apt then can't fetch packages, or can't start. Reinstall it first with **Settings → Android → Open picker → Reinstall**. Packages you installed are removed; your home folder stays.
+- A Bootstrap installed before Zdroid 0.9.19 can't install packages with this version, and `pkg upgrade` could break its apt. Reinstall it first with **Settings → Android → Open picker → Reinstall**. Packages you installed are removed; your home folder stays.

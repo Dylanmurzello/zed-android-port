@@ -346,15 +346,6 @@ impl RuntimeProvider for BootstrapAdapter {
                 "TERMUX__HOME".into(),
                 EnvOp::Set(termux_home.into_os_string()),
             ),
-            // Read by our patched dpkg's tarfn.c at extract time. When
-            // set and != "com.termux", dpkg rewrites tar entry paths
-            // starting with /data/data/com.termux/ to /data/data/
-            // <this>/ on the fly, letting `pkg install <upstream-deb>`
-            // Just Work with our prefix.
-            (
-                "TERMUX_APP__PACKAGE_NAME".into(),
-                EnvOp::Set(OsString::from("com.zdroid")),
-            ),
             (
                 "TMPDIR".into(),
                 EnvOp::Set(prefix.join("tmp").into_os_string()),
@@ -425,10 +416,6 @@ impl RuntimeProvider for BootstrapAdapter {
             ("TERMUX__ROOTFS".into(), data_path.as_os_str().to_owned()),
             ("TERMUX__PREFIX".into(), prefix.as_os_str().to_owned()),
             ("TERMUX__HOME".into(), termux_home.as_os_str().to_owned()),
-            (
-                "TERMUX_APP__PACKAGE_NAME".into(),
-                OsString::from("com.zdroid"),
-            ),
             ("HOME".into(), termux_home.into_os_string()),
             // termux-exec.so hooks execve to translate hardcoded
             // /data/data/com.termux/... shebangs in upstream maintainer

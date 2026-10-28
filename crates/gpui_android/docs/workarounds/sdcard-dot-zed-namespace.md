@@ -100,7 +100,7 @@ What we gain:
 - LD_PRELOAD shim that intercepts `open()`: can't intercept
   static-musl syscalls (no PLT/GOT).
 - proot bind: works but 5+ minute startup under telemetry storm. See
-  [hex-patch-resolv-conf.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md) for why.
+  [DNS in the zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#dns) for why.
 
 ## Future-proofing
 
@@ -111,7 +111,7 @@ solution.
 
 ## See also
 
-- [hex-patch-resolv-conf.md](https://github.com/Dylanmurzello/zdroid-bootstrap/blob/main/docs/hex-patch-resolv-conf.md) — the patcher
+- [DNS in the zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#dns) — the patcher
 - [jni-dns-bridge.md](jni-dns-bridge.md) — what populates the file
 - [android-noexec-mount.md](android-noexec-mount.md) — sister story,
   same vintage of "Android filesystems vs Linux assumptions"
