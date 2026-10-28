@@ -275,13 +275,17 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
 
 pub extern "C" fn sigsys(_signal: i32, info: *mut SigInfo, context: *mut UContext) {
     // SAFETY: the kernel hands valid frames to an SA_SIGINFO handler.
-    let (info, context) = unsafe { (&*info, &mut *context) };
-    if info.si_code != SYS_SECCOMP {
+    let (si_code, tag, number) =
+        unsafe { ((*info).si_code, (*info).si_errno as u16, (*info).si_syscall as u32) };
+    if si_code != SYS_SECCOMP {
         return;
     }
     TRAP_COUNT.fetch_add(1, Ordering::Relaxed);
-    let tag = info.si_errno as u16;
-    let number = info.si_syscall as u32;
+    if tag != TAG_PROBE && !is_engine_tag(tag) && forward_to_guest(number, info, context) {
+        return;
+    }
+    // SAFETY: as above; a guest handler, if one ran, has returned.
+    let context = unsafe { &mut *context };
     let UContext {
         uc_sigmask,
         uc_mcontext,
@@ -299,6 +303,44 @@ pub extern "C" fn sigsys(_signal: i32, info: *mut SigInfo, context: *mut UContex
     }
     dispatch(number, regs, uc_sigmask, pc);
     census(number, regs, true);
+}
+
+/// A SIGSYS that is not the engine's comes from Android's filter or from
+/// a filter the guest installed itself, and the two carry no mark that
+/// tells them apart. A syscall the compat table knows is Android's and
+/// is answered there; any other goes to the handler the guest recorded
+/// through the virtualized `rt_sigaction`, so a program that sandboxes
+/// itself with `SECCOMP_RET_TRAP` sees its own traps. The guest handler
+/// runs inside this one with the mask this one has, SIGSYS unblocked.
+fn forward_to_guest(number: u32, info: *mut SigInfo, context: *mut UContext) -> bool {
+    if !matches!(compat::response(number, config::get().fake_root), Response::Unknown) {
+        return false;
+    }
+    // SAFETY: a plain static written only by the virtualized rt_sigaction.
+    let record = unsafe { core::ptr::read(GUEST_SIGSYS.get()) };
+    match record.handler {
+        sys::SIG_DFL => false,
+        sys::SIG_IGN => true,
+        handler => {
+            if record.flags & sys::SA_SIGINFO != 0 {
+                // SAFETY: the guest installed this address as its SA_SIGINFO
+                // handler for SIGSYS; it receives the kernel's own frame.
+                let handler: extern "C" fn(i32, *mut SigInfo, *mut UContext) =
+                    unsafe { core::mem::transmute(handler as usize) };
+                handler(sys::SIGSYS as i32, info, context);
+            } else {
+                // SAFETY: as above, for a handler taking the signal only.
+                let handler: extern "C" fn(i32) = unsafe { core::mem::transmute(handler as usize) };
+                handler(sys::SIGSYS as i32);
+            }
+            if record.flags & sys::SA_RESETHAND != 0 {
+                // SAFETY: the record is written only from SIGSYS handlers of
+                // this process; the kernel would have reset it the same way.
+                unsafe { (*GUEST_SIGSYS.get()).handler = sys::SIG_DFL };
+            }
+            true
+        }
+    }
 }
 
 /// Android's filter trapped a syscall bionic never makes.

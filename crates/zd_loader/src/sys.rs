@@ -54,6 +54,9 @@ pub const SA_SIGINFO: u64 = 0x4;
 pub const SA_RESTART: u64 = 0x1000_0000;
 pub const SA_NODEFER: u64 = 0x4000_0000;
 pub const SA_ONSTACK: u64 = 0x0800_0000;
+pub const SA_RESETHAND: u64 = 0x8000_0000;
+pub const SIG_DFL: u64 = 0;
+pub const SIG_IGN: u64 = 1;
 pub const SS_DISABLE: i32 = 2;
 
 pub const PR_SET_NAME: usize = 15;
