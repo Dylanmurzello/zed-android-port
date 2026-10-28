@@ -98,6 +98,8 @@ Since 0.9.17 the app also runs Zed's model providers (`copilot_chat::init`, `lan
 
 Still unverified on a device: streamed responses and tool calls through an OpenAI-compatible endpoint, inline edits, API keys surviving a restart (Android Keystore), Copilot Chat's GitHub sign-in, and local MCP servers under Bootstrap and chroot (including the sandbox fallback), as opposed to servers on an SSH host. Copilot edit prediction is not initialized. Android's API-key card in a native agent thread has no dismiss button (Zed's card has one through `ZedAiOnboarding`), so it stays until a provider is configured.
 
+**External agents under Bootstrap (found 2026-10-28, untested on a device).** Claude Agent and Codex come from the ACP registry as npm packages, which Zed installs with the runtime's npm into `external_agents/registry/npx/` under its data directory (`LocalRegistryNpxAgent` in `agent_server_store.rs`). Both adapters run on Node but start a native CLI from their own `node_modules`: a musl build of Claude Code, and a static musl build of Codex. Bootstrap's `zed-launcher-gen.sh`, which its npm wrapper runs after every install, only patches binaries under `$PREFIX/lib/node_modules`: the musl loader path, the `/etc/resolv.conf` DNS patch and the `$PREFIX/bin` wrapper that drops `LD_PRELOAD`. The copies Zed installs miss all three, and the adapters inherit `LD_PRELOAD` from `npm_command_env`, so Claude Code likely can't start and Codex likely can't resolve hostnames. Workaround: `npm install -g @anthropic-ai/claude-code @openai/codex` in the terminal, then set `CLAUDE_CODE_EXECUTABLE` to `$PREFIX/bin/claude` under `agent_servers.claude-acp.env` and `CODEX_PATH` to `$PREFIX/bin/codex` under `agent_servers.codex-acp.env`, both as absolute paths. Possible fixes: have the Bootstrap adapter set those two variables when the global CLIs exist, or run the launcher generator over Zed's agent directory too.
+
 ## Platform gaps found in the 2026-10-28 audit
 
 - **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
@@ -120,7 +122,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 0.9.18 moved the Android spawn hooks out of Zed's crates into `zdroid_hooks` and trimmed the Settings and welcome page edits. Check on the tablet, with Bootstrap and with the chroot:
 
 - The terminal opens in the runtime's home with its PATH; `git status`, a language server and `npm install` of a package with native binaries work in a project under `~/projects`, and a language server starts for a project on shared storage.
-- Settings has one **Android** page with the runtime picker, the keyboard toggles and the touch toggles; **Open picker** opens the runtime picker.
+- Settings has one **Android** page with the runtime picker, the keyboard toggles and the trackpad and mouse toggles; **Open picker** opens the runtime picker.
 - Settings → General shows **Auto Update**, which the in-app updater honors, and still no Privacy section. Toggling Auto Update writes `auto_update` to settings.json.
 - The welcome page lists recent projects in one list, under "Welcome back to Zdroid".
 
