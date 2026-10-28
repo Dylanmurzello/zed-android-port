@@ -1,9 +1,10 @@
 //! Download + extract path for [`super::bootstrap::BootstrapAdapter::install`].
 //!
-//! Pulls the latest release ZIP from `<release_repo>`'s GitHub
-//! releases endpoint, downloads `bootstrap-aarch64.zip`, extracts the
-//! contents into a staging dir, replaces `$PREFIX`, and writes a version
-//! sentinel so repeated installations of the same version skip extraction.
+//! Downloads `bootstrap-aarch64.zip` from a GitHub release of
+//! `<release_repo>`: the release pinned below for Zdroid's own repository,
+//! the latest one for any other. Extracts the contents into a staging dir,
+//! replaces `$PREFIX`, and writes a version sentinel so repeated
+//! installations of the same version skip extraction.
 
 use std::fs;
 use std::io::{Cursor, Read, Write as _};
@@ -16,7 +17,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::config::DEFAULT_RELEASE_REPO;
 use crate::health::ProgressSink;
+
+/// The release of [`DEFAULT_RELEASE_REPO`] this version of Zdroid installs,
+/// and its SHA-256. The download is checked against this value, built into
+/// the APK, instead of the digest GitHub reports for the same file.
+const PINNED_TAG: &str = "v2026.05.06-r5";
+const PINNED_SHA256: &str = "2d5813ea1610f72d6c9af175c191bd8a67977cdf2e01758780d5be0ab57a3711";
 
 /// Preferred asset name. Also used when GitHub's release metadata is
 /// unavailable, so the download can continue through anonymous API limits.
@@ -71,25 +79,26 @@ fn http_agent(redirects: u32) -> ureq::Agent {
 /// ureq's default.
 const MAX_REDIRECTS: u32 = 5;
 
-/// Download the latest release ZIP and replace `<prefix>` after extraction.
+/// Download the release ZIP and replace `<prefix>` after extraction.
 /// Idempotent against `<prefix>/.bootstrap-version` — if the on-disk
-/// sentinel matches the latest tag and the prefix still has its shell, the
+/// sentinel matches the tag and the prefix still has its shell, the
 /// function returns Ok without touching the network or filesystem beyond a
 /// tag resolve.
-pub fn install_latest(
-    prefix: &Path,
-    release_repo: &str,
-    progress: &mut dyn ProgressSink,
-) -> Result<()> {
+pub fn install(prefix: &Path, release_repo: &str, progress: &mut dyn ProgressSink) -> Result<()> {
     if INSTALL_RUNNING.swap(true, Ordering::AcqRel) {
         bail!("a bootstrap install is already running");
     }
     let _install_running = InstallRunning;
 
-    progress.step("Resolving latest bootstrap release");
-    let tag_name = resolve_latest_tag(release_repo)
-        .with_context(|| format!("resolve latest release tag for {release_repo}"))?;
-    log::info!("bootstrap_install: latest release tag = {tag_name}");
+    let pinned = release_repo == DEFAULT_RELEASE_REPO;
+    let tag_name = if pinned {
+        PINNED_TAG.to_owned()
+    } else {
+        progress.step("Resolving latest bootstrap release");
+        resolve_latest_tag(release_repo)
+            .with_context(|| format!("resolve latest release tag for {release_repo}"))?
+    };
+    log::info!("bootstrap_install: release tag = {tag_name}");
 
     let version_file = prefix.join(VERSION_FILE);
     // The sentinel is a dotfile, so clearing the prefix with `rm -rf *`
@@ -104,8 +113,12 @@ pub fn install_latest(
     }
 
     progress.step(&format!("Downloading bootstrap {tag_name}"));
-    let zip_bytes = download_bootstrap_asset(release_repo, &tag_name)
-        .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
+    let zip_bytes = if pinned {
+        download_pinned_asset(release_repo, &tag_name)
+    } else {
+        download_bootstrap_asset(release_repo, &tag_name)
+    }
+    .with_context(|| format!("download bootstrap asset for {release_repo} tag {tag_name}"))?;
     log::info!(
         "bootstrap_install: downloaded {} bytes for tag {}",
         zip_bytes.len(),
@@ -204,6 +217,44 @@ fn download_bootstrap_asset(release_repo: &str, tag: &str) -> Result<Vec<u8>> {
         validate_bootstrap_asset(&bytes, asset)?;
     }
     Ok(bytes)
+}
+
+fn download_pinned_asset(release_repo: &str, tag: &str) -> Result<Vec<u8>> {
+    let url =
+        format!("https://github.com/{release_repo}/releases/download/{tag}/{RELEASE_ASSET_NAME}");
+    log::info!("bootstrap_install: fetching {RELEASE_ASSET_NAME}");
+    let bytes = fetch_asset_bytes(&url)?;
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if actual != PINNED_SHA256 {
+        bail!("bootstrap asset SHA-256 mismatch for {RELEASE_ASSET_NAME} of {tag}");
+    }
+    log::info!(
+        "bootstrap_install: verified {RELEASE_ASSET_NAME} against the pinned sha256:{actual}"
+    );
+    Ok(bytes)
+}
+
+/// The `owner/repo` slug in what the user typed into the runtime picker:
+/// the slug itself or a github.com URL of the repository or one of its
+/// pages. `None` when it names no repository.
+pub fn release_repo_from_input(input: &str) -> Option<String> {
+    let input = input.trim();
+    let path = ["https://github.com/", "http://github.com/", "github.com/"]
+        .iter()
+        .find_map(|prefix| input.strip_prefix(prefix))
+        .unwrap_or(input);
+    let mut segments = path.split('/');
+    let owner = segments.next()?;
+    let repository = segments.next()?;
+    let repository = repository.strip_suffix(".git").unwrap_or(repository);
+    let is_name = |name: &str| {
+        // Also rejects `.` and `..`, which would leave the repository's URLs.
+        !name.trim_matches('.').is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+    };
+    (is_name(owner) && is_name(repository)).then(|| format!("{owner}/{repository}"))
 }
 
 fn validate_bootstrap_asset(bytes: &[u8], asset: &GitHubAsset) -> Result<()> {
@@ -542,6 +593,36 @@ impl ProgressSink for LogProgressSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_repo_from_input_accepts_slugs_and_github_urls() {
+        for input in [
+            "owner/repo",
+            " owner/repo ",
+            "github.com/owner/repo",
+            "https://github.com/owner/repo",
+            "https://github.com/owner/repo/",
+            "https://github.com/owner/repo.git",
+            "https://github.com/owner/repo/releases/latest",
+        ] {
+            assert_eq!(
+                release_repo_from_input(input).as_deref(),
+                Some("owner/repo"),
+                "{input:?}"
+            );
+        }
+        for input in [
+            "",
+            "owner",
+            "owner/",
+            "/repo",
+            "https://example.com/owner/repo",
+            "owner/repo name",
+            "owner/../repo",
+        ] {
+            assert_eq!(release_repo_from_input(input), None, "{input:?}");
+        }
+    }
 
     #[test]
     fn symlink_paths_must_stay_inside_staging() {

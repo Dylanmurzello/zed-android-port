@@ -17,7 +17,7 @@
 //! [bootstrap]
 //! prefix = "/data/data/com.zdroid/files/usr"
 //! # Omit proot_rootfs for bare mode
-//! release_repo = "Dylanmurzello/zdroid-bootstrap"
+//! release_repo = "ilkersigirci/zdroid-bootstrap"
 //!
 //! ```
 //!
@@ -121,17 +121,22 @@ pub struct BootstrapConfig {
     #[serde(default)]
     pub proot_rootfs: Option<PathBuf>,
     /// `owner/repo` slug of the GitHub repo that publishes
-    /// `bootstrap-aarch64.zip` releases. The adapter pulls
-    /// from `releases/latest` for upgrade detection.
+    /// `bootstrap-aarch64.zip` releases. The runtime picker's Install
+    /// downloads from it, and shows it for the user to change.
     pub release_repo: String,
 }
+
+/// Zdroid's fork of Dylan Murzello's bootstrap repository, whose updates
+/// stopped after `v2026.05.06-r4`.
+pub const DEFAULT_RELEASE_REPO: &str = "ilkersigirci/zdroid-bootstrap";
+const LEGACY_DEFAULT_RELEASE_REPO: &str = "Dylanmurzello/zdroid-bootstrap";
 
 impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
             prefix: PathBuf::from("/data/data/com.zdroid/files/usr"),
             proot_rootfs: None,
-            release_repo: "Dylanmurzello/zdroid-bootstrap".into(),
+            release_repo: DEFAULT_RELEASE_REPO.into(),
         }
     }
 }
@@ -217,7 +222,17 @@ impl RuntimeFile {
     /// parse / I/O failures.
     pub fn load(path: &std::path::Path) -> anyhow::Result<Option<Self>> {
         match std::fs::read_to_string(path) {
-            Ok(raw) => Ok(Some(toml::from_str(&raw)?)),
+            Ok(raw) => {
+                let mut file: Self = toml::from_str(&raw)?;
+                // Saved before Zdroid had its own repository: the picker
+                // wrote the default out with every other setting.
+                if let Some(bootstrap) = &mut file.bootstrap
+                    && bootstrap.release_repo == LEGACY_DEFAULT_RELEASE_REPO
+                {
+                    bootstrap.release_repo = DEFAULT_RELEASE_REPO.into();
+                }
+                Ok(Some(file))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -312,6 +327,26 @@ mod tests {
             anyhow::bail!("expected bootstrap configuration");
         };
         assert_eq!(bootstrap.prefix, BootstrapConfig::default().prefix);
+        Ok(())
+    }
+
+    #[test]
+    fn loading_replaces_the_legacy_default_repository() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("runtime.toml");
+        std::fs::write(
+            &path,
+            r#"
+                [runtime]
+                type = "bootstrap"
+                [bootstrap]
+                prefix = "/data/data/com.zdroid/files/usr"
+                release_repo = "Dylanmurzello/zdroid-bootstrap"
+            "#,
+        )?;
+        let file = RuntimeFile::load(&path)?.context("saved configuration")?;
+        let bootstrap = file.bootstrap.context("bootstrap configuration")?;
+        assert_eq!(bootstrap.release_repo, DEFAULT_RELEASE_REPO);
         Ok(())
     }
 

@@ -219,11 +219,7 @@ impl RuntimeProvider for BootstrapAdapter {
     }
 
     fn install(&self, progress: &mut dyn ProgressSink) -> anyhow::Result<()> {
-        super::bootstrap_install::install_latest(
-            &self.config.prefix,
-            &self.config.release_repo,
-            progress,
-        )
+        super::bootstrap_install::install(&self.config.prefix, &self.config.release_repo, progress)
     }
 
     #[cfg(target_os = "android")]
