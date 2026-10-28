@@ -20,7 +20,7 @@ use zd_engine_core::translate::{ProcExe, Translated, Translator};
 use core::sync::atomic::Ordering;
 
 use crate::config::{self, ENGINE_KEYS};
-use crate::handler::{TRACEME_REQUESTED, cstr_bounded};
+use crate::handler::{TRACEME_REQUESTED, cstr_bounded, translate};
 use crate::log;
 use crate::scratch::Working;
 use crate::sys;
@@ -73,12 +73,12 @@ fn run(
         let scratch = working.get();
         // `guest` is what the child's loader will open (and record as the
         // guest's executable); `host` is what the preflight checks here.
-        let [guest, host, spare_a, spare_b] = &mut scratch.paths;
+        let [guest, host, interpreter, spare_a, spare_b] = &mut scratch.paths;
         let guest_len = match resolve(translator, dirfd, given, flags, guest, host, spare_a, spare_b) {
             Ok(len) => len,
             Err(errno) => return sys::neg_errno(errno),
         };
-        if let Err(errno) = preflight(translator, host.as_ptr(), spare_a) {
+        if let Err(errno) = preflight(translator, host.as_ptr(), interpreter, spare_a, spare_b) {
             return sys::neg_errno(errno);
         }
         let entry_len = env::PROGRAM.len() + 1 + guest_len + 1;
@@ -236,12 +236,12 @@ fn resolve(
             writer.push_component(given).map_err(|_| sys::ENAMETOOLONG)?;
             writer.finish()
         };
-        match translator.guest_to_host(&guest[..guest_len], host) {
+        match translate(translator, &guest[..guest_len], host, dir_host, dir_guest) {
             Ok(Translated::Host(_)) => Ok(guest_len),
             _ => Err(sys::ENOENT),
         }
     } else {
-        match translator.guest_to_host(given, host) {
+        match translate(translator, given, host, dir_host, dir_guest) {
             Ok(Translated::Host(_)) => copy_guest(given, guest),
             Ok(Translated::Relative) => {
                 let len = copy_guest(given, guest)?;
@@ -252,7 +252,7 @@ fn resolve(
             Ok(Translated::ProcExe(who)) if is_self(who) => {
                 let guest_exe = config::get().guest_exe.as_bytes();
                 let len = copy_guest(guest_exe, guest)?;
-                match translator.guest_to_host(guest_exe, host) {
+                match translate(translator, guest_exe, host, dir_host, dir_guest) {
                     Ok(Translated::Host(_)) => {}
                     Ok(Translated::Relative) => {
                         host[..len].copy_from_slice(guest_exe);
@@ -263,7 +263,7 @@ fn resolve(
                 Ok(len)
             }
             Ok(_) => Err(sys::ENOENT),
-            Err(_) => Err(sys::ENAMETOOLONG),
+            Err(errno) => Err(errno),
         }
     }
 }
@@ -301,7 +301,13 @@ fn readlink_fd(fd: isize, out: &mut [u8; MAX_PATH]) -> Result<usize, i32> {
 }
 
 /// The checks the kernel would do before committing to the exec.
-fn preflight(translator: &Translator<'static>, host: *const u8, interpreter: &mut [u8; MAX_PATH]) -> Result<(), i32> {
+fn preflight(
+    translator: &Translator<'static>,
+    host: *const u8,
+    interpreter: &mut [u8; MAX_PATH],
+    link: &mut [u8; MAX_PATH],
+    target: &mut [u8; MAX_PATH],
+) -> Result<(), i32> {
     let mode = sys::stat_mode(sys::AT_FDCWD, host, 0)?;
     if mode & sys::S_IFMT != sys::S_IFREG {
         return Err(sys::EACCES);
@@ -317,7 +323,7 @@ fn preflight(translator: &Translator<'static>, host: *const u8, interpreter: &mu
         let Some(script) = shebang::parse(head) else {
             return Err(sys::ENOEXEC);
         };
-        return match translator.guest_to_host(script.interpreter, interpreter) {
+        return match translate(translator, script.interpreter, interpreter, link, target) {
             Ok(Translated::Host(_)) => {
                 sys::faccessat(sys::AT_FDCWD, interpreter.as_ptr(), sys::X_OK).map_err(|_| sys::ENOENT)
             }

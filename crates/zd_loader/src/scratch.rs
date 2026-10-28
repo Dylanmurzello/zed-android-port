@@ -20,14 +20,14 @@ use zd_engine_core::path::MAX_PATH;
 use crate::sys;
 
 pub struct Scratch {
-    pub paths: [[u8; MAX_PATH]; 4],
+    pub paths: [[u8; MAX_PATH]; 5],
     pub bytes: [u8; 1024],
 }
 
 impl Scratch {
     pub const fn new() -> Self {
         Self {
-            paths: [[0; MAX_PATH]; 4],
+            paths: [[0; MAX_PATH]; 5],
             bytes: [0; 1024],
         }
     }

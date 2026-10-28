@@ -30,6 +30,11 @@ pub enum Translated {
     /// `/proc/<who>/auxv`: the kernel's copy describes the loader, so
     /// the caller serves the patched vector instead.
     ProcAuxv(ProcExe),
+    /// `/proc/<who>/cwd` or `/proc/<who>/fd/<n>` (the first `link_len`
+    /// bytes of the input) followed by a `..`: the kernel would climb
+    /// from the host directory behind the link, so the caller reads the
+    /// link, re-anchors the rest in the guest view and translates again.
+    ProcLink { link_len: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +64,19 @@ impl<'a> Translator<'a> {
     pub fn guest_to_host(&self, guest: &[u8], out: &mut [u8]) -> Result<Translated, TranslateError> {
         if !is_absolute(guest) {
             return Ok(Translated::Relative);
+        }
+        let mut guest = guest;
+        while let Some((link, link_len, rest)) = proc_dir_link(guest) {
+            match link {
+                // The guest's root is the rootfs, so what follows is a guest
+                // absolute path again. A bare link stays the kernel's, which
+                // keeps `readlink` answering `/`.
+                ProcDirLink::Root if !rest.is_empty() => guest = rest,
+                ProcDirLink::Directory if components(rest).any(|part| part == b"..") => {
+                    return Ok(Translated::ProcLink { link_len });
+                }
+                _ => break,
+            }
         }
         // Clamp straight into the caller's buffer, then slide the tail
         // right to make room for the host prefix: the handler runs on the
@@ -215,8 +233,13 @@ enum ProcFile {
 fn proc_special(guest: &[u8]) -> Option<(ProcExe, ProcFile)> {
     let rest = strip_prefix(b"/proc", guest)?;
     let mut parts = components(rest);
-    let who = parts.next()?;
-    let file = match parts.next()? {
+    let who = proc_who(parts.next()?)?;
+    let mut name = parts.next()?;
+    if name == b"task" {
+        digits(parts.next()?)?;
+        name = parts.next()?;
+    }
+    let file = match name {
         b"exe" => ProcFile::Exe,
         b"auxv" => ProcFile::Auxv,
         _ => return None,
@@ -224,8 +247,54 @@ fn proc_special(guest: &[u8]) -> Option<(ProcExe, ProcFile)> {
     if parts.next().is_some() {
         return None;
     }
-    let who = proc_who(who)?;
     Some((who, file))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcDirLink {
+    Root,
+    Directory,
+}
+
+/// `/proc/<who>[/task/<tid>]/root`, `.../cwd` and `.../fd/<n>`: the
+/// per-process links to directories. Returns the kind, the byte length
+/// of the link path within `guest` and what follows it (empty, or
+/// starting with `/`).
+fn proc_dir_link(guest: &[u8]) -> Option<(ProcDirLink, usize, &[u8])> {
+    let rest = strip_prefix(b"/proc", guest)?;
+    let mut parts = components(rest);
+    proc_who(parts.next()?)?;
+    let mut name = parts.next()?;
+    if name == b"task" {
+        digits(parts.next()?)?;
+        name = parts.next()?;
+    }
+    let link = match name {
+        b"root" => ProcDirLink::Root,
+        b"cwd" => ProcDirLink::Directory,
+        b"fd" => {
+            name = parts.next()?;
+            digits(name)?;
+            ProcDirLink::Directory
+        }
+        _ => return None,
+    };
+    let link_len = name.as_ptr() as usize + name.len() - guest.as_ptr() as usize;
+    Some((link, link_len, &guest[link_len..]))
+}
+
+fn digits(part: &[u8]) -> Option<u32> {
+    if part.is_empty() {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for &digit in part {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add(u32::from(digit - b'0'))?;
+    }
+    Some(value)
 }
 
 fn proc_who(who: &[u8]) -> Option<ProcExe> {
@@ -235,14 +304,7 @@ fn proc_who(who: &[u8]) -> Option<ProcExe> {
     if who == b"thread-self" {
         return Some(ProcExe::ThreadSelf);
     }
-    let mut pid: u32 = 0;
-    for &digit in who {
-        if !digit.is_ascii_digit() {
-            return None;
-        }
-        pid = pid.checked_mul(10)?.checked_add((digit - b'0') as u32)?;
-    }
-    Some(ProcExe::Pid(pid))
+    Some(ProcExe::Pid(digits(who)?))
 }
 
 #[cfg(test)]
@@ -274,6 +336,41 @@ mod tests {
         let mut out = [0u8; 512];
         let len = translator().host_to_guest(host.as_bytes(), &mut out).unwrap();
         String::from_utf8(out[..len].to_vec()).unwrap()
+    }
+
+    #[test]
+    fn proc_directory_links() {
+        assert_eq!(to_host("/proc/self/root/usr/bin/ls"), "/data/user/0/com.zdroid/files/rootfs/usr/bin/ls");
+        assert_eq!(to_host("/proc/1234/root/tmp/x"), "/data/user/0/com.zdroid/files/tmp/x");
+        assert_eq!(to_host("/proc/self/task/77/root/etc"), "/data/user/0/com.zdroid/files/rootfs/etc");
+        assert_eq!(to_host("/proc/self/root/"), "/data/user/0/com.zdroid/files/rootfs");
+        assert_eq!(to_host("/proc/self/root/../etc"), "/data/user/0/com.zdroid/files/rootfs/etc");
+        assert_eq!(
+            to_host("/proc/self/root/proc/self/root/etc"),
+            "/data/user/0/com.zdroid/files/rootfs/etc"
+        );
+        assert_eq!(to_host("/proc/self/root"), "/proc/self/root");
+        assert_eq!(to_host("/proc/self/cwd/a/b"), "/proc/self/cwd/a/b");
+        assert_eq!(to_host("/proc/self/fd/3"), "/proc/self/fd/3");
+        assert_eq!(to_host("/proc/self/fd/x/.."), "/proc/self/fd/x/..");
+        let translator = translator();
+        let mut out = [0u8; 512];
+        assert_eq!(
+            translator.guest_to_host(b"/proc/self/cwd/../x", &mut out).unwrap(),
+            Translated::ProcLink { link_len: 14 }
+        );
+        assert_eq!(
+            translator.guest_to_host(b"/proc/self/fd/3/a/../b", &mut out).unwrap(),
+            Translated::ProcLink { link_len: 15 }
+        );
+        assert_eq!(
+            translator.guest_to_host(b"/proc/4/task/5/cwd/..", &mut out).unwrap(),
+            Translated::ProcLink { link_len: 18 }
+        );
+        assert_eq!(
+            translator.guest_to_host(b"/proc/self/task/9/exe", &mut out).unwrap(),
+            Translated::ProcExe(ProcExe::SelfProcess)
+        );
     }
 
     fn symlink(link: &str, target: &str) -> String {

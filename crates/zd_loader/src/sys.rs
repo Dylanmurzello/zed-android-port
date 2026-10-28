@@ -67,6 +67,7 @@ pub const SECCOMP_SET_MODE_FILTER: usize = 1;
 pub const SECCOMP_FILTER_FLAG_TSYNC: usize = 1;
 
 pub const EPERM: i32 = 1;
+pub const ENOTDIR: i32 = 20;
 pub const ENOENT: i32 = 2;
 pub const ENOEXEC: i32 = 8;
 pub const EBADF: i32 = 9;

@@ -417,8 +417,9 @@ fn chroot(regs: &[u64; 31]) -> u64 {
     let Some(mut claim) = scratch::claim() else {
         return sys::neg_errno(sys::EPERM);
     };
-    let host = &mut claim.get().paths[0];
-    match translator.guest_to_host(guest, host) {
+    let scratch = claim.get();
+    let [host, link, target, ..] = &mut scratch.paths;
+    match translate(translator, guest, host, link, target) {
         Ok(Translated::Host(len)) if host[..len] == *translator.rootfs => 0,
         _ => sys::neg_errno(sys::EPERM),
     }
@@ -452,6 +453,47 @@ fn args_of(regs: &[u64; 31]) -> [usize; 6] {
 
 fn issue(number: u32, args: &[usize; 6]) -> u64 {
     unsafe { sys::syscall6(number, args[0], args[1], args[2], args[3], args[4], args[5]) as u64 }
+}
+
+/// `guest_to_host` for a syscall argument, following a `/proc` directory
+/// link when the path climbs through one. The kernel resolves such a
+/// link to the host directory and takes `..` from there, which can leave
+/// the guest's view of the tree; so the link is read, its target mapped
+/// back to the guest, the rest re-anchored and clamped there, and the
+/// whole translated again. `link` and `target` are scratch.
+pub(crate) fn translate(
+    translator: &Translator<'static>,
+    guest: &[u8],
+    out: &mut [u8; MAX_PATH],
+    link: &mut [u8; MAX_PATH],
+    target: &mut [u8; MAX_PATH],
+) -> Result<Translated, i32> {
+    let link_len = match translator.guest_to_host(guest, out) {
+        Ok(Translated::ProcLink { link_len }) => link_len,
+        Ok(translated) => return Ok(translated),
+        Err(_) => return Err(sys::ENAMETOOLONG),
+    };
+    if link_len >= MAX_PATH {
+        return Err(sys::ENAMETOOLONG);
+    }
+    link[..link_len].copy_from_slice(&guest[..link_len]);
+    link[link_len] = 0;
+    let target_len = sys::readlinkat(sys::AT_FDCWD, link.as_ptr(), &mut target[..MAX_PATH - 1])?;
+    if !is_absolute(&target[..target_len]) {
+        // A socket or pipe behind the descriptor: nothing to walk.
+        return Err(sys::ENOTDIR);
+    }
+    let dir_len = translator
+        .host_to_guest(&target[..target_len], link)
+        .map_err(|_| sys::ENAMETOOLONG)?;
+    let mut writer = Writer::resume(link, dir_len);
+    writer.push(&guest[link_len..]).map_err(|_| sys::ENAMETOOLONG)?;
+    let joined_len = writer.finish();
+    match translator.guest_to_host(&link[..joined_len], out) {
+        Ok(Translated::ProcLink { .. }) => Err(sys::EACCES),
+        Ok(translated) => Ok(translated),
+        Err(_) => Err(sys::ENAMETOOLONG),
+    }
 }
 
 fn is_self(who: ProcExe) -> bool {
@@ -687,9 +729,9 @@ fn path_syscall(
         regs[0] = sys::neg_errno(if regs[index] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
         return;
     };
-    let host = &mut scratch.paths[0];
+    let [host, link, target, ..] = &mut scratch.paths;
     let mut args = args_of(regs);
-    let result = match translator.guest_to_host(guest, host) {
+    let result = match translate(translator, guest, host, link, target) {
         Ok(Translated::Relative) => issue(number, &args),
         Ok(Translated::Host(_)) => {
             args[index] = host.as_ptr() as usize;
@@ -715,7 +757,8 @@ fn path_syscall(
             serve_auxv(who, number, regs, open_how_flags(regs[2] as *const u64), &mut scratch.bytes)
         }
         Ok(Translated::ProcAuxv(_)) => issue(number, &args),
-        Err(_) => sys::neg_errno(sys::ENAMETOOLONG),
+        Ok(Translated::ProcLink { .. }) => sys::neg_errno(sys::EACCES),
+        Err(errno) => sys::neg_errno(errno),
     };
     regs[0] = result;
     match number {
@@ -894,17 +937,17 @@ fn peer_credentials(regs: &mut [u64; 31]) {
 #[inline(never)]
 fn two_paths(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31], scratch: &mut Scratch) {
     let mut args = args_of(regs);
-    for (index, slot) in [(1usize, 0usize), (3usize, 1usize)] {
+    let [first, second, link, target, _] = &mut scratch.paths;
+    for (index, buffer) in [(1usize, first), (3usize, second)] {
         let Some(guest) = (unsafe { cstr_bounded(regs[index] as *const u8, MAX_PATH) }) else {
             regs[0] = sys::neg_errno(if regs[index] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
             return;
         };
-        let buffer = &mut scratch.paths[slot];
-        match translator.guest_to_host(guest, buffer) {
+        match translate(translator, guest, buffer, link, target) {
             Ok(Translated::Host(_)) => args[index] = buffer.as_ptr() as usize,
             Ok(_) => {}
-            Err(_) => {
-                regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
+            Err(errno) => {
+                regs[0] = sys::neg_errno(errno);
                 return;
             }
         }
@@ -959,7 +1002,7 @@ fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &m
         return;
     };
     let dirfd = regs[1] as isize;
-    let [link_guest, new_target, spare @ ..] = &mut scratch.paths;
+    let [link_guest, new_target, host_link, spare @ ..] = &mut scratch.paths;
     let link_guest_len = if is_absolute(link) {
         let len = link.len().min(MAX_PATH - 1);
         link_guest[..len].copy_from_slice(&link[..len]);
@@ -981,14 +1024,14 @@ fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &m
         regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
         return;
     };
-    let [host_link, _] = spare;
+    let [link_a, link_b] = spare;
     let mut args = args_of(regs);
     args[0] = new_target.as_ptr() as usize;
-    match translator.guest_to_host(link, host_link) {
+    match translate(translator, link, host_link, link_a, link_b) {
         Ok(Translated::Host(_)) => args[2] = host_link.as_ptr() as usize,
         Ok(_) => {}
-        Err(_) => {
-            regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
+        Err(errno) => {
+            regs[0] = sys::neg_errno(errno);
             return;
         }
     }
@@ -1054,15 +1097,15 @@ fn sockaddr(
         regs[0] = issue(number, &args);
         return;
     }
-    let host = &mut scratch.paths[0];
-    let host_len = match translator.guest_to_host(path, host) {
+    let [host, link, target, ..] = &mut scratch.paths;
+    let host_len = match translate(translator, path, host, link, target) {
         Ok(Translated::Host(len)) => len,
         Ok(_) => {
             regs[0] = issue(number, &args);
             return;
         }
-        Err(_) => {
-            regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
+        Err(errno) => {
+            regs[0] = sys::neg_errno(errno);
             return;
         }
     };
