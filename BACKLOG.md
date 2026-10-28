@@ -119,6 +119,14 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 - **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames zd-exec for keeping stdout open: fix that in zd-exec, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
+## 0.9.22 device checks
+
+0.9.22 reports each frame's duration to Android's CPU scheduler through a performance hint session (`performance_hint.rs`). Check over adb:
+
+- While Zdroid draws, `dumpsys performance_hint` lists a session under Zdroid's UID with the `android_main` thread's ID and `TargetDurationNanos: 8333333`, and logcat shows "performance hint session for thread".
+- Scroll a long file with the same swipes on 0.9.21 and 0.9.22, measuring each with simpleperf and SurfaceFlinger's present times: `android_main` should spend more of its samples on cpu7, and fewer gaps between presents should exceed one refresh.
+- Idle wake-ups stay as before: the session adds no work while nothing draws.
+
 ## 0.9.21 device checks
 
 0.9.21 merges Zed v1.26.2. Zed now reads an SSH remote's environment by piping its script to `sh -s` over ssh's stdin instead of passing it as an argument. Check:
