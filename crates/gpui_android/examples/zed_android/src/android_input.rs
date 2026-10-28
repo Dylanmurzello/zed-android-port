@@ -1,7 +1,9 @@
 //! Android input: the `android_input` settings, their status bar buttons
 //! (show or hide the on-screen keyboard, switch the screen between direct
-//! touch and a virtual trackpad) and their onboarding section.
+//! touch and a virtual trackpad) and their onboarding section, and keeping
+//! the cursor above the on-screen keyboard.
 
+use editor::{Editor, scroll::Autoscroll};
 use fs::Fs;
 use gpui::{
     AnyElement, App, Context, IntoElement, Render, Subscription, UpdateGlobal as _, Window, div,
@@ -51,6 +53,36 @@ pub fn set_default_settings(cx: &mut App) {
             defaults.tabs.get_or_insert_default().show_close_button = Some(ShowCloseButton::Always);
         });
     });
+}
+
+/// Scrolls the focused editor to keep its cursor on screen when the window
+/// gets shorter, as Android's `ScrollView.onSizeChanged` keeps the focused
+/// view visible. gpui_android lays the window out above the on-screen
+/// keyboard, as `adjustResize` does for native views, so the keyboard
+/// sliding in shortens it, and Zed's editor keeps its scroll position on a
+/// resize: the line just tapped would end up behind the keyboard. Like
+/// `ScrollView`, this leaves alone a cursor that was already off screen.
+pub fn keep_cursor_on_screen_when_window_shrinks(cx: &mut App) {
+    cx.observe_new(|_: &mut Editor, window, cx| {
+        let Some(window) = window else {
+            return;
+        };
+        let mut height = window.viewport_size().height;
+        cx.observe_window_bounds(window, move |editor, window, cx| {
+            let previous_height = std::mem::replace(&mut height, window.viewport_size().height);
+            // `newest_selection_on_screen` reads the editor's last layout,
+            // still at the previous height; the autoscroll applies at the
+            // next layout, which is at the new one.
+            if height < previous_height
+                && editor.is_focused(window)
+                && editor.newest_selection_on_screen(window, cx).is_eq()
+            {
+                editor.request_autoscroll(Autoscroll::newest(), cx);
+            }
+        })
+        .detach();
+    })
+    .detach();
 }
 
 /// The onboarding page's input section (`onboarding::AndroidBasicsSections`).
