@@ -102,6 +102,10 @@ Still unverified on a device: streamed responses and tool calls through an OpenA
 
 Tried on the tablet on 2026-10-28 with the workaround: the Codex thread opened, then every request failed with "workspace routing discovery failed". Codex looks for a CA bundle in Linux paths Android doesn't have, and Bootstrap set `SSL_CERT_FILE` only in the terminal; since 0.9.19 it sets it for the whole app, so agents and language servers get it too; the tablet confirmed the fix. Claude Agent is still untested.
 
+## Scrolling runs at about 64 fps on the 120 Hz panel
+
+Measured on 2026-10-29 on 0.9.21, scrolling a file in landscape with `adb shell input swipe`: a frame every 15.6ms on average, and 83% of the gaps between frames were longer than one refresh. `android_main` spends about 12.5ms of CPU per frame on the prime core at its maximum clock, so the CPU scheduler can't help; a performance hint session changed nothing (`crates/gpui_android/docs/workarounds/choreographer-vsync.md`). The 2026-10-26 profile put the time in gpui's text painting (glyph raster bounds, atlas lookups, sprite sorting) and wgpu's command encoding. Next: profile scrolling with the build's native symbols, and look for work Android does per frame that desktop doesn't, before changing gpui itself.
+
 ## Platform gaps found in the 2026-10-28 audit
 
 - **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
