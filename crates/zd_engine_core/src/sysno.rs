@@ -55,9 +55,12 @@ pub mod nr {
     pub const CLOCK_SETTIME: u32 = 112;
     pub const CLOCK_GETTIME: u32 = 113;
     pub const PTRACE: u32 = 117;
+    pub const KILL: u32 = 129;
+    pub const TKILL: u32 = 130;
     pub const TGKILL: u32 = 131;
     pub const RT_SIGACTION: u32 = 134;
     pub const RT_SIGPROCMASK: u32 = 135;
+    pub const RT_SIGQUEUEINFO: u32 = 138;
     pub const RT_SIGRETURN: u32 = 139;
     pub const REBOOT: u32 = 142;
     pub const SETREGID: u32 = 143;
@@ -70,6 +73,7 @@ pub mod nr {
     pub const GETRESGID: u32 = 150;
     pub const SETFSUID: u32 = 151;
     pub const SETFSGID: u32 = 152;
+    pub const GETPGID: u32 = 155;
     pub const GETGROUPS: u32 = 158;
     pub const SETGROUPS: u32 = 159;
     pub const UNAME: u32 = 160;
@@ -96,6 +100,7 @@ pub mod nr {
     pub const SWAPON: u32 = 224;
     pub const SWAPOFF: u32 = 225;
     pub const MPROTECT: u32 = 226;
+    pub const RT_TGSIGQUEUEINFO: u32 = 240;
     pub const NAME_TO_HANDLE_AT: u32 = 264;
     pub const CLOCK_ADJTIME: u32 = 266;
     pub const SETNS: u32 = 268;
@@ -182,6 +187,12 @@ pub const TRAP_TABLE: &[u32] = &[
     // SIGSYS must never be blocked
     nr::RT_SIGACTION,
     nr::RT_SIGPROCMASK,
+    // a signal to self while a PTRACE_TRACEME is pending
+    nr::KILL,
+    nr::TKILL,
+    nr::TGKILL,
+    nr::RT_SIGQUEUEINFO,
+    nr::RT_TGSIGQUEUEINFO,
 ];
 
 /// Additional traps when presenting uid 0 to the guest. The identity
@@ -244,8 +255,9 @@ pub mod socket {
 /// form, which the filter lets through.
 /// `ptrace(2)` requests the filter traps.
 pub mod ptrace {
-    /// Answered by the handler and performed by the loader after the next
-    /// exec; see `env::TRACEME`.
+    /// Answered by the handler and performed later: by the loader after the
+    /// next exec, or by the handler before a signal the guest sends to
+    /// itself; see `env::TRACEME`.
     pub const TRACEME: u64 = 0;
     pub const TRAPPED_REQUESTS: &[u64] = &[TRACEME];
 }
@@ -348,6 +360,10 @@ pub fn name(number: u32) -> Option<&'static str> {
         nr::GETPID => "getpid",
         nr::GETTID => "gettid",
         nr::TGKILL => "tgkill",
+        nr::KILL => "kill",
+        nr::TKILL => "tkill",
+        nr::RT_SIGQUEUEINFO => "rt_sigqueueinfo",
+        nr::RT_TGSIGQUEUEINFO => "rt_tgsigqueueinfo",
         nr::PTRACE => "ptrace",
         nr::GETUID => "getuid",
         nr::GETEUID => "geteuid",

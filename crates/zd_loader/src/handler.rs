@@ -480,6 +480,9 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) 
         nr::SOCKET => socket(regs),
         nr::CLONE3 => clone3(regs, pc),
         nr::PTRACE => traceme(regs),
+        nr::KILL | nr::TKILL | nr::TGKILL | nr::RT_SIGQUEUEINFO | nr::RT_TGSIGQUEUEINFO => {
+            self_signal(number, regs)
+        }
         nr::FSTAT => {
             regs[0] = issue(number, &args_of(regs));
             fixup_stat(regs[0], regs[1] as *mut u8, false);
@@ -1331,6 +1334,43 @@ fn traceme(regs: &mut [u64; 31]) {
         regs[0] = 0;
     } else {
         regs[0] = issue(nr::PTRACE, &args_of(regs));
+    }
+}
+
+/// A signal the guest sends while a `PTRACE_TRACEME` is pending. The
+/// tracer is waiting for the ptrace stop this signal causes, so the attach
+/// cannot wait for an exec that may never come: lldb-server's single-step
+/// check forks a child that calls TRACEME and raises SIGSTOP in a loop,
+/// while gdb-style launchers only exec. Attached first, the signal lands
+/// as a ptrace stop; a signal to another process changes nothing.
+fn self_signal(number: u32, regs: &mut [u64; 31]) {
+    if TRACEME_REQUESTED.load(Ordering::Relaxed) && may_reach_self(number, regs) {
+        TRACEME_REQUESTED.store(false, Ordering::Relaxed);
+        if let Err(errno) = sys::ptrace(sys::PTRACE_TRACEME, 0, 0, 0) {
+            let mut line = log::Line::new();
+            line.push(b"zdload: ptrace(PTRACE_TRACEME) before a signal to self failed: errno ");
+            line.push_u64(errno as u64);
+            line.emit();
+        }
+    }
+    regs[0] = issue(number, &args_of(regs));
+}
+
+/// Whether the signal's target set includes the caller: `kill` and
+/// `rt_sigqueueinfo` take a pid, where 0 is the caller's group, -1 is
+/// everyone but the caller and other negatives name a group; `tkill` a
+/// thread id; `tgkill` and `rt_tgsigqueueinfo` a thread-group id.
+fn may_reach_self(number: u32, regs: &[u64; 31]) -> bool {
+    let first = regs[0] as u32 as i32;
+    match number {
+        nr::TKILL => first as u32 == sys::gettid(),
+        nr::TGKILL | nr::RT_TGSIGQUEUEINFO => first as u32 == sys::getpid(),
+        _ => match first {
+            0 => true,
+            -1 => false,
+            pid if pid > 0 => pid as u32 == sys::getpid(),
+            group => (-group) as u32 == sys::getpgid(0),
+        },
     }
 }
 

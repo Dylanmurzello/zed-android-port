@@ -91,6 +91,8 @@ pub mod env {
     /// exec into a ptrace stop that the parent, blocked on its exec pipe,
     /// never resumes (lldb-server, gdb), and a tracer reading the process at
     /// its first stop would see the loader's vector instead of the guest's.
+    /// A signal the guest sends to itself while the request is pending
+    /// attaches at once instead: the tracer is waiting for that stop.
     /// Per exec.
     pub const TRACEME: &str = "ZD_TRACEME";
     /// Variables that describe one exec and must not reach the guest.

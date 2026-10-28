@@ -368,6 +368,10 @@ pub fn gettid() -> u32 {
     unsafe { syscall6(nr::GETTID, 0, 0, 0, 0, 0, 0) as u32 }
 }
 
+pub fn getpgid(pid: u32) -> u32 {
+    unsafe { syscall6(nr::GETPGID, pid as usize, 0, 0, 0, 0, 0) as u32 }
+}
+
 pub fn tgkill(tgid: u32, tid: u32, signal: usize) -> Result<(), i32> {
     check(unsafe { syscall6(nr::TGKILL, tgid as usize, tid as usize, signal, 0, 0, 0) }).map(|_| ())
 }
