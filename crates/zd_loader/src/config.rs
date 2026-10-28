@@ -4,6 +4,7 @@
 
 use core::cell::UnsafeCell;
 use core::fmt;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use zd_engine_core::identity::Identity;
 use zd_engine_core::bindings::{Bindings, BindingsError};
@@ -251,8 +252,83 @@ pub fn get() -> &'static Config {
     unsafe { &*CONFIG.get() }
 }
 
+/// After a `chroot`: the translator rooted at the new directory, in a
+/// mapping of its own that is never freed, so a handler that loaded the
+/// previous one keeps a valid reference. Null until the first chroot.
+static REROOTED: AtomicPtr<Translator<'static>> = AtomicPtr::new(core::ptr::null_mut());
+/// The `ZD_ROOTFS=` and `ZD_BINDS=` entries that describe the new root,
+/// for children.
+static REROOTED_ENTRIES: [AtomicPtr<u8>; 2] = [AtomicPtr::new(core::ptr::null_mut()), AtomicPtr::new(core::ptr::null_mut())];
+
 pub fn translator() -> Option<&'static Translator<'static>> {
-    get().translator.as_ref()
+    let rerooted = REROOTED.load(Ordering::Acquire);
+    if rerooted.is_null() {
+        return get().translator.as_ref();
+    }
+    // SAFETY: written once by `rechroot` before the pointer was published
+    // and never unmapped.
+    Some(unsafe { &*rerooted })
+}
+
+pub fn rerooted() -> bool {
+    !REROOTED.load(Ordering::Acquire).is_null()
+}
+
+/// The `KEY=VALUE` entry of [`ENGINE_KEYS`] at `index` to hand a child:
+/// after a chroot the root and the bindings are the new ones.
+pub fn engine_entry(index: usize) -> Option<*const u8> {
+    if index < REROOTED_ENTRIES.len() {
+        let entry = REROOTED_ENTRIES[index].load(Ordering::Acquire);
+        if !entry.is_null() {
+            return Some(entry);
+        }
+    }
+    let entry = &get().engine_entries[index];
+    if entry.is_empty() { None } else { Some(entry.as_ptr()) }
+}
+
+/// `chroot`: translate everything from now on, in this process and its
+/// children, against `host_root`, with only the identity bindings
+/// (`/dev`, `/proc`, `/sys`) still visible. The new translator and the
+/// strings it borrows live in a fresh mapping that is never freed.
+pub fn rechroot(host_root: &[u8]) -> Result<(), i32> {
+    const BLOCK: usize = 16384;
+    const ROOT_AT: usize = 2048;
+    const ROOT_ENTRY_AT: usize = ROOT_AT + MAX_PATH;
+    const BINDS_ENTRY_AT: usize = ROOT_ENTRY_AT + MAX_PATH + 16;
+    if host_root.len() >= MAX_PATH {
+        return Err(sys::ENAMETOOLONG);
+    }
+    let block = sys::mmap(
+        0,
+        BLOCK,
+        sys::PROT_READ | sys::PROT_WRITE,
+        sys::MAP_PRIVATE | sys::MAP_ANONYMOUS,
+        -1,
+        0,
+    )? as *mut u8;
+    // SAFETY: a fresh zeroed mapping of BLOCK bytes, laid out as the
+    // constants above say, written here and read-only afterwards.
+    unsafe {
+        let root = block.add(ROOT_AT);
+        core::ptr::copy_nonoverlapping(host_root.as_ptr(), root, host_root.len());
+        let root: &'static [u8] = core::slice::from_raw_parts(root, host_root.len());
+        let root_entry = block.add(ROOT_ENTRY_AT);
+        let key = env::ROOTFS.as_bytes();
+        core::ptr::copy_nonoverlapping(key.as_ptr(), root_entry, key.len());
+        *root_entry.add(key.len()) = b'=';
+        core::ptr::copy_nonoverlapping(host_root.as_ptr(), root_entry.add(key.len() + 1), host_root.len());
+        let binds_entry = block.add(BINDS_ENTRY_AT);
+        let key = env::BINDS.as_bytes();
+        core::ptr::copy_nonoverlapping(key.as_ptr(), binds_entry, key.len());
+        *binds_entry.add(key.len()) = b'=';
+        let translator = block as *mut Translator<'static>;
+        core::ptr::write(translator, Translator::new(root, Bindings::with_defaults()));
+        REROOTED_ENTRIES[0].store(root_entry, Ordering::Release);
+        REROOTED_ENTRIES[1].store(binds_entry, Ordering::Release);
+        REROOTED.store(translator, Ordering::Release);
+    }
+    Ok(())
 }
 
 /// Copy the engine variables out of `entries` and build the translator.

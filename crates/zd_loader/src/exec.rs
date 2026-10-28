@@ -137,17 +137,27 @@ fn run(
         if env::PER_EXEC.iter().any(|name| name.as_bytes() == key) {
             continue;
         }
+        let mut inherited_root = false;
         for (slot, name) in present.iter_mut().zip(ENGINE_KEYS.iter()) {
             if name.as_bytes() == key {
-                *slot = true;
+                // After a chroot the inherited strings still name the old
+                // root; the process's own entries replace them.
+                if config::rerooted() && (key == env::ROOTFS.as_bytes() || key == env::BINDS.as_bytes()) {
+                    inherited_root = true;
+                } else {
+                    *slot = true;
+                }
             }
+        }
+        if inherited_root {
+            continue;
         }
         slots[count] = entry;
         count += 1;
     }
     for (index, is_present) in present.iter().enumerate() {
-        if !is_present && !config.engine_entries[index].is_empty() {
-            slots[count] = config.engine_entries[index].as_ptr();
+        if !is_present && let Some(entry) = config::engine_entry(index) {
+            slots[count] = entry;
             count += 1;
         }
     }

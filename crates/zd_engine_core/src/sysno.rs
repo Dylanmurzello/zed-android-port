@@ -169,6 +169,7 @@ pub const TRAP_TABLE: &[u32] = &[
     nr::STATFS,
     nr::TRUNCATE,
     nr::CHDIR,
+    nr::CHROOT,
     nr::EXECVE,
     // path in x1
     nr::INOTIFY_ADD_WATCH,

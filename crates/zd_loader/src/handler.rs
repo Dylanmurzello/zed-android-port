@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use zd_engine_core::bpf::{self, ArgTrap, FilterSpec, SockFilter};
 use zd_engine_core::identity::{Identity, MAX_GROUPS};
 use zd_engine_core::compat::{self, Response};
-use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
+use zd_engine_core::path::{MAX_PATH, Writer, is_absolute, strip_prefix};
 use zd_engine_core::procfs;
 use zd_engine_core::stack::AT_NULL;
 use zd_engine_core::sysno::address_arg;
@@ -505,24 +505,61 @@ fn guest_path_args(number: u32) -> [Option<usize>; 2] {
     }
 }
 
-/// `chroot` succeeds only when the target is the guest root itself,
-/// which is what `debootstrap`-style tools ask for.
+/// `chroot(dir)` under fake root: the process, and every child it execs,
+/// translates against `dir` from now on; the identity bindings (`/dev`,
+/// `/proc`, `/sys`) stay, the way they would after the mounts a real
+/// chroot is usually given. The cwd is left where it is, as the kernel
+/// leaves it. A relative target (the chroot utility chdirs first and
+/// passes `.`) is anchored on the cwd.
 #[inline(never)]
 fn chroot(regs: &[u64; 31]) -> u64 {
     let Some(translator) = config::translator() else {
         return sys::neg_errno(sys::EPERM);
     };
+    if !config::get().fake_root {
+        return sys::neg_errno(sys::EPERM);
+    }
     let Some(guest) = (unsafe { cstr_bounded(regs[0] as *const u8, MAX_PATH) }) else {
-        return sys::neg_errno(sys::ENAMETOOLONG);
+        return sys::neg_errno(if regs[0] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
     };
     let Some(mut claim) = scratch::claim() else {
         return sys::neg_errno(sys::EPERM);
     };
     let scratch = claim.get();
-    let [host, link, target, ..] = &mut scratch.paths;
-    match translate(translator, guest, host, link, target) {
-        Ok(Translated::Host(len)) if host[..len] == *translator.rootfs => 0,
-        _ => sys::neg_errno(sys::EPERM),
+    let [host, link, target, absolute, ..] = &mut scratch.paths;
+    let path: &[u8] = if is_absolute(guest) {
+        guest
+    } else {
+        let cwd_len = match sys::getcwd(link) {
+            Ok(len) => len,
+            Err(errno) => return sys::neg_errno(errno),
+        };
+        let Ok(guest_cwd_len) = translator.host_to_guest(&link[..cwd_len], target) else {
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        };
+        let mut writer = Writer::new(&mut absolute[..]);
+        if writer.push(&target[..guest_cwd_len]).is_err() || writer.push_component(guest).is_err() {
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        }
+        let len = writer.finish();
+        &absolute[..len]
+    };
+    let host_len = match translate(translator, path, host, link, target) {
+        Ok(Translated::Host(len)) => len,
+        Ok(_) => return sys::neg_errno(sys::EPERM),
+        Err(errno) => return sys::neg_errno(errno),
+    };
+    match sys::stat_mode(sys::AT_FDCWD, host.as_ptr(), 0) {
+        Ok(mode) if mode & sys::S_IFMT == sys::S_IFDIR => {}
+        Ok(_) => return sys::neg_errno(sys::ENOTDIR),
+        Err(errno) => return sys::neg_errno(errno),
+    }
+    if host[..host_len] == *translator.rootfs {
+        return 0;
+    }
+    match config::rechroot(&host[..host_len]) {
+        Ok(()) => 0,
+        Err(errno) => sys::neg_errno(errno),
     }
 }
 
@@ -700,6 +737,7 @@ fn dispatch_with(
         }
         nr::CAPSET => regs[0] = 0,
         nr::UNAME => uname(regs),
+        nr::CHROOT => regs[0] = chroot(regs),
         _ => {
             if !identity_syscall(number, regs) {
                 regs[0] = sys::neg_errno(sys::ENOSYS);
@@ -1162,6 +1200,21 @@ fn getcwd(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &mut 
     let Ok(guest_len) = translator.host_to_guest(&host[..len], guest) else {
         regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
         return;
+    };
+    // The kernel reports a cwd outside the process root as unreachable;
+    // a host path under neither the root nor a binding (after a chroot,
+    // or spawned there by the host) is exactly that.
+    let mapped = translator.bindings.match_host(&host[..len]).is_some()
+        || strip_prefix(translator.rootfs, &host[..len]).is_some();
+    let guest_len = if !mapped {
+        let mut writer = Writer::new(&mut guest[..]);
+        if writer.push(b"(unreachable)").is_err() || writer.push(&host[..len]).is_err() {
+            regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
+            return;
+        }
+        writer.finish()
+    } else {
+        guest_len
     };
     if buffer.is_null() {
         regs[0] = sys::neg_errno(sys::EFAULT);
