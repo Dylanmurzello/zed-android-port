@@ -21,6 +21,7 @@ use core::sync::atomic::Ordering;
 
 use crate::config::{self, ENGINE_KEYS};
 use crate::handler::{TRACEME_REQUESTED, cstr_bounded, translate};
+use crate::load::close_quietly;
 use crate::log;
 use crate::scratch::Working;
 use crate::sys;
@@ -65,20 +66,21 @@ fn run(
     };
     let config = config::get();
     let envc = count_pointers(envp);
-    let needed = envc + ENGINE_KEYS.len() + 4;
+    let needed = envc + ENGINE_KEYS.len() + 5;
     let mut on_stack = [core::ptr::null::<u8>(); STACK_ENTRIES];
     let mut program_on_stack = [0u8; STACK_PROGRAM];
     let mut mapped: Option<(usize, usize)> = None;
-    let (slots, program): (&mut [*const u8], &mut [u8]) = {
+    let (slots, program, exec_fd): (&mut [*const u8], &mut [u8], Option<i32>) = {
         let scratch = working.get();
         // `guest` is what the child's loader will open (and record as the
         // guest's executable); `host` is what the preflight checks here.
         let [guest, host, interpreter, spare_a, spare_b] = &mut scratch.paths;
-        let guest_len = match resolve(translator, dirfd, given, flags, guest, host, spare_a, spare_b) {
-            Ok(len) => len,
+        let (guest_len, exec_fd) = match resolve(translator, dirfd, given, flags, guest, host, spare_a, spare_b) {
+            Ok(resolved) => resolved,
             Err(errno) => return sys::neg_errno(errno),
         };
-        if let Err(errno) = preflight(translator, host.as_ptr(), interpreter, spare_a, spare_b) {
+        if let Err(errno) = preflight(translator, host.as_ptr(), exec_fd, interpreter, spare_a, spare_b) {
+            close_exec_fd(exec_fd);
             return sys::neg_errno(errno);
         }
         let entry_len = env::PROGRAM.len() + 1 + guest_len + 1;
@@ -100,7 +102,10 @@ fn run(
                             )
                         }
                     }
-                    Err(errno) => return sys::neg_errno(errno),
+                    Err(errno) => {
+                        close_exec_fd(exec_fd);
+                        return sys::neg_errno(errno);
+                    }
                 }
             };
         let mut writer = Writer::new(&mut *program);
@@ -109,10 +114,11 @@ fn run(
             || writer.push(&guest[..guest_len]).is_err()
         {
             release(mapped);
+            close_exec_fd(exec_fd);
             return sys::neg_errno(sys::ENAMETOOLONG);
         }
         writer.finish();
-        (slots, program)
+        (slots, program, exec_fd)
     };
     // The scratch entry goes back before the exec: on success nothing
     // runs afterwards to release it, and a vfork child shares the pool
@@ -157,6 +163,7 @@ fn run(
             || writer.push(&encoded[..encoded_len]).is_err()
         {
             release(mapped);
+            close_exec_fd(exec_fd);
             return sys::neg_errno(sys::ENAMETOOLONG);
         }
         writer.finish();
@@ -168,17 +175,41 @@ fn run(
         let mut writer = Writer::new(&mut traceme_entry);
         if writer.push(env::TRACEME.as_bytes()).is_err() || writer.push(b"=1").is_err() {
             release(mapped);
+            close_exec_fd(exec_fd);
             return sys::neg_errno(sys::ENAMETOOLONG);
         }
         writer.finish();
         slots[count] = traceme_entry.as_ptr();
         count += 1;
     }
+    let mut exec_fd_entry = [0u8; 32];
+    if let Some(fd) = exec_fd {
+        let mut digits = [0u8; 20];
+        let mut writer = Writer::new(&mut exec_fd_entry);
+        if writer.push(env::EXEC_FD.as_bytes()).is_err()
+            || writer.push(b"=").is_err()
+            || writer.push(log::itoa(&mut digits, fd as u64)).is_err()
+        {
+            release(mapped);
+            close_exec_fd(exec_fd);
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        }
+        writer.finish();
+        slots[count] = exec_fd_entry.as_ptr();
+        count += 1;
+    }
     slots[count] = core::ptr::null();
 
     let errno = sys::execve(config.loader_path.as_ptr(), argv, slots.as_ptr());
     release(mapped);
+    close_exec_fd(exec_fd);
     sys::neg_errno(errno)
+}
+
+fn close_exec_fd(exec_fd: Option<i32>) {
+    if let Some(fd) = exec_fd {
+        close_quietly(fd);
+    }
 }
 
 fn release(mapped: Option<(usize, usize)>) {
@@ -201,7 +232,8 @@ fn count_pointers(list: *const *const u8) -> usize {
     count
 }
 
-/// Work out the guest path the child loads and the host path to check.
+/// Work out the guest path the child loads and the host path to check;
+/// for an exec through a descriptor, also the duplicate the child reads.
 fn resolve(
     translator: &Translator<'static>,
     dirfd: isize,
@@ -211,18 +243,36 @@ fn resolve(
     host: &mut [u8; MAX_PATH],
     dir_host: &mut [u8; MAX_PATH],
     dir_guest: &mut [u8; MAX_PATH],
-) -> Result<usize, i32> {
+) -> Result<(usize, Option<i32>), i32> {
     if given.is_empty() {
         if flags & sys::AT_EMPTY_PATH == 0 {
             return Err(sys::ENOENT);
         }
-        // fexecve: the kernel knows the file behind the fd.
-        let len = readlink_fd(dirfd, host)?;
-        if host[..len].ends_with(b" (deleted)") {
-            return Err(sys::ENOENT);
+        // fexecve: the file may be reachable through the descriptor and
+        // nowhere else (a memfd, an unlinked file), so the child reads it
+        // through a duplicate that survives the exec, and the path only
+        // names it. The checks here go through the duplicate too.
+        let duplicate = sys::fcntl(dirfd as i32, sys::F_DUPFD, 3)? as i32;
+        let resolved = readlink_fd(dirfd, host).and_then(|len| {
+            translator
+                .host_to_guest(&host[..len], guest)
+                .map_err(|_| sys::ENAMETOOLONG)
+        });
+        let guest_len = match resolved {
+            Ok(len) => len,
+            Err(errno) => {
+                close_quietly(duplicate);
+                return Err(errno);
+            }
+        };
+        let mut writer = Writer::new(&mut host[..]);
+        let mut digits = [0u8; 20];
+        if writer.push(b"/proc/self/fd/").is_err() || writer.push(log::itoa(&mut digits, duplicate as u64)).is_err() {
+            close_quietly(duplicate);
+            return Err(sys::ENAMETOOLONG);
         }
-        let guest_len = translator.host_to_guest(&host[..len], guest).map_err(|_| sys::ENAMETOOLONG)?;
-        return Ok(guest_len);
+        writer.finish();
+        return Ok((guest_len, Some(duplicate)));
     }
     if !is_absolute(given) && dirfd != sys::AT_FDCWD {
         // Relative to a directory fd: anchor on the directory's guest path.
@@ -237,17 +287,17 @@ fn resolve(
             writer.finish()
         };
         match translate(translator, &guest[..guest_len], host, dir_host, dir_guest) {
-            Ok(Translated::Host(_)) => Ok(guest_len),
+            Ok(Translated::Host(_)) => Ok((guest_len, None)),
             _ => Err(sys::ENOENT),
         }
     } else {
         match translate(translator, given, host, dir_host, dir_guest) {
-            Ok(Translated::Host(_)) => copy_guest(given, guest),
+            Ok(Translated::Host(_)) => copy_guest(given, guest).map(|len| (len, None)),
             Ok(Translated::Relative) => {
                 let len = copy_guest(given, guest)?;
                 host[..len].copy_from_slice(given);
                 host[len] = 0;
-                Ok(len)
+                Ok((len, None))
             }
             Ok(Translated::ProcExe(who)) if is_self(who) => {
                 let guest_exe = config::get().guest_exe.as_bytes();
@@ -260,7 +310,7 @@ fn resolve(
                     }
                     _ => return Err(sys::ENOENT),
                 }
-                Ok(len)
+                Ok((len, None))
             }
             Ok(_) => Err(sys::ENOENT),
             Err(errno) => Err(errno),
@@ -300,10 +350,13 @@ fn readlink_fd(fd: isize, out: &mut [u8; MAX_PATH]) -> Result<usize, i32> {
     Ok(len)
 }
 
-/// The checks the kernel would do before committing to the exec.
+/// The checks the kernel would do before committing to the exec. With
+/// `exec_fd` the head is read through that descriptor: a memfd cannot be
+/// reopened through `/proc/self/fd` in the app sandbox, only read.
 fn preflight(
     translator: &Translator<'static>,
     host: *const u8,
+    exec_fd: Option<i32>,
     interpreter: &mut [u8; MAX_PATH],
     link: &mut [u8; MAX_PATH],
     target: &mut [u8; MAX_PATH],
@@ -313,10 +366,16 @@ fn preflight(
         return Err(sys::EACCES);
     }
     sys::faccessat(sys::AT_FDCWD, host, sys::X_OK).map_err(|_| sys::EACCES)?;
-    let fd = sys::openat(sys::AT_FDCWD, host, sys::O_RDONLY | sys::O_CLOEXEC, 0)?;
     let mut head = [0u8; shebang::LINE_LIMIT];
-    let read = sys::read(fd, &mut head);
-    if let Err(_errno) = sys::close(fd) {}
+    let read = match exec_fd {
+        Some(fd) => sys::pread64(fd, &mut head, 0),
+        None => {
+            let fd = sys::openat(sys::AT_FDCWD, host, sys::O_RDONLY | sys::O_CLOEXEC, 0)?;
+            let read = sys::read(fd, &mut head);
+            if let Err(_errno) = sys::close(fd) {}
+            read
+        }
+    };
     let len = read?;
     let head = &head[..len];
     if head.starts_with(b"#!") {

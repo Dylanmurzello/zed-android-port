@@ -99,8 +99,16 @@ pub mod env {
     /// EPERM at once, as the kernel refuses it.
     /// Per exec.
     pub const TRACEME: &str = "ZD_TRACEME";
+    /// The descriptor the program was exec'd through (`execveat` with an
+    /// empty path): the loader reads the image from it instead of opening
+    /// `ZD_PROGRAM`, which then only names it, so a file reachable through
+    /// its descriptor alone (a memfd, an unlinked file) runs as on Linux.
+    /// It is the handler's own duplicate without close-on-exec, closed once
+    /// an ELF is mapped; a script keeps it, named `/proc/self/fd/<n>` for
+    /// its interpreter. Per exec.
+    pub const EXEC_FD: &str = "ZD_EXEC_FD";
     /// Variables that describe one exec and must not reach the guest.
-    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV, TRACEME];
+    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV, TRACEME, EXEC_FD];
 }
 
 /// Separator between entries in [`env::BINDS`] and [`env::GUEST_ENV`].

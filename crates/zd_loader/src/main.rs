@@ -319,13 +319,19 @@ fn load_chain(invocation: &mut Invocation) -> load::Loaded {
     loop {
         let program = config::get().levels[depth].path.as_bytes();
         let mut host = [0u8; path::MAX_PATH];
-        let fd = match load::open_guest(translator, program, &mut host) {
-            Ok(fd) => fd,
-            Err(load::LoadError::Open(errno)) => log::abort_code(
-                if errno == sys::ENOENT { 127 } else { 126 },
-                format_args!("cannot open {}: errno {errno}", Bytes(program)),
-            ),
-            Err(error) => abort!("cannot open {}: {error}", Bytes(program)),
+        // An exec through a descriptor reads the image from the duplicate
+        // the handler passed; the program path only names it.
+        let exec_fd = if depth == 0 { config::get().exec_fd } else { None };
+        let fd = match exec_fd {
+            Some(fd) => fd,
+            None => match load::open_guest(translator, program, &mut host) {
+                Ok(fd) => fd,
+                Err(load::LoadError::Open(errno)) => log::abort_code(
+                    if errno == sys::ENOENT { 127 } else { 126 },
+                    format_args!("cannot open {}: errno {errno}", Bytes(program)),
+                ),
+                Err(error) => abort!("cannot open {}: {error}", Bytes(program)),
+            },
         };
         let mut head = [0u8; shebang::LINE_LIMIT];
         let head_len = match load::read_head(fd, &mut head) {
@@ -334,7 +340,15 @@ fn load_chain(invocation: &mut Invocation) -> load::Loaded {
         };
         match shebang::parse(&head[..head_len]) {
             Some(script) => {
-                load::close_quietly(fd);
+                if exec_fd.is_some() {
+                    // The interpreter reopens the script by name, which a
+                    // file behind a descriptor may not have: name the
+                    // descriptor, kept open, the way the kernel names
+                    // `/dev/fd/<n>` for it.
+                    name_descriptor(fd);
+                } else {
+                    load::close_quietly(fd);
+                }
                 if depth == MAX_DEPTH {
                     log::abort_code(126, format_args!("{}: too many levels of #!", Bytes(program)));
                 }
@@ -355,6 +369,22 @@ fn load_chain(invocation: &mut Invocation) -> load::Loaded {
                 return loaded;
             }
         }
+    }
+}
+
+/// `levels[0].path` becomes `/proc/self/fd/<fd>`.
+fn name_descriptor(fd: i32) {
+    let mut spelling = [0u8; 32];
+    let mut digits = [0u8; 20];
+    let mut writer = path::Writer::new(&mut spelling);
+    if writer.push(b"/proc/self/fd/").is_err() || writer.push(log::itoa(&mut digits, fd as u64)).is_err() {
+        abort!("descriptor name too long");
+    }
+    let len = writer.finish();
+    // SAFETY: single-threaded startup.
+    let config = unsafe { config::get_mut() };
+    if config.levels[0].path.set(&spelling[..len]).is_err() {
+        abort!("descriptor name too long");
     }
 }
 

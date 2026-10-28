@@ -31,8 +31,7 @@ pub const S_IFREG: u32 = 0o100000;
 pub const S_IFCHR: u32 = 0o020000;
 pub const S_IFBLK: u32 = 0o060000;
 
-/// `sizeof(sun_path)` in `struct sockaddr_un`.
-
+pub const F_DUPFD: usize = 0;
 pub const F_SETFD: usize = 2;
 pub const MFD_CLOEXEC: usize = 1;
 pub const SEEK_SET: usize = 0;

@@ -160,6 +160,8 @@ pub struct Config {
     /// Attach to the parent with `PTRACE_TRACEME` right before the jump
     /// into the guest; see `env::TRACEME`.
     pub traceme: bool,
+    /// The descriptor to read the program from; see `env::EXEC_FD`.
+    pub exec_fd: Option<i32>,
     /// The guest's auxiliary vector as built for it, served as
     /// `/proc/self/auxv`.
     pub auxv_ptr: usize,
@@ -193,6 +195,7 @@ impl Config {
             selftest: false,
             close_fds: false,
             traceme: false,
+            exec_fd: None,
             auxv_ptr: 0,
             auxv_len: 0,
             guest_exe: Buf::new(),
@@ -276,6 +279,8 @@ pub fn init(
             config.close_fds = value == b"1";
         } else if let Some(value) = env_value(entry, env::TRACEME.as_bytes()) {
             config.traceme = value == b"1";
+        } else if let Some(value) = env_value(entry, env::EXEC_FD.as_bytes()) {
+            config.exec_fd = descriptor(value);
         } else if let Some(value) = env_value(entry, env::IDENTITY.as_bytes()) {
             config.identity = Identity::parse(value).ok_or(InitError::BadIdentity)?;
         } else if let Some(value) = env_value(entry, env::GUEST_ENV.as_bytes()) {
@@ -342,6 +347,20 @@ pub fn set_auxv(ptr: usize, len: usize) {
     let config = unsafe { &mut *config };
     config.auxv_ptr = ptr;
     config.auxv_len = len;
+}
+
+fn descriptor(value: &[u8]) -> Option<i32> {
+    if value.is_empty() || value.len() > 9 {
+        return None;
+    }
+    let mut fd: i32 = 0;
+    for &digit in value {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        fd = fd * 10 + i32::from(digit - b'0');
+    }
+    Some(fd)
 }
 
 /// Record the guest-visible path of the executable the loader mapped.
