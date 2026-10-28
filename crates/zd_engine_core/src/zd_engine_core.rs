@@ -14,6 +14,7 @@ pub mod compat;
 pub mod elf;
 pub mod identity;
 pub mod path;
+pub mod procfs;
 pub mod shebang;
 pub mod stack;
 pub mod sysno;
@@ -93,6 +94,8 @@ pub mod env {
     /// its first stop would see the loader's vector instead of the guest's.
     /// A signal the guest sends to itself while the request is pending
     /// attaches at once instead: the tracer is waiting for that stop.
+    /// A request from a task that already has a tracer is refused with
+    /// EPERM at once, as the kernel refuses it.
     /// Per exec.
     pub const TRACEME: &str = "ZD_TRACEME";
     /// Variables that describe one exec and must not reach the guest.

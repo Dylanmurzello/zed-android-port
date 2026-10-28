@@ -260,7 +260,8 @@ pub mod socket {
 pub mod ptrace {
     /// Answered by the handler and performed later: by the loader after the
     /// next exec, or by the handler before a signal the guest sends to
-    /// itself; see `env::TRACEME`.
+    /// itself; see `env::TRACEME`. Refused with EPERM at once for a task
+    /// that already has a tracer, as the kernel refuses it.
     pub const TRACEME: u64 = 0;
     pub const TRAPPED_REQUESTS: &[u64] = &[TRACEME];
 }

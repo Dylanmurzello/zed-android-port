@@ -14,6 +14,7 @@ use zd_engine_core::bpf::{self, ArgTrap, FilterSpec, SockFilter};
 use zd_engine_core::identity::{Identity, MAX_GROUPS};
 use zd_engine_core::compat::{self, Response};
 use zd_engine_core::path::{MAX_PATH, Writer, is_absolute};
+use zd_engine_core::procfs;
 use zd_engine_core::stack::AT_NULL;
 use zd_engine_core::sysno::ptrace as ptrace_traps;
 use zd_engine_core::sysno::sockopt as sockopt_traps;
@@ -1372,13 +1373,45 @@ pub static TRACEME_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// blocked on its exec pipe, never resumes (lldb-server and gdb both
 /// launch that way), and a tracer looking at the process at its first stop
 /// would read the loader's auxiliary vector instead of the guest's.
+/// A task that already has a tracer gets the kernel's EPERM at once:
+/// told it succeeded, the child of an `strace` running under another
+/// `strace -f` stops for the outer tracer while its own parent waits
+/// forever for a stop that only a tracer is shown.
 fn traceme(regs: &mut [u64; 31]) {
     if regs[0] == ptrace_traps::TRACEME {
-        TRACEME_REQUESTED.store(true, Ordering::Relaxed);
-        regs[0] = 0;
+        regs[0] = if traced() {
+            sys::neg_errno(sys::EPERM)
+        } else {
+            TRACEME_REQUESTED.store(true, Ordering::Relaxed);
+            0
+        };
     } else {
         regs[0] = issue(nr::PTRACE, &args_of(regs));
     }
+}
+
+/// Whether a tracer is attached to the calling thread, read from
+/// `/proc/thread-self/status`: ptrace state is per thread and the
+/// request applies to the caller.
+fn traced() -> bool {
+    let Ok(fd) = sys::openat(
+        sys::AT_FDCWD,
+        b"/proc/thread-self/status\0".as_ptr(),
+        sys::O_RDONLY | sys::O_CLOEXEC,
+        0,
+    ) else {
+        return false;
+    };
+    let mut buffer = [0u8; 1024];
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match sys::read(fd, &mut buffer[filled..]) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => filled += count,
+        }
+    }
+    if let Err(_errno) = sys::close(fd) {}
+    procfs::tracer_pid(&buffer[..filled]).unwrap_or(0) != 0
 }
 
 /// A signal the guest sends while a `PTRACE_TRACEME` is pending. The
