@@ -266,6 +266,14 @@ pub mod socket {
     pub const TRAPPED_FAMILIES: &[u64] = &[AF_NETLINK];
 }
 
+/// `prctl(PR_GET_AUXV)` hands out the kernel's copy of the auxiliary
+/// vector, which describes the loader; rustix reads the vector this way
+/// on kernels from 6.4, before it would try `/proc/self/auxv`.
+pub mod prctl {
+    pub const GET_AUXV: u64 = 0x4155_5856;
+    pub const TRAPPED_OPTIONS: &[u64] = &[GET_AUXV];
+}
+
 /// `recvfrom` and `accept4` report an address only into a buffer the
 /// caller passed; without one there is nothing to map back.
 pub mod address_arg {

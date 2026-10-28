@@ -29,7 +29,7 @@ use zd_engine_core::stack::{
     AT_BASE, AT_EGID, AT_ENTRY, AT_EUID, AT_EXECFN, AT_GID, AT_NULL, AT_PAGESZ, AT_PHDR,
     AT_PHENT, AT_PHNUM, AT_UID, AuxEntry, VectorWriter, auxv_get,
 };
-use zd_engine_core::translate::Translated;
+use zd_engine_core::translate::{Translated, Translator};
 use zd_engine_core::{LOADER_SELF_NAMES, elf::PHDR_SIZE, path};
 
 use crate::log::Bytes;
@@ -360,15 +360,33 @@ fn load_chain(invocation: &mut Invocation) -> load::Loaded {
                     apply_exec_setid(fd);
                 }
                 let loaded = load::load_fd(fd);
+                // `/proc/self/exe` names the file itself, symlinks resolved,
+                // the way the kernel reports it (uutils' `readlink` is a
+                // symlink to the multi-call binary); `AT_EXECFN` keeps the
+                // path asked for.
+                record_guest_exe(translator, fd, program);
                 load::close_quietly(fd);
                 let loaded = match loaded {
                     Ok(loaded) => loaded,
                     Err(error) => abort!("cannot load {}: {error}", Bytes(program)),
                 };
-                config::set_guest_exe(program);
                 return loaded;
             }
         }
+    }
+}
+
+/// The guest spelling of the file open on `fd`, or `program` when the
+/// kernel's view of it cannot be read or mapped back.
+fn record_guest_exe(translator: &Translator<'static>, fd: i32, program: &[u8]) {
+    let mut host = [0u8; path::MAX_PATH];
+    let mut guest = [0u8; path::MAX_PATH];
+    let resolved = exec::readlink_fd(fd as isize, &mut host)
+        .ok()
+        .and_then(|len| translator.host_to_guest(&host[..len], &mut guest).ok());
+    match resolved {
+        Some(len) => config::set_guest_exe(&guest[..len]),
+        None => config::set_guest_exe(program),
     }
 }
 

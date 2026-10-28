@@ -344,7 +344,7 @@ fn copy_guest(from: &[u8], guest: &mut [u8; MAX_PATH]) -> Result<usize, i32> {
     Ok(from.len())
 }
 
-fn readlink_fd(fd: isize, out: &mut [u8; MAX_PATH]) -> Result<usize, i32> {
+pub(crate) fn readlink_fd(fd: isize, out: &mut [u8; MAX_PATH]) -> Result<usize, i32> {
     let mut link = [0u8; 32];
     let mut writer = Writer::new(&mut link);
     let mut digits = [0u8; 20];

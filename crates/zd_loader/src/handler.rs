@@ -17,6 +17,7 @@ use zd_engine_core::path::{MAX_PATH, Writer, is_absolute, strip_prefix};
 use zd_engine_core::procfs;
 use zd_engine_core::stack::AT_NULL;
 use zd_engine_core::sysno::address_arg;
+use zd_engine_core::sysno::prctl as prctl_traps;
 use zd_engine_core::sysno::ptrace as ptrace_traps;
 use zd_engine_core::sysno::sockopt as sockopt_traps;
 use zd_engine_core::sysno::{
@@ -222,6 +223,12 @@ pub fn ensure_filter() -> Result<FilterState, FilterError> {
                 unless: true,
             },
             ArgTrap {
+                nr: nr::PRCTL,
+                arg: 0,
+                values: prctl_traps::TRAPPED_OPTIONS,
+                unless: false,
+            },
+            ArgTrap {
                 nr: nr::ACCEPT4,
                 arg: 1,
                 values: address_arg::NULL,
@@ -385,6 +392,27 @@ fn uname(regs: &mut [u64; 31]) {
             core::ptr::write_bytes(field.add(len), 0, 65 - len);
         }
     }
+}
+
+/// `prctl(PR_GET_AUXV, buffer, size)`: the vector the guest started with,
+/// in place of the kernel's copy that describes the loader. As the
+/// kernel does, the buffer gets what fits and the full length comes back.
+fn get_auxv(regs: &mut [u64; 31]) {
+    let config = config::get();
+    if config.auxv_ptr == 0 {
+        regs[0] = issue(nr::PRCTL, &args_of(regs));
+        return;
+    }
+    let buffer = regs[1] as *mut u8;
+    if buffer.is_null() {
+        regs[0] = sys::neg_errno(sys::EFAULT);
+        return;
+    }
+    let copy = config.auxv_len.min(regs[2] as usize);
+    // SAFETY: the vector recorded by `config::set_auxv` outlives the guest;
+    // the guest's buffer holds `size` bytes, as handed to the kernel.
+    unsafe { core::ptr::copy_nonoverlapping(config.auxv_ptr as *const u8, buffer, copy) };
+    regs[0] = config.auxv_len as u64;
 }
 
 /// The legacy `accept` answered as `accept4` with no flags, the peer
@@ -738,6 +766,7 @@ fn dispatch_with(
         nr::CAPSET => regs[0] = 0,
         nr::UNAME => uname(regs),
         nr::CHROOT => regs[0] = chroot(regs),
+        nr::PRCTL => get_auxv(regs),
         _ => {
             if !identity_syscall(number, regs) {
                 regs[0] = sys::neg_errno(sys::ENOSYS);
@@ -877,7 +906,13 @@ fn path_syscall(
     };
     let [host, link, target, ..] = &mut scratch.paths;
     let mut args = args_of(regs);
-    let result = match translate(translator, guest, host, link, target) {
+    let mut translated = translate(translator, guest, host, link, target);
+    if matches!(translated, Ok(Translated::Relative)) && index == 1 {
+        if let Some(special) = proc_relative(translator, regs[0] as isize, guest, host, link, target) {
+            translated = Ok(special);
+        }
+    }
+    let result = match translated {
         Ok(Translated::Relative) => issue(number, &args),
         Ok(Translated::Host(_)) => {
             args[index] = host.as_ptr() as usize;
@@ -916,6 +951,37 @@ fn path_syscall(
             regs[0] = device_placeholder(args[0] as isize, args[1] as *const u8, regs[2] as u32);
         }
         _ => {}
+    }
+}
+
+/// `auxv` or `exe` named relative to a descriptor that sits on
+/// `/proc/<pid>` (rustix opens the auxiliary vector that way): the same
+/// special file as the absolute spelling, which a relative path would
+/// otherwise reach through the kernel's own view of it.
+fn proc_relative(
+    translator: &Translator<'static>,
+    dirfd: isize,
+    name: &[u8],
+    host: &mut [u8; MAX_PATH],
+    link: &mut [u8; MAX_PATH],
+    target: &mut [u8; MAX_PATH],
+) -> Option<Translated> {
+    if dirfd == sys::AT_FDCWD || (name != b"auxv" && name != b"exe") {
+        return None;
+    }
+    let mut digits = [0u8; 20];
+    let mut writer = Writer::new(&mut link[..]);
+    writer.push(b"/proc/self/fd/").ok()?;
+    writer.push(log::itoa(&mut digits, dirfd as u64)).ok()?;
+    writer.finish();
+    let dir_len = sys::readlinkat(sys::AT_FDCWD, link.as_ptr(), &mut target[..MAX_PATH - 1]).ok()?;
+    let guest_dir_len = translator.host_to_guest(&target[..dir_len], link).ok()?;
+    let mut writer = Writer::resume(&mut link[..], guest_dir_len);
+    writer.push_component(name).ok()?;
+    let len = writer.finish();
+    match translator.guest_to_host(&link[..len], host) {
+        Ok(special @ (Translated::ProcExe(_) | Translated::ProcAuxv(_))) => Some(special),
+        _ => None,
     }
 }
 
