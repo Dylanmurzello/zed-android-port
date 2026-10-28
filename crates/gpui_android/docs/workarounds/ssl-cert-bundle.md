@@ -29,4 +29,6 @@ Subprocess CA story is adapter-owned:
 - **Chroot adapter** : `sanitize_env_for_chroot` excludes the var.
   The rootfs ships `/etc/ssl/certs` (Debian-style), self-sufficient.
 - **Bootstrap adapter**: publishes the prefix's CA bundle through
-  `env_for_zed_process`; subprocesses inherit that environment.
+  `env_for_zed_process`; subprocesses inherit that environment. Before
+  0.9.19 only the terminal got it, so Codex in the agent panel failed
+  every request ("workspace routing discovery failed").
