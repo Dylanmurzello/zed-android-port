@@ -223,6 +223,20 @@ impl Settings for AndroidInputSettings {
 }
 
 #[derive(Deserialize, RegisterSetting)]
+pub struct AndroidRuntimeSettings {
+    pub keep_awake: bool,
+}
+
+impl Settings for AndroidRuntimeSettings {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        let android_runtime = content.android_runtime.clone().unwrap_or_default();
+        AndroidRuntimeSettings {
+            keep_awake: android_runtime.keep_awake.unwrap_or(false),
+        }
+    }
+}
+
+#[derive(Deserialize, RegisterSetting)]
 pub struct StatusBarSettings {
     pub show: bool,
     pub show_active_file: bool,

@@ -1357,6 +1357,14 @@
     // When disabled, all tabs appear in a single row (default behavior).
     "show_pinned_tabs_in_separate_row": false,
   },
+  // Android-only: behavior while the app is in the background.
+  // Ignored on other platforms.
+  "android_runtime": {
+    // Hold a wake lock while language servers or terminal shells are
+    // running, so builds and indexing continue with the screen off.
+    // Costs battery.
+    "keep_awake": false,
+  },
   // Android-only: behavior of the on-screen IME (soft keyboard).
   // Ignored on other platforms.
   "android_input": {

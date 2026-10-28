@@ -1192,6 +1192,7 @@ impl Platform for AndroidPlatform {
             self.tick_trackpad_mode_active();
             self.tick_extras_row_enabled();
             self.tick_soft_keyboard_setting();
+            crate::runtime_service::tick(&self.android_app);
 
             // Refresh on vsync (FRAME_PENDING set by Choreographer
             // callback) or after main-thread events that may have
@@ -1243,6 +1244,7 @@ impl Platform for AndroidPlatform {
         // Exit the process so `MainActivity.onDestroy` runs (it does
         // its own `Process.killProcess` fallback + cursor / splash
         // teardown) and the OS returns the user to the launcher.
+        crate::runtime_service::shutdown(&self.android_app);
         std::process::exit(0);
     }
 

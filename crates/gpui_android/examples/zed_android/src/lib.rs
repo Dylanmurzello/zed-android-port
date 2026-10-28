@@ -4,6 +4,7 @@
 //! opened project) — matches official Zed's first-run behaviour.
 
 mod engine_self_test;
+mod runtime_background;
 mod header;
 mod menu_bar;
 mod noexec_modal;
@@ -1355,6 +1356,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     menu_bar::register_actions(cx);
     runtime_picker::register(cx);
     engine_self_test::register(cx);
+    runtime_background::register(cx);
     info!(
         "zed_android: workspace + diagnostics + search + file_finder + outline_panel + onboarding + menu_bar init complete"
     );

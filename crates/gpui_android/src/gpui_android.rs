@@ -3,6 +3,7 @@
 
 pub mod askpass_install;
 pub mod process_hygiene;
+pub mod runtime_service;
 mod captured_pointer;
 mod clipboard;
 mod cursor;

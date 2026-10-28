@@ -24,6 +24,18 @@
          settings the first time; we just need the manifest permission
          to be allowed to invoke the installer at all. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Runtime foreground service (ZdRuntimeService). FOREGROUND_SERVICE
+         is required from API 28; FOREGROUND_SERVICE_SPECIAL_USE is checked
+         from targetSdk 34 and declared ahead of that bump; WAKE_LOCK backs
+         the optional keep-awake lock; REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+         lets the app open the exemption dialog; POST_NOTIFICATIONS is the
+         service notification on Android 13+ (the service runs without it,
+         the notification is just hidden). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:name=".ZedApplication"
@@ -115,5 +127,21 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/updater_file_paths"/>
         </provider>
+
+        <!--
+          Holds the process out of the cached state while language servers
+          or terminal shells are running, so Android's phantom process
+          killer leaves them alone. Rust starts and stops it from the
+          process tree (gpui_android::runtime_service); see
+          docs/workarounds/runtime-foreground-service.md.
+        -->
+        <service
+            android:name=".ZdRuntimeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the editor's language servers and terminal shells running while the app is in the background"/>
+        </service>
     </application>
 </manifest>

@@ -140,6 +140,60 @@ fn android_runtime_page() -> SettingsPage {
                 }),
                 files: USER,
             }),
+            SettingsPageItem::SectionHeader("Background"),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Keep Awake",
+                description: "Hold a wake lock while language servers or \
+                    terminal shells are running, so builds and indexing \
+                    continue with the screen off. Costs battery.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("android_runtime.keep_awake"),
+                    pick: |settings_content| {
+                        settings_content
+                            .android_runtime
+                            .as_ref()?
+                            .keep_awake
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .android_runtime
+                            .get_or_insert_default()
+                            .keep_awake = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Allow background activity".into(),
+                description: Some(
+                    "Ask Android to exempt Zdroid from battery optimization, so \
+                     language servers and terminals keep running when the screen \
+                     is off or the app is in the background. Opens a system dialog."
+                        .into(),
+                ),
+                button_text: "Request".into(),
+                on_click: Arc::new(|_settings_window, _window, cx| {
+                    workspace::with_active_or_new_workspace(
+                        cx,
+                        |_workspace, window, cx| {
+                            match cx.build_action(
+                                "zdroid_runtime::AllowBackgroundActivity",
+                                None,
+                            ) {
+                                Ok(action) => window.dispatch_action(action, cx),
+                                Err(err) => log::warn!(
+                                    "settings_ui::android_runtime_page: \
+                                     zdroid_runtime::AllowBackgroundActivity not registered: {err}"
+                                ),
+                            }
+                        },
+                    );
+                }),
+                files: USER,
+            }),
         ]),
     }
 }

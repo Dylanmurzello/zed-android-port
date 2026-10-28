@@ -549,6 +549,20 @@ pub struct AndroidInputSettingsContent {
     pub invert_scroll: Option<bool>,
 }
 
+/// Settings specific to the Android port: how the app behaves while
+/// it is in the background.
+#[with_fallible_options]
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, PartialEq, Eq)]
+pub struct AndroidRuntimeSettingsContent {
+    /// Hold a wake lock while language servers or terminal shells are
+    /// running, so builds and indexing continue with the screen off.
+    /// The runtime foreground service decides when that is; this only
+    /// adds the wake lock to it. Costs battery.
+    ///
+    /// Default: false
+    pub keep_awake: Option<bool>,
+}
+
 #[with_fallible_options]
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, PartialEq, Eq)]
 pub struct StatusBarSettingsContent {

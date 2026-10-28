@@ -364,6 +364,7 @@ impl RuntimePicker {
                     self.install = match result {
                         Ok(()) => {
                             refresh_rootfs_farm();
+                            crate::runtime_background::prompt_battery_exemption_once();
                             InstallState::Idle
                         }
                         Err(InstallFailure::Cancelled) => InstallState::Idle,

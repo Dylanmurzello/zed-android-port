@@ -12,8 +12,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.Process
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -1200,6 +1202,87 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
+    /// Rust reconciles the runtime foreground service against the
+    /// process tree (`gpui_android::runtime_service`) and pushes the
+    /// result here on transitions. Starting is idempotent and re-reads
+    /// `keepAwake`, so a settings change while active is one more start.
+    @Suppress("unused")
+    fun setRuntimeServiceActive(active: Boolean, keepAwake: Boolean) {
+        val intent = Intent(this, ZdRuntimeService::class.java)
+        try {
+            if (active) {
+                intent.action = ZdRuntimeService.ACTION_START
+                intent.putExtra(ZdRuntimeService.EXTRA_KEEP_AWAKE, keepAwake)
+                ContextCompat.startForegroundService(this, intent)
+                requestNotificationPermissionOnce()
+            } else {
+                stopService(intent)
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "setRuntimeServiceActive($active) failed", t)
+        }
+    }
+
+    private var notificationPermissionRequested: Boolean = false
+
+    /// Android 13+ posts no notification, the foreground service's
+    /// included, until POST_NOTIFICATIONS is granted. At targetSdk 28
+    /// the platform is documented to prompt on its own after the first
+    /// channel is created; One UI 8 never did, and this explicit request
+    /// comes back denied without a dialog there (measured 2026-10-28).
+    /// The service runs either way; from targetSdk 33 this call becomes
+    /// the real prompt, so it is asked once, the first time the service
+    /// starts.
+    private fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (notificationPermissionRequested) return
+        notificationPermissionRequested = true
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        runOnUiThread {
+            try {
+                ActivityCompat.requestPermissions(this, arrayOf(permission), REQ_POST_NOTIFICATIONS)
+            } catch (t: Throwable) {
+                Log.w(TAG_RUNTIME, "POST_NOTIFICATIONS request failed", t)
+            }
+        }
+    }
+
+    @Suppress("unused")
+    fun isIgnoringBatteryOptimizations(): Boolean {
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return power.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    /// Open the system dialog that exempts this package from battery
+    /// optimization (Doze and app standby stop background children
+    /// otherwise). Returns true when the dialog opened or the exemption
+    /// already holds; falls back to the exemption list screen on builds
+    /// that refuse the direct request.
+    @Suppress("unused")
+    fun requestIgnoreBatteryOptimizations(): Boolean {
+        if (isIgnoringBatteryOptimizations()) return true
+        val direct = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "battery exemption dialog unavailable; opening the list", t)
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                true
+            } catch (inner: Throwable) {
+                Log.w(TAG_RUNTIME, "battery optimization settings unavailable", inner)
+                false
+            }
+        }
+    }
+
     /// Force a clean process exit when the Activity is destroyed.
     ///
     /// gpui_android has multiple static-state init paths (event channels,
@@ -1226,6 +1309,15 @@ class MainActivity : GameActivity(), ImeHost {
         splashHandler.removeCallbacksAndMessages(null)
         cursorOverlay?.release()
         cursorOverlay = null
+        // A swiped-away task reaches here with the Rust side still alive:
+        // end the children it spawned before the process goes, then drop
+        // the runtime service so no orphan notification lingers.
+        try {
+            NativeBridge.nativeBeforeProcessExit()
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "nativeBeforeProcessExit failed", t)
+        }
+        stopService(Intent(this, ZdRuntimeService::class.java))
         super.onDestroy()
         Process.killProcess(Process.myPid())
     }
@@ -1237,6 +1329,11 @@ class MainActivity : GameActivity(), ImeHost {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_POST_NOTIFICATIONS) {
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            Log.i(TAG_RUNTIME, "POST_NOTIFICATIONS granted=$granted")
+            return
+        }
         if (requestCode != REQ_STORAGE_PERMS) {
             return
         }
@@ -1277,9 +1374,11 @@ class MainActivity : GameActivity(), ImeHost {
         private const val TAG = "zed_android_saf"
         private const val TAG_CAPTURE = "zed_android_capture"
         private const val TAG_UPDATE = "zed_android_update"
+        private const val TAG_RUNTIME = "zed_android_runtime"
         private const val REQ_OPEN_TREE = 0xA1
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3
+        private const val REQ_POST_NOTIFICATIONS = 0xA4
         /// Software cursor side length in dp. Scaled by display
         /// density at instantiation time to give the sprite a
         /// consistent visual size across devices.

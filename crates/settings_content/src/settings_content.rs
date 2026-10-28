@@ -170,6 +170,8 @@ pub struct SettingsContent {
     /// platforms — the settings UI gates the section on
     /// `cfg(target_os = "android")`.
     pub android_input: Option<AndroidInputSettingsContent>,
+    /// Android-only background behavior. Ignored on other platforms.
+    pub android_runtime: Option<AndroidRuntimeSettingsContent>,
     pub status_bar: Option<StatusBarSettingsContent>,
 
     pub preview_tabs: Option<PreviewTabsSettingsContent>,
