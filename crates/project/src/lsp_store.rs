@@ -348,6 +348,10 @@ pub struct LocalLspStore {
     buffers_to_refresh_hash_set: HashSet<BufferId>,
     buffers_to_refresh_queue: VecDeque<BufferId>,
     _background_diagnostics_worker: Shared<Task<()>>,
+    /// When each server process died and was restarted, per server name,
+    /// pruned to [`LANGUAGE_SERVER_RESTART_WINDOW`].
+    #[cfg(target_os = "android")]
+    language_server_exits: HashMap<LanguageServerName, Vec<Instant>>,
 }
 
 impl LocalLspStore {
@@ -4631,6 +4635,8 @@ impl LspStore {
                 stopped_language_servers: HashSet::default(),
                 watched_manifest_filenames: ManifestProvidersStore::global(cx)
                     .manifest_file_names(),
+                #[cfg(target_os = "android")]
+                language_server_exits: HashMap::default(),
             }),
             last_formatting_failure: None,
             downstream_client: None,
@@ -11833,6 +11839,125 @@ impl LspStore {
         self.restart_language_servers_for_buffers(buffers, HashSet::default(), true, cx);
     }
 
+    /// Poll the server's process until it dies, then hand the death to
+    /// [`Self::on_language_server_process_exit`]. Android stops an app's
+    /// children (phantom processes) under memory pressure or when the app
+    /// is cached, where a desktop language server only dies on its own
+    /// bugs; the restart is bounded so a server that cannot run does not
+    /// spin. The poll reads `/proc/<pid>/stat`, since the `Child` is owned
+    /// by the `LanguageServer` and never waited on until shutdown.
+    #[cfg(target_os = "android")]
+    fn watch_language_server_process(
+        server_id: LanguageServerId,
+        server: &Arc<LanguageServer>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pid) = server.process_id() else {
+            return;
+        };
+        let server = Arc::downgrade(server);
+        cx.spawn(async move |lsp_store, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(LANGUAGE_SERVER_LIVENESS_POLL)
+                    .await;
+                let Some(server) = server.upgrade() else {
+                    return;
+                };
+                if server.process_id() != Some(pid) {
+                    return;
+                }
+                if language_server_process_is_running(pid) {
+                    continue;
+                }
+                lsp_store
+                    .update(cx, |lsp_store, cx| {
+                        lsp_store.on_language_server_process_exit(server_id, &server, cx)
+                    })
+                    .ok();
+                return;
+            }
+        })
+        .detach();
+    }
+
+    #[cfg(target_os = "android")]
+    fn on_language_server_process_exit(
+        &mut self,
+        server_id: LanguageServerId,
+        server: &Arc<LanguageServer>,
+        cx: &mut Context<Self>,
+    ) {
+        let buffer_ids: Vec<BufferId> = {
+            let Some(local) = self.as_local() else {
+                return;
+            };
+            match local.language_servers.get(&server_id) {
+                Some(LanguageServerState::Running {
+                    server: running, ..
+                }) if Arc::ptr_eq(running, server) => {}
+                _ => return,
+            }
+            local
+                .buffers_opened_in_servers
+                .iter()
+                .filter(|(_, servers)| servers.contains(&server_id))
+                .map(|(buffer_id, _)| *buffer_id)
+                .collect()
+        };
+        let buffers: Vec<Entity<Buffer>> = {
+            let buffer_store = self.buffer_store.read(cx);
+            buffer_ids
+                .into_iter()
+                .filter_map(|buffer_id| buffer_store.get(buffer_id))
+                .collect()
+        };
+        let name = server.name();
+        let now = Instant::now();
+        let Some(local) = self.as_local_mut() else {
+            return;
+        };
+        let recent_exits = local.language_server_exits.entry(name.clone()).or_default();
+        recent_exits.retain(|exit| now.duration_since(*exit) < LANGUAGE_SERVER_RESTART_WINDOW);
+        if recent_exits.len() >= LANGUAGE_SERVER_RESTART_BUDGET {
+            log::warn!(
+                "language server {name} exited {LANGUAGE_SERVER_RESTART_BUDGET} times within \
+                 {} minutes; leaving it stopped",
+                LANGUAGE_SERVER_RESTART_WINDOW.as_secs() / 60
+            );
+            local.stopped_language_servers.insert(name.clone());
+            self.stop_local_language_server(server_id, cx).detach();
+            cx.emit(LspStoreEvent::Notification(format!(
+                "{name} exited {LANGUAGE_SERVER_RESTART_BUDGET} times in {} minutes and stays \
+                 stopped. If Android is stopping it in the background, turn on Keep Awake \
+                 under Settings > Android Runtime or allow background activity in the battery \
+                 settings, then restart the server.",
+                LANGUAGE_SERVER_RESTART_WINDOW.as_secs() / 60
+            )));
+            return;
+        }
+        if buffers.is_empty() {
+            log::info!("language server {name} exited with no buffers open; not restarting");
+            self.stop_local_language_server(server_id, cx).detach();
+            return;
+        }
+        recent_exits.push(now);
+        let attempt = recent_exits.len();
+        log::warn!(
+            "language server {name} (pid {:?}) exited; restarting ({attempt}/{LANGUAGE_SERVER_RESTART_BUDGET})",
+            server.process_id()
+        );
+        self.restart_language_servers_for_buffers(
+            buffers,
+            HashSet::from_iter([LanguageServerSelector::Name(name.clone())]),
+            true,
+            cx,
+        );
+        cx.emit(LspStoreEvent::Notification(format!(
+            "{name} exited; restarted ({attempt}/{LANGUAGE_SERVER_RESTART_BUDGET})"
+        )));
+    }
+
     pub fn restart_language_servers_for_buffers(
         &mut self,
         buffers: Vec<Entity<Buffer>>,
@@ -12294,6 +12419,8 @@ impl LspStore {
                 simulate_disk_based_diagnostics_completion: None,
             },
         );
+        #[cfg(target_os = "android")]
+        Self::watch_language_server_process(server_id, &language_server, cx);
         local
             .languages
             .update_lsp_binary_status(adapter.name(), BinaryStatus::None);
@@ -14332,6 +14459,28 @@ pub struct WorkspaceRefreshTask {
     progress_tx: mpsc::Sender<()>,
     #[allow(dead_code)]
     task: Task<()>,
+}
+
+#[cfg(target_os = "android")]
+const LANGUAGE_SERVER_LIVENESS_POLL: Duration = Duration::from_secs(3);
+#[cfg(target_os = "android")]
+const LANGUAGE_SERVER_RESTART_BUDGET: usize = 3;
+#[cfg(target_os = "android")]
+const LANGUAGE_SERVER_RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// Whether `pid` is a live process: present in `/proc` and not a zombie
+/// waiting for its `wait`. The state letter follows the parenthesised
+/// command name in `stat`.
+#[cfg(target_os = "android")]
+fn language_server_process_is_running(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some(end_of_name) = stat.rfind(')') else {
+        return false;
+    };
+    let state = stat[end_of_name + 1..].trim_start().bytes().next();
+    !matches!(state, None | Some(b'Z') | Some(b'X'))
 }
 
 pub enum LanguageServerState {

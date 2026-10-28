@@ -53,6 +53,7 @@ is built.
 | [Asset selection by runtime OS](runtime-os-asset-selection.md) | Active | Downloaded tools run in the Linux userland, so every asset-selection site asks `util::runtime_os()` instead of `consts::OS` |
 | [Vendored async-task: one vtable pointer per task waker](async-task-waker-identity.md) | Active | A task woke itself on every poll because its waker clones carried a different vtable address; the SSH connect task froze the main loop |
 | [Runtime foreground service and child reaping](runtime-foreground-service.md) | Active | Android stops an app's children once it is cached; the process tree under `hidepid` drives a foreground service and the reaping at quit |
+| [Bounded language server auto-restart](android-lsp-auto-restart.md) | Active | A server killed from outside is restarted up to three times per ten minutes, then left stopped with a hint |
 | [`/sdcard/.zed/` namespace](sdcard-dot-zed-namespace.md) | Reverted | Only existed for the hex-patched musl loader's 14-byte path slot; nothing is hex-patched anymore |
 | [Bun resolv.conf hex-patch resilience](deferred-bun-resolv-resilience.md) | Superseded | Hex-patching binaries is gone; guest binaries read a real `/etc/resolv.conf` |
 | [LD_PRELOAD strip for musl-static children](deferred-musl-subprocess-ld-preload.md) | Superseded | No LD_PRELOAD shim anymore; the engine handles shebangs at exec |
