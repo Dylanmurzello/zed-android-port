@@ -28,6 +28,7 @@ use zd_engine_core::{LOADER_IMAGE_BASE, LOADER_WINDOW_SIZE};
 use crate::config;
 use crate::exec;
 use crate::link;
+use crate::scratch::{self, Scratch, Working};
 use crate::log;
 use crate::sys::{self, KernelSigaction};
 
@@ -99,9 +100,19 @@ pub fn install() -> Result<(), i32> {
         // blocked makes the kernel reset the disposition and kill the
         // process, and the signal would be blocked inside the handler
         // otherwise.
-        flags: sys::SA_SIGINFO | sys::SA_NODEFER | sys::SA_RESTART,
+        // SA_ONSTACK: a Go program runs its goroutines on stacks of a
+        // few KiB that cannot hold the kernel's signal frame, and its
+        // runtime registers an alternate stack on every thread for that
+        // reason; a thread without one is served on its own stack as
+        // before.
+        flags: sys::SA_SIGINFO | sys::SA_NODEFER | sys::SA_RESTART | sys::SA_ONSTACK,
         restorer: 0,
-        mask: 0,
+        // Every other signal waits until the handler returns. A guest
+        // handler that ran in between would see this code's registers:
+        // Go keeps the current goroutine in x28 and its handler reads
+        // the register as it finds it, so a preemption signal landing
+        // inside a trap crashed every multi-threaded Go program.
+        mask: !sys::SIGSYS_BIT,
     };
     sys::rt_sigaction(sys::SIGSYS, &action)
 }
@@ -291,6 +302,7 @@ fn compat_trap(number: u32, regs: &mut [u64; 31]) {
     };
 }
 
+#[inline(never)]
 fn log_unknown(number: u32) {
     let word = (number / 64) as usize;
     if word >= COMPAT_SEEN.len() {
@@ -394,6 +406,7 @@ fn guest_path_args(number: u32) -> [Option<usize>; 2] {
 
 /// `chroot` succeeds only when the target is the guest root itself,
 /// which is what `debootstrap`-style tools ask for.
+#[inline(never)]
 fn chroot(regs: &[u64; 31]) -> u64 {
     let Some(translator) = config::translator() else {
         return sys::neg_errno(sys::EPERM);
@@ -401,8 +414,11 @@ fn chroot(regs: &[u64; 31]) -> u64 {
     let Some(guest) = (unsafe { cstr_bounded(regs[0] as *const u8, MAX_PATH) }) else {
         return sys::neg_errno(sys::ENAMETOOLONG);
     };
-    let mut host = [0u8; MAX_PATH];
-    match translator.guest_to_host(guest, &mut host) {
+    let Some(mut claim) = scratch::claim() else {
+        return sys::neg_errno(sys::EPERM);
+    };
+    let host = &mut claim.get().paths[0];
+    match translator.guest_to_host(guest, host) {
         Ok(Translated::Host(len)) if host[..len] == *translator.rootfs => 0,
         _ => sys::neg_errno(sys::EPERM),
     }
@@ -453,6 +469,35 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) 
         regs[0] = sys::neg_errno(sys::ENOSYS);
         return;
     };
+    match scratch::claim() {
+        Some(claim) => dispatch_with(translator, number, regs, blocked, pc, Working::Pooled(claim)),
+        None => dispatch_on_stack(translator, number, regs, blocked, pc),
+    }
+}
+
+/// The pool is exhausted (sixty-four invocations at once, or a fork
+/// child that inherited the parent's busy bits): a stack copy, at the
+/// frame size the pool exists to avoid.
+#[inline(never)]
+fn dispatch_on_stack(
+    translator: &Translator<'static>,
+    number: u32,
+    regs: &mut [u64; 31],
+    blocked: &mut u64,
+    pc: &mut u64,
+) {
+    let mut scratch = Scratch::new();
+    dispatch_with(translator, number, regs, blocked, pc, Working::Stack(&mut scratch));
+}
+
+fn dispatch_with(
+    translator: &Translator<'static>,
+    number: u32,
+    regs: &mut [u64; 31],
+    blocked: &mut u64,
+    pc: &mut u64,
+    mut working: Working,
+) {
     match number {
         nr::SETXATTR
         | nr::LSETXATTR
@@ -464,7 +509,7 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) 
         | nr::LREMOVEXATTR
         | nr::STATFS
         | nr::TRUNCATE
-        | nr::CHDIR => path_syscall(translator, number, regs, 0),
+        | nr::CHDIR => path_syscall(translator, number, regs, 0, working.get()),
         nr::INOTIFY_ADD_WATCH
         | nr::MKNODAT
         | nr::MKDIRAT
@@ -479,13 +524,13 @@ fn dispatch(number: u32, regs: &mut [u64; 31], blocked: &mut u64, pc: &mut u64) 
         | nr::NEWFSTATAT
         | nr::UTIMENSAT
         | nr::NAME_TO_HANDLE_AT
-        | nr::STATX => path_syscall(translator, number, regs, 1),
-        nr::EXECVE | nr::EXECVEAT => exec::handle(number, regs),
-        nr::SYMLINKAT => symlinkat(translator, regs),
-        nr::LINKAT | nr::RENAMEAT | nr::RENAMEAT2 => two_paths(translator, number, regs),
-        nr::GETCWD => getcwd(translator, regs),
-        nr::BIND | nr::CONNECT => sockaddr(translator, number, regs, 1, 2),
-        nr::SENDTO => sockaddr(translator, number, regs, 4, 5),
+        | nr::STATX => path_syscall(translator, number, regs, 1, working.get()),
+        nr::EXECVE | nr::EXECVEAT => exec::handle(number, regs, working),
+        nr::SYMLINKAT => symlinkat(translator, regs, working.get()),
+        nr::LINKAT | nr::RENAMEAT | nr::RENAMEAT2 => two_paths(translator, number, regs, working.get()),
+        nr::GETCWD => getcwd(translator, regs, working.get()),
+        nr::BIND | nr::CONNECT => sockaddr(translator, number, regs, 1, 2, working.get()),
+        nr::SENDTO => sockaddr(translator, number, regs, 4, 5, working.get()),
         nr::RT_SIGACTION => sigaction(regs),
         nr::RT_SIGPROCMASK => sigprocmask(regs, blocked),
         nr::IOCTL => termios2(regs),
@@ -626,7 +671,13 @@ fn setgroups(regs: &[u64; 31]) -> u64 {
 
 /// Syscalls with one path argument at `index` whose other arguments pass
 /// through unchanged, plus their result fixups.
-fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31], index: usize) {
+fn path_syscall(
+    translator: &Translator<'static>,
+    number: u32,
+    regs: &mut [u64; 31],
+    index: usize,
+    scratch: &mut Scratch,
+) {
     if number == nr::UTIMENSAT && regs[1] == 0 {
         // `futimens`: the fd itself, nothing to translate.
         regs[0] = issue(number, &args_of(regs));
@@ -636,9 +687,9 @@ fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 
         regs[0] = sys::neg_errno(if regs[index] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
         return;
     };
-    let mut host = [0u8; MAX_PATH];
+    let host = &mut scratch.paths[0];
     let mut args = args_of(regs);
-    let result = match translator.guest_to_host(guest, &mut host) {
+    let result = match translator.guest_to_host(guest, host) {
         Ok(Translated::Relative) => issue(number, &args),
         Ok(Translated::Host(_)) => {
             args[index] = host.as_ptr() as usize;
@@ -650,7 +701,7 @@ fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 
                 regs[0] = copy_out(regs[2] as *mut u8, regs[3] as usize, guest_exe);
                 return;
             }
-            args[index] = match translator.guest_to_host(guest_exe, &mut host) {
+            args[index] = match translator.guest_to_host(guest_exe, host) {
                 Ok(Translated::Host(_)) => host.as_ptr() as usize,
                 _ => config::get().guest_exe.as_ptr() as usize,
             };
@@ -658,17 +709,17 @@ fn path_syscall(translator: &Translator<'static>, number: u32, regs: &mut [u64; 
         }
         Ok(Translated::ProcExe(_)) => issue(number, &args),
         Ok(Translated::ProcAuxv(who)) if number == nr::OPENAT => {
-            serve_auxv(who, number, regs, regs[2] as usize)
+            serve_auxv(who, number, regs, regs[2] as usize, &mut scratch.bytes)
         }
         Ok(Translated::ProcAuxv(who)) if number == nr::OPENAT2 => {
-            serve_auxv(who, number, regs, open_how_flags(regs[2] as *const u64))
+            serve_auxv(who, number, regs, open_how_flags(regs[2] as *const u64), &mut scratch.bytes)
         }
         Ok(Translated::ProcAuxv(_)) => issue(number, &args),
         Err(_) => sys::neg_errno(sys::ENAMETOOLONG),
     };
     regs[0] = result;
     match number {
-        nr::READLINKAT => detranslate_readlink(translator, regs, &mut host),
+        nr::READLINKAT => detranslate_readlink(translator, regs, host),
         nr::NEWFSTATAT => fixup_stat(result, regs[2] as *mut u8, false),
         nr::STATX => fixup_stat(result, regs[4] as *mut u8, true),
         nr::FCHOWNAT if result == sys::neg_errno(sys::EPERM) => regs[0] = 0,
@@ -841,15 +892,14 @@ fn peer_credentials(regs: &mut [u64; 31]) {
 
 /// `linkat`, `renameat`, `renameat2`: paths at x1 and x3.
 #[inline(never)]
-fn two_paths(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31]) {
+fn two_paths(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31], scratch: &mut Scratch) {
     let mut args = args_of(regs);
-    let mut first = [0u8; MAX_PATH];
-    let mut second = [0u8; MAX_PATH];
-    for (index, buffer) in [(1usize, &mut first), (3usize, &mut second)] {
+    for (index, slot) in [(1usize, 0usize), (3usize, 1usize)] {
         let Some(guest) = (unsafe { cstr_bounded(regs[index] as *const u8, MAX_PATH) }) else {
             regs[0] = sys::neg_errno(if regs[index] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
             return;
         };
+        let buffer = &mut scratch.paths[slot];
         match translator.guest_to_host(guest, buffer) {
             Ok(Translated::Host(_)) => args[index] = buffer.as_ptr() as usize,
             Ok(_) => {}
@@ -862,7 +912,14 @@ fn two_paths(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31]
     let result = issue(number, &args);
     let refused = result == sys::neg_errno(sys::EACCES) || result == sys::neg_errno(sys::EPERM);
     regs[0] = if number == nr::LINKAT && refused {
-        link::by_copy(args[0] as isize, args[1] as *const u8, args[2] as isize, args[3] as *const u8, args[4])
+        link::by_copy(
+            args[0] as isize,
+            args[1] as *const u8,
+            args[2] as isize,
+            args[3] as *const u8,
+            args[4],
+            scratch,
+        )
     } else {
         result
     };
@@ -870,19 +927,22 @@ fn two_paths(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31]
 
 /// Guest absolute path of the directory `dirfd` refers to, via the
 /// kernel's own view of the fd.
-fn guest_dir_of_fd(translator: &Translator<'static>, dirfd: isize, out: &mut [u8; MAX_PATH]) -> Option<usize> {
-    let mut host = [0u8; MAX_PATH];
+fn guest_dir_of_fd(
+    translator: &Translator<'static>,
+    dirfd: isize,
+    out: &mut [u8; MAX_PATH],
+    host: &mut [u8; MAX_PATH],
+) -> Option<usize> {
     let len = if dirfd == sys::AT_FDCWD {
-        sys::getcwd(&mut host).ok()?
+        sys::getcwd(host).ok()?
     } else {
         let mut link = [0u8; 32];
         let mut writer = Writer::new(&mut link);
         writer.push(b"/proc/self/fd/").ok()?;
         let mut digits = [0u8; 20];
         writer.push(log::itoa(&mut digits, dirfd as u64)).ok()?;
-        let len = writer.finish();
-        let _ = len;
-        sys::readlinkat(sys::AT_FDCWD, link.as_ptr(), &mut host).ok()?
+        writer.finish();
+        sys::readlinkat(sys::AT_FDCWD, link.as_ptr(), host).ok()?
     };
     translator.host_to_guest(&host[..len], out).ok()
 }
@@ -890,7 +950,7 @@ fn guest_dir_of_fd(translator: &Translator<'static>, dirfd: isize, out: &mut [u8
 /// `symlinkat(target, dirfd, linkpath)`: the stored target is rewritten
 /// so the kernel can resolve the link from the host side.
 #[inline(never)]
-fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31]) {
+fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &mut Scratch) {
     let (Some(target), Some(link)) = (
         unsafe { cstr_bounded(regs[0] as *const u8, MAX_PATH) },
         unsafe { cstr_bounded(regs[2] as *const u8, MAX_PATH) },
@@ -899,43 +959,32 @@ fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31]) {
         return;
     };
     let dirfd = regs[1] as isize;
-    let mut link_guest = [0u8; MAX_PATH];
+    let [link_guest, new_target, spare @ ..] = &mut scratch.paths;
     let link_guest_len = if is_absolute(link) {
         let len = link.len().min(MAX_PATH - 1);
         link_guest[..len].copy_from_slice(&link[..len]);
         len
     } else {
-        let Some(dir_len) = guest_dir_of_fd(translator, dirfd, &mut link_guest) else {
+        let [_, dir_host] = &mut *spare;
+        let Some(dir_len) = guest_dir_of_fd(translator, dirfd, link_guest, dir_host) else {
             regs[0] = sys::neg_errno(sys::EACCES);
             return;
         };
-        let mut writer = Writer::new(&mut link_guest);
-        if writer.push(b"").is_err() {
+        let mut writer = Writer::resume(link_guest, dir_len);
+        if writer.push_component(link).is_err() {
             regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
             return;
         }
-        // Continue after the directory already in the buffer.
-        let mut tail = [0u8; MAX_PATH];
-        let mut tail_writer = Writer::new(&mut tail);
-        if tail_writer.push(&link_guest[..dir_len]).is_err()
-            || tail_writer.push_component(link).is_err()
-        {
-            regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
-            return;
-        }
-        let len = tail_writer.finish();
-        link_guest[..len].copy_from_slice(&tail[..len]);
-        len
+        writer.finish()
     };
-    let mut new_target = [0u8; MAX_PATH];
-    let Ok(_) = translator.rewrite_symlink_target(&link_guest[..link_guest_len], target, &mut new_target) else {
+    let Ok(_) = translator.rewrite_symlink_target(&link_guest[..link_guest_len], target, new_target, spare) else {
         regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
         return;
     };
-    let mut host_link = [0u8; MAX_PATH];
+    let [host_link, _] = spare;
     let mut args = args_of(regs);
     args[0] = new_target.as_ptr() as usize;
-    match translator.guest_to_host(link, &mut host_link) {
+    match translator.guest_to_host(link, host_link) {
         Ok(Translated::Host(_)) => args[2] = host_link.as_ptr() as usize,
         Ok(_) => {}
         Err(_) => {
@@ -948,19 +997,18 @@ fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31]) {
 
 /// `getcwd(buf, size)`: the kernel answers with the host path.
 #[inline(never)]
-fn getcwd(translator: &Translator<'static>, regs: &mut [u64; 31]) {
+fn getcwd(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &mut Scratch) {
     let buffer = regs[0] as *mut u8;
     let size = regs[1] as usize;
-    let mut host = [0u8; MAX_PATH];
-    let len = match sys::getcwd(&mut host) {
+    let [host, guest, ..] = &mut scratch.paths;
+    let len = match sys::getcwd(host) {
         Ok(len) => len,
         Err(errno) => {
             regs[0] = sys::neg_errno(errno);
             return;
         }
     };
-    let mut guest = [0u8; MAX_PATH];
-    let Ok(guest_len) = translator.host_to_guest(&host[..len], &mut guest) else {
+    let Ok(guest_len) = translator.host_to_guest(&host[..len], guest) else {
         regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
         return;
     };
@@ -979,7 +1027,14 @@ fn getcwd(translator: &Translator<'static>, regs: &mut [u64; 31]) {
 
 /// Filesystem `sockaddr_un` paths in `bind`, `connect` and `sendto`.
 #[inline(never)]
-fn sockaddr(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31], addr_index: usize, len_index: usize) {
+fn sockaddr(
+    translator: &Translator<'static>,
+    number: u32,
+    regs: &mut [u64; 31],
+    addr_index: usize,
+    len_index: usize,
+    scratch: &mut Scratch,
+) {
     let mut args = args_of(regs);
     let address = regs[addr_index] as *const u8;
     let len = regs[len_index] as usize;
@@ -999,8 +1054,8 @@ fn sockaddr(translator: &Translator<'static>, number: u32, regs: &mut [u64; 31],
         regs[0] = issue(number, &args);
         return;
     }
-    let mut host = [0u8; MAX_PATH];
-    let host_len = match translator.guest_to_host(path, &mut host) {
+    let host = &mut scratch.paths[0];
+    let host_len = match translator.guest_to_host(path, host) {
         Ok(Translated::Host(len)) => len,
         Ok(_) => {
             regs[0] = issue(number, &args);
@@ -1270,8 +1325,13 @@ const MAX_AUXV_BYTES: usize = 64 * 16;
 /// and a debugger reads its tracee's vector to place the executable
 /// (lldb-server takes the load bias from `AT_ENTRY` and finds the
 /// dynamic linker rendezvous through `AT_PHDR`).
-fn serve_auxv(who: ProcExe, number: u32, regs: &[u64; 31], flags: usize) -> u64 {
-    let mut remote = [0u8; MAX_AUXV_BYTES];
+fn serve_auxv(
+    who: ProcExe,
+    number: u32,
+    regs: &[u64; 31],
+    flags: usize,
+    remote: &mut [u8; MAX_AUXV_BYTES],
+) -> u64 {
     let bytes: &[u8] = if is_self(who) {
         let config = config::get();
         if config.auxv_ptr == 0 {
@@ -1284,7 +1344,7 @@ fn serve_auxv(who: ProcExe, number: u32, regs: &[u64; 31], flags: usize) -> u64 
         let ProcExe::Pid(pid) = who else {
             return issue(number, &args_of(regs));
         };
-        match remote_auxv(pid, &mut remote) {
+        match remote_auxv(pid, remote) {
             Some(length) => &remote[..length],
             None => return issue(number, &args_of(regs)),
         }
@@ -1424,13 +1484,18 @@ fn self_signal(number: u32, regs: &mut [u64; 31]) {
     if TRACEME_REQUESTED.load(Ordering::Relaxed) && may_reach_self(number, regs) {
         TRACEME_REQUESTED.store(false, Ordering::Relaxed);
         if let Err(errno) = sys::ptrace(sys::PTRACE_TRACEME, 0, 0, 0) {
-            let mut line = log::Line::new();
-            line.push(b"zdload: ptrace(PTRACE_TRACEME) before a signal to self failed: errno ");
-            line.push_u64(errno as u64);
-            line.emit();
+            log_traceme_refused(errno);
         }
     }
     regs[0] = issue(number, &args_of(regs));
+}
+
+#[inline(never)]
+fn log_traceme_refused(errno: i32) {
+    let mut line = log::Line::new();
+    line.push(b"zdload: ptrace(PTRACE_TRACEME) before a signal to self failed: errno ");
+    line.push_u64(errno as u64);
+    line.emit();
 }
 
 /// Whether the signal's target set includes the caller: `kill` and

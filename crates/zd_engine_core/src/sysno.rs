@@ -55,9 +55,11 @@ pub mod nr {
     pub const CLOCK_SETTIME: u32 = 112;
     pub const CLOCK_GETTIME: u32 = 113;
     pub const PTRACE: u32 = 117;
+    pub const SCHED_YIELD: u32 = 124;
     pub const KILL: u32 = 129;
     pub const TKILL: u32 = 130;
     pub const TGKILL: u32 = 131;
+    pub const SIGALTSTACK: u32 = 132;
     pub const RT_SIGACTION: u32 = 134;
     pub const RT_SIGPROCMASK: u32 = 135;
     pub const RT_SIGQUEUEINFO: u32 = 138;

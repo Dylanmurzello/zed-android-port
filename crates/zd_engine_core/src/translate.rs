@@ -131,19 +131,19 @@ impl<'a> Translator<'a> {
         link: &[u8],
         target: &[u8],
         out: &mut [u8],
+        scratch: &mut [[u8; MAX_PATH]; 2],
     ) -> Result<usize, TranslateError> {
         let link_dir = dirname(link);
         let link_tree = self.tree_of(link_dir);
-        let mut absolute = [0u8; MAX_PATH];
+        let [absolute, joined] = scratch;
         let absolute_len = if is_absolute(target) {
-            normalize(target, &mut absolute)?
+            normalize(target, absolute)?
         } else {
-            let mut joined = [0u8; MAX_PATH];
-            let mut writer = Writer::new(&mut joined);
+            let mut writer = Writer::new(&mut joined[..]);
             writer.push(link_dir)?;
             writer.push_component(target)?;
             let joined_len = writer.finish();
-            normalize(&joined[..joined_len], &mut absolute)?
+            normalize(&joined[..joined_len], absolute)?
         };
         let target_absolute = &absolute[..absolute_len];
         if self.tree_of(target_absolute) != link_tree {
@@ -278,8 +278,9 @@ mod tests {
 
     fn symlink(link: &str, target: &str) -> String {
         let mut out = [0u8; 512];
+        let mut scratch = [[0u8; MAX_PATH]; 2];
         let len = translator()
-            .rewrite_symlink_target(link.as_bytes(), target.as_bytes(), &mut out)
+            .rewrite_symlink_target(link.as_bytes(), target.as_bytes(), &mut out, &mut scratch)
             .unwrap();
         String::from_utf8(out[..len].to_vec()).unwrap()
     }

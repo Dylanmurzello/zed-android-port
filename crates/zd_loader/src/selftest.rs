@@ -27,6 +27,15 @@ type Stub = unsafe extern "C" fn(usize, usize, usize, usize, usize, usize, usize
 static STUB: config::Global<Option<Stub>> = config::Global::new(None);
 
 const SAMPLES: usize = 2048;
+const PROBE_STACK: usize = 64 * 1024;
+const FILL: u8 = 0xA5;
+/// What one trap may take from an alternate stack, kernel frame
+/// included: musl registers 12 KiB and Rust 16 KiB, and a guest handler
+/// running there needs room of its own.
+const FRAME_BUDGET: usize = 10 * 1024;
+
+/// Largest frame the probe saw; read back by `report_load`.
+static FRAME_MAX: config::Global<usize> = config::Global::new(0);
 const OPS_PER_SAMPLE: u64 = 8;
 
 fn counter() -> u64 {
@@ -250,6 +259,217 @@ pub fn preamble(stack: &InitialStack, filter: &FilterState, program: &[u8]) {
         }
         Err(reason) => emit_line!("zd-selftest: bench name=openat_trap skipped={reason}"),
     }
+    // SAFETY: written just above when the stub was built.
+    if let Some(stub) = unsafe { *STUB.get() } {
+        frame_probe(stub, &guest);
+    }
+}
+
+/// Bytes of an alternate stack one trap consumes, the kernel's frame
+/// plus the handler's: the lowest byte a delivery touched on a stack
+/// pre-filled with a pattern. The handler is installed with SA_ONSTACK,
+/// so the smallest alternate stack a guest registers bounds what the
+/// handler may use. The probe stack is unregistered again before the
+/// jump into the guest.
+fn frame_probe(stub: Stub, guest: &[u8; MAX_PATH]) {
+    let stack = match sys::mmap(
+        0,
+        PROBE_STACK,
+        sys::PROT_READ | sys::PROT_WRITE,
+        sys::MAP_PRIVATE | sys::MAP_ANONYMOUS,
+        -1,
+        0,
+    ) {
+        Ok(address) => address,
+        Err(errno) => {
+            emit_line!("zd-selftest: frame skipped=mmap errno {errno}");
+            return;
+        }
+    };
+    // SAFETY: a fresh private mapping of PROBE_STACK bytes.
+    let region = unsafe { core::slice::from_raw_parts_mut(stack as *mut u8, PROBE_STACK) };
+    let mut largest = 0usize;
+    largest = largest.max(measure(region, "probe", || {
+        if !crate::handler::probe() {
+            crate::abort!("probe stopped acking in the frame probe");
+        }
+    }));
+    largest = largest.max(measure(region, "openat", || {
+        let ret = unsafe {
+            stub(
+                sys::AT_FDCWD as usize,
+                guest.as_ptr() as usize,
+                sys::O_RDONLY | sys::O_CLOEXEC,
+                0,
+                0,
+                0,
+                nr::OPENAT as usize,
+            )
+        };
+        match sys::check(ret) {
+            Ok(fd) => {
+                if let Err(_errno) = sys::close(fd as i32) {}
+            }
+            Err(errno) => crate::abort!("frame probe openat failed: errno {errno}"),
+        }
+    }));
+    largest = largest.max(measure(region, "readlinkat", || {
+        let mut buffer = [0u8; 256];
+        let ret = unsafe {
+            stub(
+                sys::AT_FDCWD as usize,
+                c"/proc/self/exe".as_ptr() as usize,
+                buffer.as_mut_ptr() as usize,
+                buffer.len(),
+                0,
+                0,
+                nr::READLINKAT as usize,
+            )
+        };
+        if ret < 0 {
+            crate::abort!("frame probe readlinkat failed: {ret}");
+        }
+    }));
+    largest = largest.max(measure(region, "getcwd", || {
+        let mut buffer = [0u8; 256];
+        let ret = unsafe { stub(buffer.as_mut_ptr() as usize, buffer.len(), 0, 0, 0, 0, nr::GETCWD as usize) };
+        if ret < 0 {
+            crate::abort!("frame probe getcwd failed: {ret}");
+        }
+    }));
+    largest = largest.max(measure(region, "renameat", || {
+        let ret = unsafe {
+            stub(
+                sys::AT_FDCWD as usize,
+                c"/nonexistent-zd-selftest-a".as_ptr() as usize,
+                sys::AT_FDCWD as usize,
+                c"/nonexistent-zd-selftest-b".as_ptr() as usize,
+                0,
+                0,
+                nr::RENAMEAT as usize,
+            )
+        };
+        if sys::check(ret) != Err(sys::ENOENT) {
+            crate::abort!("frame probe renameat: expected ENOENT, got {ret}");
+        }
+    }));
+    largest = largest.max(measure(region, "symlinkat", || {
+        let ret = unsafe {
+            stub(
+                c"zd-selftest-target".as_ptr() as usize,
+                sys::AT_FDCWD as usize,
+                c"zd-nonexistent-dir/zd-selftest-link".as_ptr() as usize,
+                0,
+                0,
+                0,
+                nr::SYMLINKAT as usize,
+            )
+        };
+        if sys::check(ret) != Err(sys::ENOENT) {
+            crate::abort!("frame probe symlinkat: expected ENOENT, got {ret}");
+        }
+    }));
+    largest = largest.max(measure(region, "linkat_copy", || {
+        let copy = c"/tmp/zd-selftest-copy";
+        let ret = unsafe {
+            stub(
+                sys::AT_FDCWD as usize,
+                guest.as_ptr() as usize,
+                sys::AT_FDCWD as usize,
+                copy.as_ptr() as usize,
+                0,
+                0,
+                nr::LINKAT as usize,
+            )
+        };
+        if let Err(errno) = sys::check(ret) {
+            emit_line!("zd-selftest: frame kind=linkat_copy link_errno={errno}");
+        }
+        let ret = unsafe { stub(sys::AT_FDCWD as usize, copy.as_ptr() as usize, 0, 0, 0, 0, nr::UNLINKAT as usize) };
+        if let Err(errno) = sys::check(ret) {
+            emit_line!("zd-selftest: frame kind=linkat_copy unlink_errno={errno}");
+        }
+    }));
+    largest = largest.max(measure(region, "bind", || {
+        let fd = match sys::check(unsafe { sys::syscall6(nr::SOCKET, 1, 1 | sys::O_CLOEXEC, 0, 0, 0, 0) }) {
+            Ok(fd) => fd as i32,
+            Err(errno) => {
+                emit_line!("zd-selftest: frame kind=bind skipped=socket errno {errno}");
+                return;
+            }
+        };
+        let path = b"/nonexistent-zd-dir/zd-selftest-sock";
+        let mut address = [0u8; 110];
+        address[0] = 1;
+        address[2..2 + path.len()].copy_from_slice(path);
+        let ret = unsafe { stub(fd as usize, address.as_ptr() as usize, 2 + path.len() + 1, 0, 0, 0, nr::BIND as usize) };
+        if let Err(_errno) = sys::close(fd) {}
+        if sys::check(ret) != Err(sys::ENOENT) {
+            crate::abort!("frame probe bind: expected ENOENT, got {ret}");
+        }
+    }));
+    largest = largest.max(measure(region, "execve", || {
+        // SAFETY: single-threaded startup; the loader path is put back
+        // before anything else can read it.
+        let config = unsafe { config::get_mut() };
+        let mut original = [0u8; MAX_PATH];
+        let original_len = config.loader_path.as_bytes().len();
+        original[..original_len].copy_from_slice(config.loader_path.as_bytes());
+        if config.loader_path.set(b"/nonexistent-zd-selftest-loader").is_err() {
+            return;
+        }
+        let argv = [c"zd-selftest".as_ptr().cast::<u8>(), core::ptr::null()];
+        let envp = [c"ZD_SELFTEST_PROBE=1".as_ptr().cast::<u8>(), core::ptr::null()];
+        let ret = unsafe {
+            stub(
+                guest.as_ptr() as usize,
+                argv.as_ptr() as usize,
+                envp.as_ptr() as usize,
+                0,
+                0,
+                0,
+                nr::EXECVE as usize,
+            )
+        };
+        if config.loader_path.set(&original[..original_len]).is_err() {
+            crate::abort!("could not restore the loader path after the exec probe");
+        }
+        if sys::check(ret) != Err(sys::ENOENT) {
+            crate::abort!("frame probe execve: expected ENOENT, got {ret}");
+        }
+    }));
+    emit_line!("zd-selftest: frame max={largest} budget={FRAME_BUDGET}");
+    // SAFETY: single-threaded startup; read back by `report_load`.
+    unsafe { *FRAME_MAX.get() = largest };
+    if let Err(_errno) = sys::munmap(stack, PROBE_STACK) {
+        // The probe stack stays mapped; the guest never sees it.
+    }
+}
+
+fn measure(region: &mut [u8], name: &str, operation: impl FnOnce()) -> usize {
+    region.fill(FILL);
+    let probe = sys::SigAltStack {
+        sp: region.as_ptr() as u64,
+        flags: 0,
+        size: region.len() as u64,
+    };
+    if let Err(errno) = sys::sigaltstack(Some(&probe), None) {
+        emit_line!("zd-selftest: frame kind={name} skipped=sigaltstack errno {errno}");
+        return 0;
+    }
+    operation();
+    let disabled = sys::SigAltStack {
+        sp: 0,
+        flags: sys::SS_DISABLE,
+        size: 0,
+    };
+    if let Err(errno) = sys::sigaltstack(Some(&disabled), None) {
+        crate::abort!("sigaltstack(SS_DISABLE) failed: errno {errno}");
+    }
+    let untouched = region.iter().position(|&byte| byte != FILL).unwrap_or(region.len());
+    let used = region.len() - untouched;
+    emit_line!("zd-selftest: frame kind={name} bytes={used}");
+    used
 }
 
 pub fn report_load(program: &[u8], loaded: &Loaded, started_ns: u64) {
@@ -281,8 +501,11 @@ pub fn report_load(program: &[u8], loaded: &Loaded, started_ns: u64) {
         loaded.interp_base,
         (now_ns() - started_ns) / 1000
     );
+    // SAFETY: written once in `frame_probe`, before any thread exists.
+    let frame_max = unsafe { *FRAME_MAX.get() };
+    let result = if frame_max <= FRAME_BUDGET { "PASS" } else { "FAIL" };
     emit_line!(
-        "zd-selftest: result=PASS traps={} compat_traps={}",
+        "zd-selftest: result={result} traps={} compat_traps={} frame_max={frame_max}",
         TRAP_COUNT.load(core::sync::atomic::Ordering::Relaxed),
         COMPAT_COUNT.load(core::sync::atomic::Ordering::Relaxed)
     );

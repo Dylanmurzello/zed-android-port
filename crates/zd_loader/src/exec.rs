@@ -22,13 +22,17 @@ use core::sync::atomic::Ordering;
 use crate::config::{self, ENGINE_KEYS};
 use crate::handler::{TRACEME_REQUESTED, cstr_bounded};
 use crate::log;
+use crate::scratch::Working;
 use crate::sys;
 
-/// Environment pointer slots kept on the handler's stack; larger
-/// environments get an anonymous mapping instead.
-const STACK_ENTRIES: usize = 256;
+/// Environment pointer slots and the `ZD_PROGRAM` entry kept on the
+/// handler's stack; a larger environment or a longer program path gets
+/// an anonymous mapping instead. They outlive the handler's scratch
+/// entry: the kernel reads them during the exec.
+const STACK_ENTRIES: usize = 128;
+const STACK_PROGRAM: usize = 1024 + 16;
 
-pub fn handle(number: u32, regs: &mut [u64; 31]) {
+pub fn handle(number: u32, regs: &mut [u64; 31], working: Working) {
     let (dirfd, path, argv, envp, flags) = if number == nr::EXECVE {
         (sys::AT_FDCWD, regs[0], regs[1], regs[2], 0usize)
     } else {
@@ -40,50 +44,81 @@ pub fn handle(number: u32, regs: &mut [u64; 31]) {
         argv as *const *const u8,
         envp as *const *const u8,
         flags,
+        working,
     );
 }
 
 #[inline(never)]
-fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *const u8, flags: usize) -> u64 {
+fn run(
+    dirfd: isize,
+    path: *const u8,
+    argv: *const *const u8,
+    envp: *const *const u8,
+    flags: usize,
+    mut working: Working,
+) -> u64 {
     let Some(translator) = config::translator() else {
         return sys::neg_errno(sys::ENOSYS);
     };
     let Some(given) = (unsafe { cstr_bounded(path, MAX_PATH) }) else {
         return sys::neg_errno(if path.is_null() { sys::EFAULT } else { sys::ENAMETOOLONG });
     };
-
-    // `guest` is what the child's loader will open (and record as the
-    // guest's executable); `host` is what the preflight checks here.
-    let mut guest = [0u8; MAX_PATH];
-    let mut host = [0u8; MAX_PATH];
-    let guest_len = match resolve(translator, dirfd, given, flags, &mut guest, &mut host) {
-        Ok(len) => len,
-        Err(errno) => return sys::neg_errno(errno),
-    };
-    if let Err(errno) = preflight(translator, host.as_ptr()) {
-        return sys::neg_errno(errno);
-    }
-
+    let config = config::get();
     let envc = count_pointers(envp);
     let needed = envc + ENGINE_KEYS.len() + 4;
     let mut on_stack = [core::ptr::null::<u8>(); STACK_ENTRIES];
+    let mut program_on_stack = [0u8; STACK_PROGRAM];
     let mut mapped: Option<(usize, usize)> = None;
-    let slots: &mut [*const u8] = if needed <= STACK_ENTRIES {
-        &mut on_stack[..needed]
-    } else {
-        let page = config::get().page_size.max(4096);
-        let len = (needed * 8).div_ceil(page) * page;
-        match sys::mmap(0, len, sys::PROT_READ | sys::PROT_WRITE, sys::MAP_PRIVATE | sys::MAP_ANONYMOUS, -1, 0) {
-            Ok(address) => {
-                mapped = Some((address, len));
-                // SAFETY: a fresh zeroed mapping of at least `needed` slots.
-                unsafe { core::slice::from_raw_parts_mut(address as *mut *const u8, needed) }
-            }
+    let (slots, program): (&mut [*const u8], &mut [u8]) = {
+        let scratch = working.get();
+        // `guest` is what the child's loader will open (and record as the
+        // guest's executable); `host` is what the preflight checks here.
+        let [guest, host, spare_a, spare_b] = &mut scratch.paths;
+        let guest_len = match resolve(translator, dirfd, given, flags, guest, host, spare_a, spare_b) {
+            Ok(len) => len,
             Err(errno) => return sys::neg_errno(errno),
+        };
+        if let Err(errno) = preflight(translator, host.as_ptr(), spare_a) {
+            return sys::neg_errno(errno);
         }
+        let entry_len = env::PROGRAM.len() + 1 + guest_len + 1;
+        let (slots, program): (&mut [*const u8], &mut [u8]) =
+            if needed <= STACK_ENTRIES && entry_len <= STACK_PROGRAM {
+                (&mut on_stack[..needed], &mut program_on_stack[..entry_len])
+            } else {
+                let page = config.page_size.max(4096);
+                let len = (needed * 8 + entry_len).div_ceil(page) * page;
+                match sys::mmap(0, len, sys::PROT_READ | sys::PROT_WRITE, sys::MAP_PRIVATE | sys::MAP_ANONYMOUS, -1, 0) {
+                    Ok(address) => {
+                        mapped = Some((address, len));
+                        // SAFETY: a fresh zeroed mapping holding `needed`
+                        // slots followed by `entry_len` bytes.
+                        unsafe {
+                            (
+                                core::slice::from_raw_parts_mut(address as *mut *const u8, needed),
+                                core::slice::from_raw_parts_mut((address + needed * 8) as *mut u8, entry_len),
+                            )
+                        }
+                    }
+                    Err(errno) => return sys::neg_errno(errno),
+                }
+            };
+        let mut writer = Writer::new(&mut *program);
+        if writer.push(env::PROGRAM.as_bytes()).is_err()
+            || writer.push(b"=").is_err()
+            || writer.push(&guest[..guest_len]).is_err()
+        {
+            release(mapped);
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        }
+        writer.finish();
+        (slots, program)
     };
+    // The scratch entry goes back before the exec: on success nothing
+    // runs afterwards to release it, and a vfork child shares the pool
+    // with its parent.
+    drop(working);
 
-    let config = config::get();
     let mut count = 0usize;
     let mut present = [false; ENGINE_KEYS.len()];
     for index in 0..envc {
@@ -110,19 +145,7 @@ fn run(dirfd: isize, path: *const u8, argv: *const *const u8, envp: *const *cons
             count += 1;
         }
     }
-    let mut program_entry = [0u8; MAX_PATH + 16];
-    {
-        let mut writer = Writer::new(&mut program_entry);
-        if writer.push(env::PROGRAM.as_bytes()).is_err()
-            || writer.push(b"=").is_err()
-            || writer.push(&guest[..guest_len]).is_err()
-        {
-            release(mapped);
-            return sys::neg_errno(sys::ENAMETOOLONG);
-        }
-        writer.finish();
-    }
-    slots[count] = program_entry.as_ptr();
+    slots[count] = program.as_ptr();
     count += 1;
     let mut identity_entry = [0u8; 16 + MAX_ENCODED];
     if config.fake_root {
@@ -186,6 +209,8 @@ fn resolve(
     flags: usize,
     guest: &mut [u8; MAX_PATH],
     host: &mut [u8; MAX_PATH],
+    dir_host: &mut [u8; MAX_PATH],
+    dir_guest: &mut [u8; MAX_PATH],
 ) -> Result<usize, i32> {
     if given.is_empty() {
         if flags & sys::AT_EMPTY_PATH == 0 {
@@ -201,11 +226,9 @@ fn resolve(
     }
     if !is_absolute(given) && dirfd != sys::AT_FDCWD {
         // Relative to a directory fd: anchor on the directory's guest path.
-        let mut dir_host = [0u8; MAX_PATH];
-        let dir_len = readlink_fd(dirfd, &mut dir_host)?;
-        let mut dir_guest = [0u8; MAX_PATH];
+        let dir_len = readlink_fd(dirfd, dir_host)?;
         let dir_guest_len = translator
-            .host_to_guest(&dir_host[..dir_len], &mut dir_guest)
+            .host_to_guest(&dir_host[..dir_len], dir_guest)
             .map_err(|_| sys::ENAMETOOLONG)?;
         let guest_len = {
             let mut writer = Writer::new(guest);
@@ -278,7 +301,7 @@ fn readlink_fd(fd: isize, out: &mut [u8; MAX_PATH]) -> Result<usize, i32> {
 }
 
 /// The checks the kernel would do before committing to the exec.
-fn preflight(translator: &Translator<'static>, host: *const u8) -> Result<(), i32> {
+fn preflight(translator: &Translator<'static>, host: *const u8, interpreter: &mut [u8; MAX_PATH]) -> Result<(), i32> {
     let mode = sys::stat_mode(sys::AT_FDCWD, host, 0)?;
     if mode & sys::S_IFMT != sys::S_IFREG {
         return Err(sys::EACCES);
@@ -294,8 +317,7 @@ fn preflight(translator: &Translator<'static>, host: *const u8) -> Result<(), i3
         let Some(script) = shebang::parse(head) else {
             return Err(sys::ENOEXEC);
         };
-        let mut interpreter = [0u8; MAX_PATH];
-        return match translator.guest_to_host(script.interpreter, &mut interpreter) {
+        return match translator.guest_to_host(script.interpreter, interpreter) {
             Ok(Translated::Host(_)) => {
                 sys::faccessat(sys::AT_FDCWD, interpreter.as_ptr(), sys::X_OK).map_err(|_| sys::ENOENT)
             }

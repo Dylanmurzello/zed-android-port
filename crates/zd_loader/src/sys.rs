@@ -55,6 +55,8 @@ pub const SIG_SETMASK: usize = 2;
 pub const SA_SIGINFO: u64 = 0x4;
 pub const SA_RESTART: u64 = 0x1000_0000;
 pub const SA_NODEFER: u64 = 0x4000_0000;
+pub const SA_ONSTACK: u64 = 0x0800_0000;
+pub const SS_DISABLE: i32 = 2;
 
 pub const PR_SET_NAME: usize = 15;
 pub const PR_SET_SECCOMP: usize = 22;
@@ -197,9 +199,29 @@ pub fn rt_sigaction(signal: usize, action: &KernelSigaction) -> Result<(), i32> 
     .map(|_| ())
 }
 
+/// Kernel `stack_t`.
+#[repr(C)]
+pub struct SigAltStack {
+    pub sp: u64,
+    pub flags: i32,
+    pub size: u64,
+}
+
+pub fn sigaltstack(new: Option<&SigAltStack>, old: Option<&mut SigAltStack>) -> Result<(), i32> {
+    let new = new.map_or(0, |stack| stack as *const SigAltStack as usize);
+    let old = old.map_or(0, |stack| stack as *mut SigAltStack as usize);
+    check(unsafe { syscall6(nr::SIGALTSTACK, new, old, 0, 0, 0, 0) }).map(|_| ())
+}
+
 pub fn rt_sigprocmask(how: usize, set: &u64) -> Result<(), i32> {
     check(unsafe { syscall6(nr::RT_SIGPROCMASK, how, set as *const u64 as usize, 0, 8, 0, 0) })
         .map(|_| ())
+}
+
+pub fn sched_yield() {
+    if let Err(_errno) = check(unsafe { syscall6(nr::SCHED_YIELD, 0, 0, 0, 0, 0, 0) }) {
+        // Nothing to yield to; the caller retries regardless.
+    }
 }
 
 pub fn prctl(option: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> Result<usize, i32> {

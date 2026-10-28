@@ -465,8 +465,9 @@ fn extract(
                 link_guest.push(b'/');
                 link_guest.extend_from_slice(relative.as_os_str().as_bytes());
                 let mut rewritten = [0u8; MAX_PATH];
+                let mut scratch = [[0u8; MAX_PATH]; 2];
                 let len = translator
-                    .rewrite_symlink_target(&link_guest, target.as_os_str().as_bytes(), &mut rewritten)
+                    .rewrite_symlink_target(&link_guest, target.as_os_str().as_bytes(), &mut rewritten, &mut scratch)
                     .map_err(|error| {
                         anyhow::anyhow!("symlink {} -> {}: {error:?}", relative.display(), target.display())
                     })?;

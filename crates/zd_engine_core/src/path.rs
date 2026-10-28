@@ -75,6 +75,12 @@ impl<'a> Writer<'a> {
         Self { out, len: 0 }
     }
 
+    /// Continue after `len` bytes already written to `out`.
+    pub fn resume(out: &'a mut [u8], len: usize) -> Self {
+        let len = len.min(out.len().saturating_sub(1));
+        Self { out, len }
+    }
+
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), PathError> {
         let end = self.len.checked_add(bytes.len()).ok_or(PathError::TooLong)?;
         // Leave room for the NUL a syscall-bound buffer needs.
@@ -238,6 +244,20 @@ pub fn strip_prefix<'p>(prefix: &[u8], path: &'p [u8]) -> Option<&'p [u8]> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resume_continues_after_the_prefix() {
+        let mut out = [0u8; 16];
+        out[..4].copy_from_slice(b"/usr");
+        let mut writer = super::Writer::resume(&mut out, 4);
+        writer.push_component(b"bin").unwrap();
+        let len = writer.finish();
+        assert_eq!(&out[..len], b"/usr/bin");
+        assert_eq!(out[len], 0);
+        let mut full = [0u8; 4];
+        let mut writer = super::Writer::resume(&mut full, 10);
+        assert!(writer.push(b"x").is_err());
+    }
+
     use super::*;
 
     fn clamp(path: &str) -> String {

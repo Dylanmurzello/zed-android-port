@@ -21,6 +21,7 @@ use zd_engine_core::path::{MAX_PATH, Writer};
 use crate::config::Global;
 use crate::load::close_quietly;
 use crate::log;
+use crate::scratch::Scratch;
 use crate::sys;
 
 const EIO: i32 = 5;
@@ -87,14 +88,28 @@ pub fn extra_links(ino: u64) -> u32 {
         .map_or(0, |entry| entry.1)
 }
 
-pub fn by_copy(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8, flags: usize) -> u64 {
-    match copy(old_dirfd, old, new_dirfd, new, flags) {
+pub fn by_copy(
+    old_dirfd: isize,
+    old: *const u8,
+    new_dirfd: isize,
+    new: *const u8,
+    flags: usize,
+    scratch: &mut Scratch,
+) -> u64 {
+    match copy(old_dirfd, old, new_dirfd, new, flags, scratch) {
         Ok(()) => 0,
         Err(errno) => sys::neg_errno(errno),
     }
 }
 
-fn copy(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8, flags: usize) -> Result<(), i32> {
+fn copy(
+    old_dirfd: isize,
+    old: *const u8,
+    new_dirfd: isize,
+    new: *const u8,
+    flags: usize,
+    scratch: &mut Scratch,
+) -> Result<(), i32> {
     // SAFETY: the kernel just read this path; it is NUL-terminated.
     let empty = flags & sys::AT_EMPTY_PATH != 0 && unsafe { *old } == 0;
     let follow = flags & sys::AT_SYMLINK_FOLLOW != 0;
@@ -108,7 +123,7 @@ fn copy(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8, flag
         // Only a regular file is opened: opening a fifo for reading would
         // wait for a writer, and the rest cannot be copied.
         match mode & sys::S_IFMT {
-            sys::S_IFLNK => return copy_symlink(old_dirfd, old, new_dirfd, new),
+            sys::S_IFLNK => return copy_symlink(old_dirfd, old, new_dirfd, new, &mut scratch.paths[2]),
             sys::S_IFIFO => return sys::mknodat(new_dirfd, new, sys::S_IFIFO | (mode & 0o7777), 0),
             sys::S_IFSOCK => {
                 return sys::renameat2(old_dirfd, old, new_dirfd, new, sys::RENAME_NOREPLACE);
@@ -119,7 +134,7 @@ fn copy(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8, flag
         let open_flags = if follow { 0 } else { sys::O_NOFOLLOW };
         sys::openat(old_dirfd, old, sys::O_RDONLY | sys::O_CLOEXEC | open_flags, 0)?
     };
-    let result = copy_open(source, new_dirfd, new);
+    let result = copy_open(source, new_dirfd, new, &mut scratch.bytes);
     close_quietly(source);
     result
 }
@@ -136,14 +151,19 @@ fn reopen(fd: i32) -> Result<i32, i32> {
     sys::openat(sys::AT_FDCWD, link.as_ptr(), sys::O_RDONLY | sys::O_CLOEXEC, 0)
 }
 
-fn copy_symlink(old_dirfd: isize, old: *const u8, new_dirfd: isize, new: *const u8) -> Result<(), i32> {
-    let mut target = [0u8; MAX_PATH];
+fn copy_symlink(
+    old_dirfd: isize,
+    old: *const u8,
+    new_dirfd: isize,
+    new: *const u8,
+    target: &mut [u8; MAX_PATH],
+) -> Result<(), i32> {
     let len = sys::readlinkat(old_dirfd, old, &mut target[..MAX_PATH - 1])?;
     target[len] = 0;
     sys::symlinkat(target.as_ptr(), new_dirfd, new)
 }
 
-fn copy_open(source: i32, new_dirfd: isize, new: *const u8) -> Result<(), i32> {
+fn copy_open(source: i32, new_dirfd: isize, new: *const u8, buffer: &mut [u8; 1024]) -> Result<(), i32> {
     let mut stat = [0u8; 128];
     sys::fstat_raw(source, &mut stat)?;
     let mode = word(&stat, 16);
@@ -158,7 +178,7 @@ fn copy_open(source: i32, new_dirfd: isize, new: *const u8) -> Result<(), i32> {
         permissions as usize,
     )?;
     let times = [long(&stat, 72), long(&stat, 80), long(&stat, 88), long(&stat, 96)];
-    let result = copy_contents(source, dest)
+    let result = copy_contents(source, dest, buffer)
         .and_then(|()| sys::fchmod(dest, permissions))
         .and_then(|()| sys::futimens(dest, &times))
         .and_then(|()| {
@@ -175,21 +195,20 @@ fn copy_open(source: i32, new_dirfd: isize, new: *const u8) -> Result<(), i32> {
     result
 }
 
-fn copy_contents(source: i32, dest: i32) -> Result<(), i32> {
+fn copy_contents(source: i32, dest: i32, buffer: &mut [u8; 1024]) -> Result<(), i32> {
     loop {
         match sys::sendfile(dest, source, 1 << 20) {
             Ok(0) => return Ok(()),
             Ok(_) => {}
-            Err(sys::EINVAL) | Err(sys::ENOSYS) => return copy_by_read(source, dest),
+            Err(sys::EINVAL) | Err(sys::ENOSYS) => return copy_by_read(source, dest, buffer),
             Err(errno) => return Err(errno),
         }
     }
 }
 
-fn copy_by_read(source: i32, dest: i32) -> Result<(), i32> {
-    let mut buffer = [0u8; 1024];
+fn copy_by_read(source: i32, dest: i32, buffer: &mut [u8; 1024]) -> Result<(), i32> {
     loop {
-        let count = sys::read(source, &mut buffer)?;
+        let count = sys::read(source, buffer)?;
         if count == 0 {
             return Ok(());
         }
