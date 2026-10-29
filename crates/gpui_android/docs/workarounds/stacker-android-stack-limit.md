@@ -47,6 +47,14 @@ thread), and stacker's own tests pass on the tablet.
 Linux, so gpui runs on `android_main`'s own stack until its recursion really
 gets deep.
 
+Measured on 2026-10-29 with scripted scrolling in landscape, three runs per
+scenario, medians: `stacker::_grow`, `mmap`, `munmap` and `mprotect` no longer
+appear on `android_main`, and dropping the previous frame's elements fell
+from 6.1% to 1.1% of its time. Scrolling down through new lines presented a
+frame every 14.2ms instead of 15.2ms, and 30% of frames made the next vsync
+instead of 19%. The thread's CPU time per frame didn't fall measurably (12.0
+to 12.5ms, within the spread of the runs).
+
 ## Failure mode if regressed
 
 If the patch is lost, for example when a stacker update replaces the pinned
