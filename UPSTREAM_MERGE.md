@@ -122,7 +122,7 @@ git checkout main && git merge --no-ff upstream-sync-YYYYMMDD
 ```
 
 Full `cargo ndk build` + `ANDROID_NDK_HOME=<ndk> gradle assembleRelease`
-(gradle's buildZdExec/buildAskpassHelper tasks shell out to cargo-ndk and
+(gradle's buildZdLoader/buildAskpassHelper tasks shell out to cargo-ndk and
 need the env var too), install on a device, and run a real smoke pass
 (render, terminal spawn, a git operation, an HTTPS fetch) before the next
 public release.
@@ -132,7 +132,7 @@ public release.
 Worst case: upstream renames or restructures a crate we modify. Two options:
 
 1. Re-port our patch to the new structure (preferred).
-2. Drop the patch if upstream's refactor obsoletes our need for it. Rare, but it happens. See e.g. how the files the app used to write into the bootstrap at startup moved into the [zdroid-bootstrap](https://github.com/ilkersigirci/zdroid-bootstrap) zip itself.
+2. Drop the patch if upstream's refactor obsoletes our need for it. Rare, but it happens.
 
 Either way: update the corresponding workaround doc under `crates/gpui_android/docs/workarounds/`.
 

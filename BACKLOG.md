@@ -56,12 +56,6 @@ External user tried to file these and was blocked by upstream Zed's `blank_issue
 - ~~**Vim mode broken**~~ — **fixed in 29b29ddd63** (key events now route from `ExtraWindowActivity` to gpui via `nativeOnExtraKeyEvent` JNI bridge; the root cause was that any extra window's `dispatchKeyEvent` was never forwarded so `PlatformInput::KeyDown` never fired). Vim and any other editor in a non-Main window now accepts typing.
 - ~~**Settings searchbar typing broken**~~ — **fixed in 29b29ddd63** (same key-routing fix, plus a tap-to-focus wrapper on the search bar with `stop_propagation` so taps don't bubble to `SettingsWindow`'s focus tracker which was immediately blurring the bar).
 
-## Runtime picker (resolved)
-
-Resolved by the rootfs engine (0.10.0): there is one runtime and nothing to pick. The Ubuntu base image is bundled in the APK and extracted on first launch, the essentials step runs in the background with a notification, and Settings → Android carries the reset and retry actions. The picker, the adapter trait and `zd-runtime.toml` are gone; see `crates/gpui_android/docs/workarounds/rootfs-engine-integration.md`.
-
-Settings search input was fixed in `29b29ddd63`, and text fields now request GPUI's virtual keyboard.
-
 ## Image paste into the agent panel doesn't work on Android
 
 **Repro:** copy an image to the Android clipboard (screenshot share-sheet "Copy to clipboard", or copy from Files / Gallery / a browser). Open the agent panel in Zdroid, focus the message editor, paste. Nothing happens. Text paste works fine.
@@ -108,17 +102,15 @@ Measured on 2026-10-29 on 0.9.21, scrolling a file in landscape with `adb shell 
 - **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
 - **`prompt_for_paths` ignores `PathPromptOptions`.** It always opens the SAF folder picker (`ACTION_OPEN_DOCUMENT_TREE`), so requests for files or multiple paths get a single folder.
 - **`reveal_path` and `open_with_system` are empty** in `platform.rs`, so "Reveal in file manager" and "Open with system app" do nothing.
-- **"Failed to run package-version-server" in the status bar.** Zed's JSON support downloads `package-version-server`, which adds version hints to `package.json`, and stops at "Running on unsupported os: android" (`languages/src/json.rs`, `NodeVersionAdapter`). Harmless, but shown whenever a JSON file opens. Fix: leave it out of the JSON language servers on Android.
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
 The Android audit, the review of that week's PR stack and the two upstream-divergence audits found these. They were only in session notes until 2026-10-28, when each was rechecked against the code.
 
 - **The keyboard button's state is guessed, not read.** `requestIme` in `MainActivity` and `ExtraWindowActivity` sets `imeShown` as soon as it calls `showSoftInput`, and `confirmImeShown` clears it again if the keyboard hasn't appeared after a delay. Android reports whether the keyboard is up in the insets both Activities already receive (`WindowInsetsCompat.isVisible(Type.ime())`): set `imeShown` only from the insets listener and drop the timer. Tablet check: show and hide the keyboard by tapping text, with Back and with the status bar button, in the main window and in Settings; the button and the programming extras row must always match the keyboard.
-- **The DNS file for Bun-based CLIs goes stale.** `dns_bridge::populate_resolv_conf` writes `/sdcard/.zed/r`, which the patched `claude` and `codex` read instead of `/etc/resolv.conf`, once at startup (`lib.rs`), right after the asynchronous storage-permission request. On first launch it usually fails for lack of that permission, and it's never rewritten when the network changes, so those CLIs keep the previous network's resolver. Fix: rewrite it from `ConnectivityManager.registerDefaultNetworkCallback` (`onLinkPropertiesChanged`) and once the storage permission is granted. Tablet check: with Zdroid running, move from Wi-Fi to a phone hotspot, then run `claude` in the terminal.
 - **Extra windows return from `surfaceDestroyed` before the renderer stops.** `ExtraWindowActivity`'s `surfaceDestroyed` only queues `nativeOnExtraSurfaceDestroyed` (`multi_window.rs`), so gpui can still present to a surface Android has destroyed, which the `SurfaceHolder` contract forbids (`NativeBridge.kt` says Rust must stop inside the callback); wgpu then reports errors to its uncaptured-error handler. Fix: block, with a timeout, until the gpui thread confirms the detach, and handle that event in `create_extra_window_blocking`'s wait loop so the two can't deadlock. Tablet check: in DeX, minimize and restore the Settings window repeatedly and look for wgpu errors in logcat.
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
-- **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames zd-exec for keeping stdout open: fix that in zd-exec, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
+- **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames the engine loader for keeping stdout open: check whether that still holds, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
 ## 0.10.0 device checks
 
@@ -128,7 +120,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - Android's prompts: All files access opens once, the notification permission is asked when the runtime service first starts, and no "built for an older version" warning shows at install.
 - Terminal: `apt update && apt install -y build-essential`, `cd ~/projects/<project> && pwd -P` prints the `/data/user/0/...` path, `ssh` to a host with a key from `~/.ssh`.
 - rust-analyzer installed with rustup in a Rust project under `~/projects`: diagnostics, go to definition, and `cargo build` in the terminal, timed against 0.9.23 on the same project; the same for `git status` in a large repository.
-- An SSH remote project, with a password prompt (the async-task waker fix) and with a key.
+- An SSH remote project from a new connection, with a password prompt (the async-task waker fix) and with a key: the terminal and an agent thread start on the remote.
 - Claude Agent and Codex in the agent panel, locally and on a remote; Zed's own agent through the LiteLLM endpoint.
 - The debugger: a CodeLLDB breakpoint in a Rust binary.
 - Background: with a terminal open, the runtime notification shows and leaves 30 s after the last terminal closes; Keep Running in Background keeps it with no terminal, and its Stop action turns that off; Keep Awake keeps a `sleep 600; date` running with the screen off; Quit and a Recents swipe leave no process behind (`adb shell ps -A | grep com.zdroid`).
@@ -136,45 +128,8 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - Settings → Android → Reset Runtime: apt packages are gone, `~/.bash_history` and the links stay.
 - A language server killed with `kill` from the terminal restarts with the "exited; restarted (1/3)" toast.
 - The in-app update from 0.10.0 to the next release (the updater at targetSdk 35).
-
-## 0.9.21 device checks
-
-0.9.21 merges Zed v1.26.2. Zed now reads an SSH remote's environment by piping its script to `sh -s` over ssh's stdin instead of passing it as an argument. Check:
-
-- Open an SSH project from a new connection: it connects, and the terminal and an agent thread start on the remote.
-
-## 0.9.20 device checks
-
-0.9.20 removes a closed extra window's card from Recents. Check in DeX or desktop windowing:
-
-- Close Settings and the runtime picker with the window's X, with Back and with Ctrl+W: none leaves a card in Recents.
-- Tapping a leftover card from an older version removes it instead of opening an empty window.
-
-## 0.9.19 device checks
-
-0.9.19 installs the latest release of Zdroid's fork of Bootstrap, checked against the SHA-256 GitHub records for it, adds the picker's **Download from** field and **Reinstall**, and gives the whole app Bootstrap's CA bundle. That fork's releases since `v2026.05.06-r6` keep apt working through `pkg upgrade` ([zdroid-bootstrap#1](https://github.com/Dylanmurzello/zdroid-bootstrap/issues/1)); `ilkersigirci/zdroid-bootstrap`'s test workflow checks that in Termux's Docker image, which runs Termux's binaries with Android's linker. Check on the tablet:
-
-- On a fresh install, `npm install -g @anthropic-ai/claude-code @openai/codex` installs both CLIs' native binaries: `claude --version` and `codex --no-daemon --version` work. Then, with no `agent_servers` settings, after a restart, a Claude Agent thread answers. Codex passed this on 2026-10-28 (installed with `npm_config_os=linux`, which r7's npm wrapper now sets).
-- On a fresh install (or another device), the Bootstrap card shows **Download from** with `ilkersigirci/zdroid-bootstrap`, and Install succeeds; the log shows "verified bootstrap-aarch64.zip" with the SHA-256 GitHub recorded, and the card then shows "Installed: <the latest tag> from ilkersigirci/zdroid-bootstrap". An existing install shows only its tag. Typing `Dylanmurzello/zdroid-bootstrap` installs his latest release instead, and a typo shows the field's error.
-- With Bootstrap installed, **Reinstall** shows **Download from** and a warning; **Delete and reinstall** replaces the runtime: packages installed since are gone, the home folder and runtime choice stay, the banner asks for a restart, and after it the terminal works. **Cancel** changes nothing.
-- After a reinstall, `pkg update && pkg upgrade` (with `apt --fix-broken install` when apt asks for it, then `pkg upgrade` again) keeps apt working: `pkg install jq` and `jq --version` succeed afterwards.
-- rust-analyzer's first `cargo metadata` in a new project downloads the crates.io index without a certificate error.
-
-## 0.9.18 device checks
-
-0.9.18 moved the Android spawn hooks out of Zed's crates into `zdroid_hooks` and trimmed the Settings and welcome page edits. Check on the tablet, with Bootstrap and with the chroot:
-
-- The terminal opens in the runtime's home with its PATH; `git status`, a language server and `npm install` of a package with native binaries work in a project under `~/projects`, and a language server starts for a project on shared storage.
-- Settings has one **Android** page with the runtime picker, the keyboard toggles and the trackpad and mouse toggles; **Open picker** opens the runtime picker.
-- Settings → General shows **Auto Update**, which the in-app updater honors, and still no Privacy section. Toggling Auto Update writes `auto_update` to settings.json.
-- The welcome page lists recent projects in one list, under "Welcome back to Zdroid".
-
-## 0.9.17 device checks
-
-The 2026-10-28 audit (0.9.17) changed these paths without a device test:
-
-- Bootstrap: open an existing project; terminal, git, LSP startup, a task, and an `npm install` of a package with native binaries (npm's `--libc=musl` now applies only under Bootstrap, not chroot).
-- Runtime picker: switch runtimes and back with a customized `zd-runtime.toml` (settings must survive); a failed or offline Bootstrap install must leave an error in the picker; a saved External Termux selection must be replaceable from the picker.
+- Settings → Android shows Runtime (Reset Runtime, Install Essentials), Storage and Background (Allow Access to /sdcard, Allow Background Activity, Keep Awake) and the keyboard and trackpad toggles; Settings → General shows **Auto Update**, which the in-app updater honors.
+- In DeX or desktop windowing, close Settings with the window's X, with Back and with Ctrl+W: none leaves a card in Recents.
 - Shared-storage import: import a project, cancel one mid-copy, import the same project twice, and close the dialog during a copy (closing cancels it). No partial tree may open, and existing projects must stay untouched.
 - Native AI: a fresh agent panel shows the API-key setup without Zed sign-in or trial prompts; the LLM Providers page lists no Ollama, LM Studio or llama.cpp; configure an OpenAI-compatible model, stream a reply with a tool call, run an inline edit, restart and check the key is still there.
 - Keyboard-cover trackpad: quick two-finger taps still right-click, slow two-finger scrolls don't, and the cursor captures and releases in the main and extra windows.

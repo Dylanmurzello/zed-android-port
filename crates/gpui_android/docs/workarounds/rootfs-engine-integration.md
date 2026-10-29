@@ -10,10 +10,7 @@ Zed spawns tools the way a desktop does: `Command::new("rust-analyzer")`
 resolved on PATH, or an absolute path under its data dir for the Node and
 language servers it downloads itself. On Android the editor is a bionic
 process in an app sandbox, and the tools are Linux binaries that expect
-glibc, `/usr`, `/etc` and a root user. Three earlier adapters (a
-Termux-style bootstrap of patched packages, a Magisk chroot daemon, an
-intent bridge to the Termux app) each covered part of that and none of
-it cleanly.
+glibc, `/usr`, `/etc` and a root user.
 
 ## Constraint
 
@@ -74,7 +71,7 @@ writeup is the editor side.
   uses. Binding `/root` to the home folder instead would make the
   engine's longest-prefix reverse lookup report `/root/projects/...`,
   which the editor can't match to its worktrees.
-- **Upgrades from the adapter era.** Boot deletes the old bootstrap prefix
+- **Upgrades from Bootstrap and chroot releases.** Boot deletes the old bootstrap prefix
   (`<data>/files/usr`), the `bin/zd-exec` binary and the adapter
   selection file; the chroot-era editor state under `home/.zed-env` is
   the user's own settings and is left alone. Farm entries that still
@@ -89,11 +86,6 @@ was a choice with one option. The image is a tenth of the APK, and an
 APK that is complete offline needs no install UI at all. Extraction
 cannot be skipped: the engine needs real files for the kernel to open and
 mmap, an archive cannot be executed in place.
-
-A selection file and a provider trait were the adapter era's shape. With
-one runtime every value in the file is a constant, so the file, the
-`RuntimeId`, the picker and the "legacy type" handling went with the
-adapters; the only state is whether the sentinel exists.
 
 ## Failure mode
 

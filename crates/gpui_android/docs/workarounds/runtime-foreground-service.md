@@ -13,8 +13,6 @@ Once the app is cached (not visible, no foreground service) the phantom
 process killer stops them, and the low-memory killer takes the app early.
 A Rust project left indexing while the user reads a browser tab came back
 to a dead rust-analyzer; a long build in the terminal died with the shell.
-The chroot adapter never saw this: its children were forked by the root
-daemon, outside the app's cgroup. The rootfs engine's children are ours.
 
 Nothing reaped them either. Quit runs `std::process::exit`, which skips
 destructors, and a task swiped away in Recents goes through
@@ -112,10 +110,10 @@ an app put to sleep there loses its children regardless of the service.
 the app asks with a real dialog the first time the service starts; if the
 user denies it the service still runs, only the notification is hidden
 (the app then appears under Active apps in the notification shade
-instead). The targetSdk 28 builds never got a dialog on One UI 8.
+instead).
 
 ## See also
 
 - `android-lsp-auto-restart.md` for what happens when a server dies anyway
-- `targetsdk-28-execve.md`: the pin that was lifted; the service type and
+- `extract-native-libs-loader.md`: why targetSdk is 35; the service type and
   `FOREGROUND_SERVICE_SPECIAL_USE` are enforced from targetSdk 34 and declared

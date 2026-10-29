@@ -191,7 +191,7 @@ The same workflow checks formatting (`cargo fmt --all`, which covers the fork's 
 2. Install it over the current release. Same package and key means it installs as an update and keeps your data.
 3. Keep `versionCode` in mind. Android refuses to install a lower `versionCode` over a higher one without uninstalling, which deletes the app's data. Bump the version in the pull request itself, so the test build and the release made from it share a `versionCode` and the release installs cleanly over the test build.
 
-Test builds can't use a separate package name such as `com.zdroid.dev` to install side by side: the Bootstrap userland has `/data/data/com.zdroid` compiled into its binaries, so terminal, git and `pkg` would break.
+Test builds can't use a separate package name such as `com.zdroid.dev` to install side by side: the release's document provider (`com.zdroid.documents`) would clash, and the runtime binds `com.zdroid`'s data paths into its guest.
 
 To verify a downloaded APK:
 

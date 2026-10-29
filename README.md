@@ -108,7 +108,7 @@ A userland chroot without root or ptrace: the kernel only ever execs a 500 KB st
 
 ## <img src="https://api.iconify.design/lucide:download.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Install
 
-Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/Dylanmurzello/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
+Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/ilkersigirci/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
 
 ### First launch
 
@@ -143,7 +143,7 @@ Go comes from the official `linux-arm64` tarball unpacked into `/usr/local`; gop
 
 Two storage realms underneath, with different exec rules.
 
-`/data/data/com.zdroid/files/` (surfaced as `~/`) is **exec-mounted**. cargo, go, node, anything you build can `execve` and run. This is where projects should live. `~/projects/<name>` is the default workspace root; `ZedDocumentsProvider` exposes `~/` to other Android apps via the SAF sidebar (look for **Zdroid** in any system file picker).
+`/data/data/com.zdroid/files/` is **exec-mounted**. cargo, go, node, anything you build can run there. This is where projects should live: `files/home/projects/<name>`, which the terminal reaches as `~/projects/<name>`, is the default workspace root. `ZedDocumentsProvider` exposes `files/home` to other Android apps via the SAF sidebar (look for **Zdroid** in any system file picker).
 
 `/storage/emulated/0/` (a.k.a. `/sdcard/`) is **FUSE-mounted with `noexec`**. Read, edit, and save all work; the kernel refuses to execute binaries written here. `cargo run` against a binary under `/sdcard/...` returns `EACCES` and there's no remount workaround (see [`docs/workarounds/android-noexec-mount.md`](crates/gpui_android/docs/workarounds/android-noexec-mount.md) for why).
 

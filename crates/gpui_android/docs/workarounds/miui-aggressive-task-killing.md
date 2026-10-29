@@ -10,9 +10,8 @@ On Xiaomi devices running MIUI / HyperOS, opening Zed and then either
 firing the SAF picker (`Open` menu), tapping any system dialog
 (permission prompt, picker), or pressing Home backgrounds Zed and the
 OS kills the process within seconds. Returning to Recents shows the
-Zed card, but tapping it cold-restarts the whole Termux bootstrap
-because the process was killed — the user perceives this as "the app
-just exits".
+Zed card, but tapping it cold-starts the app again because the process
+was killed — the user perceives this as "the app just exits".
 
 logcat from the device confirms the cause:
 
@@ -42,10 +41,10 @@ the per-app battery settings.
 This affects every Android app, not just ours. It's particularly
 disruptive for Zed because:
 
-1. The Termux bootstrap takes ~5–30s to extract on first cold boot,
-   and re-launching after a kill goes through that same boot path
-   (the bootstrap *files* persist, but the process doesn't, so we
-   re-set up env / re-attach JNI / etc.).
+1. Re-launching after a kill goes through the whole boot path again
+   (the runtime's files persist, but the process doesn't, so we re-set
+   up env / re-attach JNI / reopen the workspace), and the language
+   servers and terminals it ran are gone.
 2. The SAF picker spawning is enough to background us (DocumentsUI
    is in another process), so MIUI kills us mid-pick.
 

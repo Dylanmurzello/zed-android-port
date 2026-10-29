@@ -43,4 +43,3 @@ Runtime > Allow access to /sdcard. The SAF picker and projects under
 
 - `android-noexec-mount.md`: why builds cannot run from `/sdcard` even
   with access
-- `targetsdk-28-execve.md`

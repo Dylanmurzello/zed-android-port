@@ -89,9 +89,9 @@ it in the picker.
    exhaust the 50-result cap on a top-down walk before reaching real
    source. Skipped only during recursive search (root-anchored walk);
    users can still navigate into them via `queryChildDocuments`.
-3. **Bootstrap-pre-extract guard.** Termux assumes `$HOME` always
-   exists (its bootstrap-extractor runs at app first-launch from an
-   Activity, and queries land after Activity startup). Ours doesn't:
+3. **Missing-home guard.** Termux assumes `$HOME` always exists (its
+   first-launch setup runs from an Activity, and queries land after
+   Activity startup). Ours doesn't:
    ContentProviders attach earlier than Activities (see below). We
    defend with `if (!baseDir.isDirectory) return emptyCursor`, plus a
    `mkdirs()` in `ZedApplication.onCreate` so `~` always exists pre-
@@ -109,9 +109,9 @@ When another app opens DocumentsUI and Zed isn't running:
 5. System services queries
 
 `MainActivity` is **never instantiated** in this path. `android_main`
-never runs. The Termux-bootstrap extractor lives there and so do our
-env-setup `std::fs::create_dir_all(&home)` calls. So a cold provider
-query finds no `~` dir.
+never runs. The runtime setup lives there and so do our env-setup
+`std::fs::create_dir_all(&home)` calls. So a cold provider query finds no
+`~` dir.
 
 If `queryRoots` returns empty here, the user sees "Zed" in the SAF
 sidebar with a blank inside on tap — and on some Android versions the
@@ -143,8 +143,7 @@ Standard pattern.
 
 Verified end-to-end: Files-app's "Open from" picker shows "Zed" in the
 sidebar with subtitle "Zed home directory". Tapping it lists `~`
-contents (visible: hook-test, musl-extract, projects, storage,
-test-execable, plus a few non-hidden files). Standard SAF actions
+contents (visible: projects, storage, plus any non-hidden files). Standard SAF actions
 (navigate, "Use this folder", create folder) all wired.
 
 ## Failure mode if regressed

@@ -159,7 +159,7 @@ gh release create "$VERSION" \
   "/tmp/zdroid-release-build/Zdroid-${VERSION#v}.apk"
 ```
 
-`--latest` is intentional — every new release should be the latest entry on the public page. The bootstrap and spawnd assets of the adapter era stay published as pre-releases for history; nothing new is hosted besides the APK.
+`--latest` is intentional — every new release should be the latest entry on the public page. Nothing is hosted besides the APK.
 
 ### 8. Verify the public release works for anonymous users
 

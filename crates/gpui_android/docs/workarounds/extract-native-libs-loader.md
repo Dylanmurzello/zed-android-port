@@ -32,7 +32,7 @@ nothing persistent may embed it.
   inside the loader window, under 1 MiB), and `stageZdLoaderJniLib` copies
   the binary to `jniLibs/arm64-v8a/libzdload.so`. `preBuild` depends on it.
 - `MainActivity.nativeLibraryDir()` exposes the directory to Rust;
-  `zd_exec_install::loader_path` joins the loader name and boot logs the
+  `runtime_links::loader_path` joins the loader name and boot logs the
   result.
 
 ## Why this works
@@ -53,5 +53,4 @@ task strips the variable for that reason.
 
 ## See also
 
-- [`targetSdk=28` for execve from /data/data](targetsdk-28-execve.md)
-- [Runtime config location + not-configured state](runtime-config-migration.md)
+- [Rootfs engine integration](rootfs-engine-integration.md)
