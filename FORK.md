@@ -108,7 +108,9 @@ Fork-specific changes to keep while resolving:
   - his app code to the app's copies of Zed's startup code (`src/zed.rs`, `src/lib.rs`).
 - The guest's home is the app's home folder (`files/home`), not his `/root`: `guest_env_spec`, `guest_path` and `binary_dirs` in `crates/zdroid_runtime/src/runtime.rs`, and `seed`/`seed_home` in `install.rs`. The editor's `HOME` is the same folder, not his files dir (`baseline_env` in `env.rs`).
 - Installs from before 0.10 aren't migrated: `runtime_setup::open_clean_start` asks to clear the data instead of his `sweep_previous_runtimes`.
-- Dylan's engine crates, `crates/zd_engine_core` and `crates/zd_loader`, are unformatted, and their `rustfmt.toml` keeps CI's format check off them. Take his versions as they are.
+- Dylan's engine crates, `crates/zd_engine_core` and `crates/zd_loader`, are unformatted, and their `rustfmt.toml` keeps CI's format check off them. Take his versions as they are, except for two fixes the fork made and sent to him, which his next version may carry in his own form:
+  - a guest's `execve` passes its signal mask to the new image as `ZD_SIGMASK`, which `main.rs` applies before the jump (exec'd programs started with every signal blocked);
+  - the refusal log reads the call's own `x0`, kept before dispatch (it dereferenced the `-errno` result).
 - `async-task` isn't vendored: the revision Zed pins has his fix.
 
 ## Contributing to Dylan's repo
