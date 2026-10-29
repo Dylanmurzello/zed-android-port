@@ -120,6 +120,7 @@ Fork-specific changes to keep while resolving:
 - the APK workflow and Dependabot: `.github/workflows/zdroid_apk.yml`, `.github/dependabot.yml`
 - the release notes files: `.github/release/`, `.github/scripts/zdroid-release-notes.js`
 - this file, the "Zdroid fork" section at the top of `.rules`, and the references to this file elsewhere
+- the "Zdroid fork" section at the top of `README.md`, down to the line under which Dylan's README starts
 - `versionCode`/`versionName`: `main` keeps Dylan's, for him to bump when he releases
 
 To update it after a release, merge `zdroid` into `main`, keeping that list out (add to the list when the fork gains another file of its own):
@@ -127,10 +128,11 @@ To update it after a release, merge `zdroid` into `main`, keeping that list out 
 ```sh
 git checkout main
 git merge zdroid    # modify/delete conflicts in the files above: keep them deleted;
-                    # build.gradle.kts: take zdroid's file with main's version numbers
+                    # build.gradle.kts: take zdroid's file with main's version numbers;
+                    # README.md, a conflict in its fork section: keep main's side
 git rm -r --ignore-unmatch .github/workflows/zdroid_apk.yml .github/dependabot.yml \
   .github/release .github/scripts/zdroid-release-notes.js FORK.md
-# remove the "# Zdroid fork" section from .rules, and `git grep FORK.md` for new references
+# remove the "# Zdroid fork" sections from .rules and the top of README.md, and `git grep FORK.md` for new references
 git commit
 git diff zdroid main --stat    # only the files above and the version numbers
 git push origin main           # updates the pull request on Dylan's repository
