@@ -11,3 +11,4 @@
 - A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints). Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
 - In the terminal, run Codex as `codex --no-daemon`: its background server sandboxes itself with bubblewrap, which Android doesn't allow in an app.
+- Google Antigravity's agent runs on SSH remotes but not locally, where it stops with a tcmalloc out-of-memory error. Its memory allocator needs a 48-bit address space, and Android kernels built for 39-bit addresses, such as the Galaxy Tab S9 Ultra's, don't have one.
