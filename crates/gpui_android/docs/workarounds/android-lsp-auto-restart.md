@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunk 4a
-**Files:** `crates/project/src/lsp_store.rs` (`watch_language_server_process`, `on_language_server_process_exit`, `language_server_exits`)
+**Files:** `crates/gpui_android/examples/zed_android/src/lsp_watchdog.rs`
 
 ## Problem
 
@@ -30,7 +30,7 @@ Android only. When a server reaches `LanguageServerState::Running`,
 `/proc/<pid>/stat` every three seconds (the pid is the `Child`'s and, since
 the loader execs the guest in place, the server's). A missing entry or a
 zombie state means the process is gone; the task then calls
-`on_language_server_process_exit`, which checks the server is still the
+`on_exit`, which checks the server is still the
 registered one (the same `Arc`, not a successor), collects the buffers
 opened in it, and runs the same path as the manual action:
 `restart_language_servers_for_buffers` with the server's name. The toast
@@ -40,19 +40,28 @@ The budget is three restarts per server name in a sliding ten minute
 window. The fourth death inside the window stops the server through the
 normal stop path, marks the name stopped (so opening another buffer does
 not start it again), and toasts the two hints: Keep Awake under Settings >
-Android Runtime, or the battery exemption. The manual restart clears the
+Android, or the battery exemption. The manual restart clears the
 stopped mark as it always did.
 
 A death with no buffers open in the server is not restarted, only
-cleaned up.
+cleaned up: a restart with no buffers removes it, and it starts again
+when a buffer needs it.
+
+The watchdog lives in the app and uses only `LspStore`'s public API: it
+watches the servers `LspStoreEvent::LanguageServerAdded` announces for
+local projects, finds a server's buffers with
+`language_server_ids_for_opened_buffer`, and restarts or stops it with
+`restart_language_servers_for_buffers` and
+`stop_language_servers_for_buffers`. The poll runs on a background
+thread, so a live server never wakes the main loop.
 
 ## Why not the obvious fix
 
 Polling `/proc` instead of reading stdout EOF: the EOF is seen inside
 `lsp.rs` (`handle_incoming_messages`), an upstream file this fork does not
 otherwise patch, and exposing it means a new callback on `LanguageServer`.
-One `stat` read per server every three seconds costs nothing and keeps the
-change inside `lsp_store.rs`, which the fork patches anyway.
+One `stat` read per server every three seconds costs nothing and keeps
+Zed's crates unchanged.
 
 ## Failure mode
 
@@ -65,4 +74,5 @@ the runtime notification and the battery exemption.
 ## See also
 
 - `runtime-foreground-service.md` for why servers die in the background
-- `UPSTREAM_MERGE.md`, "Files we modify in-place" (`lsp_store.rs`)
+- Dylan's port keeps the same logic in `lsp_store.rs`; this fork moved it
+  into the app so Zed merges don't touch it

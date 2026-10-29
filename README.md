@@ -7,7 +7,7 @@ This repository is a fork of [Dylanmurzello/zed-android-port](https://github.com
 Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilkersigirci/zed-android-port/releases/latest). After that, Zdroid updates itself from the title bar.
 
 > [!IMPORTANT]
-> - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the Bootstrap runtime and its home folder.
+> - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the runtime and its home folder.
 > - Release builds are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
 
 Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
@@ -25,7 +25,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 
 **AI**
 
-- The Agent Panel runs ACP agents such as Claude Code, Codex and Antigravity, on SSH remotes and, after [installing their CLIs](#setting-up-your-shell-environment-bootstrap), locally under Bootstrap. Keep and Reject buttons review their edits.
+- The Agent Panel runs ACP agents such as Claude Code, Codex and Antigravity, locally in the Ubuntu runtime and on SSH remotes. Keep and Reject buttons review their edits.
 - Zed's own agent and inline assistant work with your API keys: hosted providers such as Anthropic, OpenAI, Google and OpenRouter, and OpenAI-compatible endpoints ([details](#ai)).
 - The screen stays on while an agent works.
 
@@ -44,15 +44,20 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 
 **Battery and size**
 
-- **Zdroid → Keep Running in Background** (optional) keeps terminals, SSH sessions and agents alive, with an ongoing notification that has a Stop action.
+- Language servers, terminals and SSH sessions keep running in the background while they exist, through a foreground service with an ongoing notification. **Zdroid → Keep Running in Background** keeps the app running without them too, for Zed's own agent, and **Settings → Android → Keep Awake** keeps builds going with the screen off.
 - Zdroid draws frames only when something changes and does less work in the background, so it uses much less battery while idle.
 - Zed's release size settings, link-time optimization and packed relocations cut about 110 MB from the APK.
 
 **Runtime and SSH**
 
-- Bootstrap installs from Zdroid's fork, [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap), or another repository you enter. The download is checked against the SHA-256 GitHub records, a dropped connection doesn't hang the install, and **Reinstall** moves to a newer release while keeping your home folder. `pkg upgrade` no longer breaks apt.
+- Dylan's Ubuntu runtime and engine (his 0.4.0), merged into Zed's current release, with:
+  - language servers, debug adapters, Node and ACP agents that Zed downloads picking their Linux builds, the agent registry's included;
+  - the SSH client installed on first launch, next to git and the CA certificates;
+  - the home folder (`/root`) kept by **Reset Runtime**, with links to `~/projects`, `~/storage` and what a Bootstrap home held (SSH keys, git config, Claude Code and Codex logins);
+  - the runtime's DNS servers following Android's when the network changes;
+  - a language server that Android stops restarted, up to three times in ten minutes.
+- The debugger, with CodeLLDB.
 - SSH remotes download the remote server that matches Zdroid's Zed version, and remote terminals use the remote's own shell.
-- The External Termux placeholder, which never ran anything, is gone.
 
 **Updates, data and security**
 
@@ -194,9 +199,9 @@ The editor is bionic-linked and runs as the Android app process. Every subproces
 
 How that is possible without root: a distro binary bakes `/usr`, `/lib` and `/etc` into its rodata and its `PT_INTERP`, and no app-writable Android path is that short, so the rewrite cannot happen in the file. It happens at the syscall. The kernel only ever execs `libzdload.so`, a static loader that maps the Ubuntu binary and glibc's own `ld.so`, installs a seccomp filter that traps the path syscalls (`openat`, `execve`, `stat`, `readlink`, `bind` and the rest) and translates the guest path into the rootfs from an in-thread SIGSYS handler, then re-issues the syscall from inside the loader's own text, which the filter lets through. That is proot's idea driven by the kernel's trap instead of a second process and ptrace: three microseconds per translated path syscall instead of two cross-process stops, static binaries run, and real `ptrace` stays free, so gdb, lldb and strace work inside. The same handler answers the syscalls Android's own app filter refuses (`rseq`, `set_robust_list`, the termios2 ioctls, hard links on app data, netlink audit), which is why unmodified glibc, apt and dpkg run at all. Writeups: [`rootfs-engine-integration.md`](crates/gpui_android/docs/workarounds/rootfs-engine-integration.md), [`rootfs-guest-env.md`](crates/gpui_android/docs/workarounds/rootfs-guest-env.md).
 
-Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is `/root`, which is the app's home folder (`~/projects` and the `~/storage` links live there, and it survives a reset), the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
+Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is `/root`, which survives a reset and links to `~/projects`, `~/storage` and what a Bootstrap home held (SSH keys, git config, Claude Code and Codex logins), the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
 
-Background survival: a foreground service holds the process out of Android's cached state while a language server or terminal is alive, children are reaped when you quit or swipe the task away, and a language server killed from outside is restarted up to three times in ten minutes before it stays stopped with a hint. **Keep Awake** in Settings → Android Runtime adds a wake lock so builds continue with the screen off. The device-wide phantom process cap (32 on Android 12+) cannot be lifted from an app; Android 14+ has a Developer Options toggle, and over adb `settings put global settings_enable_monitor_phantom_procs false`.
+Background survival: a foreground service holds the process out of Android's cached state while a language server or terminal is alive (always, with **Zdroid → Keep Running in Background**), children are reaped when you quit or swipe the task away, and a language server killed from outside is restarted up to three times in ten minutes before it stays stopped with a hint. **Keep Awake** in Settings → Android adds a wake lock so builds continue with the screen off. The device-wide phantom process cap (32 on Android 12+) cannot be lifted from an app; Android 14+ has a Developer Options toggle, and over adb `settings put global settings_enable_monitor_phantom_procs false`.
 
 Not in the engine: SysV IPC (PostgreSQL), 32-bit guests, mount or user namespaces. `/proc/self/maps` and `mountinfo` still show host paths.
 

@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** targetSdk 35 bump (2026-10-28)
-**Files:** `crates/zdroid_runtime/src/runtime.rs` (`kernel_data_path`, `bind_spec`), `crates/gpui_util/src/lib.rs` (`register_files_dir_spellings`, `respell_kernel_path`, `env_root_program_path`), `crates/util/src/env.rs`, `crates/fs/src/fs.rs` (`RealFs::canonicalize`), `crates/paths/src/paths.rs` (`set_custom_data_dir`), `examples/zed_android/src/lib.rs` (boot)
+**Files:** `crates/zdroid_runtime/src/runtime.rs` (`kernel_data_path`, `bind_spec`), `crates/zdroid_hooks/src/zdroid_hooks.rs` (`register_files_dir_spellings`, `respell_kernel_path`, `environment_root_program`), `crates/fs/src/fs.rs` (`RealFs::canonicalize`), `crates/paths/src/paths.rs` (`set_custom_data_dir`), `examples/zed_android/src/lib.rs` (boot)
 
 ## Problem
 
@@ -46,7 +46,7 @@ One spelling per side, translated at the boundary:
   under a project then prints the spelling Zed passed.
 - The editor keeps `/data/user/0`. `set_custom_data_dir` does not
   canonicalize on Android, and `RealFs::canonicalize` replaces the
-  kernel's prefix with the editor's (`gpui_util::respell_kernel_path`,
+  kernel's prefix with the editor's (`zdroid_hooks::respell_kernel_path`,
   registered at boot from `Runtime::kernel_data_path`). Worktree roots,
   the trust store and recents keep their spelling across the upgrade.
 - The spawn bridge re-spells a program path before its prefix check, for
@@ -63,5 +63,5 @@ calls are the suspects.
 ## See also
 
 - `rootfs-guest-env.md`: the bindings
-- `crates/util/src/path_equivalence.rs`: inode-based comparison for
+- `zdroid_hooks::strip_prefix_by_identity`: inode-based comparison for
   places that compare paths rather than translate them

@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunks 0 to 4
-**Files:** `crates/zdroid_runtime/src/{runtime,install,env}.rs`, `crates/zdroid_runtime/rootfs-image.properties`, `crates/gpui_android/src/runtime_links.rs`, `crates/gpui_util/src/lib.rs` (`BRIDGE_PROGRAM`, `env_root_program_path`), `crates/util/src/command.rs`, `crates/gpui_android/examples/zed_android/src/{lib,runtime_setup}.rs`, `android/app/build.gradle.kts` (`fetchRootfsImage`, `stageRootfsAsset`), `crates/settings_ui/src/page_data.rs` (Android Runtime page)
+**Files:** `crates/zdroid_runtime/src/{runtime,install,env}.rs`, `crates/zdroid_runtime/rootfs-image.properties`, `crates/gpui_android/src/runtime_links.rs`, `crates/zdroid_hooks/src/zdroid_hooks.rs` (`BRIDGE_PROGRAM`, `environment_root_program`), `crates/gpui_android/examples/zed_android/src/{lib,runtime_setup}.rs`, `android/app/build.gradle.kts` (`fetchRootfsImage`, `stageRootfsAsset`), `crates/settings_ui/src/page_data/android.rs` (Android page)
 
 ## Problem
 
@@ -56,15 +56,24 @@ writeup is the editor side.
   so `apt install` or `cargo install` lands on Zed's PATH within seconds.
   The loader runs the guest program named by `argv[0]`.
 - **The bridge.** `util::command::Command::new` and `gpui_util::
-  new_std_command` rewrite an absolute program under the files dir to
+  new_std_command` (both through `zdroid_hooks::new_std_command`) rewrite an absolute program under the files dir to
   `zdload <program>`, so a downloaded language server or the managed Node
   runs in the rootfs. Entries under the farm and `bin/` are exempt, else
   the loader would open its own link as the guest program.
 - **The environment.** `rootfs-guest-env.md`.
-- **Reset.** Settings → Android Runtime → Reset runtime terminates the
+- **Reset.** Settings → Android → Reset Runtime terminates the
   editor's children (`runtime_service::terminate_descendants`) and
   extracts the bundled image again over a fresh staging dir; projects
-  and editor state are outside the rootfs and untouched.
+  and editor state are outside the rootfs and untouched, and the guest's
+  home (`/root`) moves into the new tree.
+- **The home folder.** `/root` holds links to `~/projects` and
+  `~/storage` in the app's home folder (`<data>/files/home`), and to
+  what a Bootstrap-era home there held: `.ssh`, `.gitconfig`, `.claude`,
+  `.claude.json` and `.codex`. The links point at the identity-mapped
+  path, so a tool's `getcwd` under `~/projects` reports the path Zed
+  uses. Binding `/root` to the home folder instead would make the
+  engine's longest-prefix reverse lookup report `/root/projects/...`,
+  which the editor can't match to its worktrees.
 - **Upgrades from the adapter era.** Boot deletes the old bootstrap prefix
   (`<data>/files/usr`), the `bin/zd-exec` binary and the adapter
   selection file; the chroot-era editor state under `home/.zed-env` is

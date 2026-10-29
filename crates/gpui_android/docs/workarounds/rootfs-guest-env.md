@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunk 2
-**Files:** `crates/zdroid_runtime/src/{runtime,env}.rs`, `crates/gpui_util/src/lib.rs` (`guest_env_for_path`), `crates/util/src/command.rs` (`env`), `crates/terminal/src/terminal.rs` (Android env block), `crates/remote/src/transport/ssh.rs` (strip list), `crates/project/src/environment.rs` and `crates/languages/src/{rust,python}.rs` (comments)
+**Files:** `crates/zdroid_runtime/src/{runtime,env}.rs`, `crates/zdroid_hooks/src/zdroid_hooks.rs` (`guest_env_for_path`), `crates/util/src/command.rs` (`env`), `crates/project/src/environment.rs` and `crates/languages/src/{rust,python}.rs` (comments)
 
 ## Problem
 
@@ -40,7 +40,7 @@ every exec.
   persistent `ZD_ROOTFS`, `ZD_BINDS`, `ZD_FAKE_ROOT`, `ZD_HOSTNAME` and
   `ZD_LOG` are re-injected into children (they are engine configuration,
   not the guest's business).
-- **A PATH set on one spawn (`gpui_util::guest_env_for_path`).** npm runs
+- **A PATH set on one spawn (`zdroid_hooks::guest_env_for_path`).** npm runs
   lifecycle scripts as `sh -c "node install.js"` with the managed Node's
   `bin` prepended to PATH by Zed. The guest PATH from `ZD_GUEST_ENV`
   would replace it, so `util::command::Command::env("PATH", ...)` rewrites
@@ -55,15 +55,14 @@ every exec.
   kernel's spelling of the files dir (`Runtime::kernel_data_path`), and
   the `/data/user/0` alias is listed first so a kernel path maps back to
   the spelling Zed passed: `android-files-dir-spelling.md`.
-- **Terminal.** alacritty replaces the inherited environment with its
-  explicit map, so the Android branch of `terminal.rs` copies `HOME`,
-  `PATH`, `SHELL`, `TMPDIR` and `LANG` from the process and applies the
-  runtime's overlay (empty: the engine block is already in the process
-  env). The shell is `zdload -l`, which the loader runs as `/bin/bash -l`.
-- **SSH remotes.** The transport strips `LD_PRELOAD`, `HOME`, `TMPDIR` and
-  every `ZD_*` from the environment it captures for the remote server, so
-  the tablet's view never reaches a host (verified against a Mac: the
-  server processes carry none of them).
+- **Terminal.** alacritty's pty spawn inherits the process environment,
+  which already holds the engine block, so `terminal.rs` is unchanged.
+  The shell is `zdload -l`, which the loader runs as `/bin/bash -l`.
+- **SSH remotes.** The environment Zed sends to a remote host is built
+  from the remote's own and Zed's `ZED_*` variables, never the local
+  process's, so none of the engine block reaches a host. Dylan's port,
+  on an older Zed, strips `LD_PRELOAD`, `HOME`, `TMPDIR` and `ZD_*` in
+  `ssh.rs`.
 
 ## Why not the obvious fix
 
@@ -76,8 +75,8 @@ silently undid `export PATH`, `su -` and `env -i` inside the guest.
 
 A tool that cannot find another tool the user installed: check the farm
 (`ls <data>/files/zd-runtime`) and the guest PATH in `ZD_GUEST_ENV`. A
-remote server complaining about `ZD_*` or a preload: the strip list in
-`ssh.rs` lost an entry in a merge.
+remote server complaining about `ZD_*` or a preload: a Zed release started
+sending local variables to remotes.
 
 ## See also
 

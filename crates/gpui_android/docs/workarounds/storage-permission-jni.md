@@ -26,7 +26,7 @@ link to, never prompt for.
 checks `Environment.isExternalStorageManager()` and opens the toggle screen
 once per install (a shared preference remembers the ask); below 11 it
 requests the two runtime permissions as before. `requestAllFilesAccess`
-opens the screen again from Settings > Android Runtime > Allow access to
+opens the screen again from Settings > Android > Allow Access to
 /sdcard. The manifest keeps `READ_EXTERNAL_STORAGE` to API 32 and
 `WRITE_EXTERNAL_STORAGE` to API 29, declares `MANAGE_EXTERNAL_STORAGE`,
 and sets `requestLegacyExternalStorage` (Android 10) and

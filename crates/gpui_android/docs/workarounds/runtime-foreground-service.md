@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunk 4a
-**Files:** `crates/gpui_android/src/runtime_service.rs`, `crates/gpui_android/src/platform.rs` (tick and quit), `android/app/src/main/kotlin/com/zdroid/ZdRuntimeService.kt`, `MainActivity.kt` (`setRuntimeServiceActive`, battery exemption, `onDestroy`), `NativeBridge.kt` (`nativeBeforeProcessExit`), `AndroidManifest.xml`, `res/drawable/ic_runtime.xml`, `crates/settings_content/src/workspace.rs` (`android_runtime.keep_awake`), `crates/settings_ui/src/page_data.rs`, `crates/gpui_android/examples/zed_android/src/runtime_background.rs`
+**Files:** `crates/gpui_android/src/runtime_service.rs`, `crates/gpui_android/src/platform.rs` (start and quit), `android/app/src/main/kotlin/com/zdroid/ZdRuntimeService.kt`, `MainActivity.kt` (`setRuntimeServiceActive`, battery exemption, `onDestroy`), `NativeBridge.kt` (`nativeBeforeProcessExit`), `AndroidManifest.xml`, `res/drawable/ic_runtime.xml`, `crates/settings_content/src/workspace.rs` (`android_runtime.keep_awake`), `crates/settings_ui/src/page_data/android.rs`, `crates/gpui_android/examples/zed_android/src/runtime_background.rs`
 
 ## Problem
 
@@ -40,19 +40,29 @@ S9: three entries for Zed, the terminal's bash and a script. The kernel's
 process table is therefore the registry of children, complete across
 every spawn path and a handful of files to read.
 
-`gpui_android::runtime_service` reads it from the platform loop every two
-seconds (`/proc/<pid>/stat`, parent and state fields after the last `)`)
-and walks the descendants of the editor's pid. Any live descendant means
+`gpui_android::runtime_service` reads it every two seconds on a thread of
+its own (`/proc/<pid>/stat`, parent and state fields after the last `)`)
+and walks the descendants of the editor's pid. The thread keeps the scan
+off the main loop, which sleeps while nothing changes on screen. Any live descendant means
 the foreground service is wanted; the last one leaving starts a 30 second
 debounce so a language server restart or a new terminal does not bounce
 the notification. Transitions go through
 `MainActivity.setRuntimeServiceActive(active, keepAwake)` to
 `ZdRuntimeService`, a `Service` that calls `startForeground` with a
-low-importance "Zdroid runtime is running" notification and, when
-`android_runtime.keep_awake` is on, holds a partial wake lock so builds
-continue with the screen off. `START_NOT_STICKY`: the Rust side restarts
-the service from the process tree, a system restart with no editor
-behind it would only show an orphan notification.
+low-importance notification and, when `android_runtime.keep_awake` is on
+and children exist, holds a partial wake lock so builds continue with the
+screen off. The call returns false when Android refuses the start (an app
+in the background on Android 12+), and Rust retries 30 seconds later.
+`START_NOT_STICKY`: the Rust side restarts the service from the process
+tree, a system restart with no editor behind it would only show an orphan
+notification.
+
+The same service backs **Zdroid → Keep Running in Background**, for work
+without children, such as Zed's own agent talking to an API: while it is
+on, the service runs with or without children, and the notification gets
+a Stop action that turns it off. Releases before 0.10 had a second
+service for it; the choice carries over, and its notification channel is
+deleted.
 
 Reaping uses the same walk. `AndroidPlatform::quit` and
 `MainActivity.onDestroy` (through `NativeBridge.nativeBeforeProcessExit`)
@@ -68,7 +78,7 @@ Battery: `MainActivity.requestIgnoreBatteryOptimizations` opens the
 system exemption dialog (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`,
 falling back to the exemption list). The app asks once after the first
 successful rootfs install (marker `files/etc/battery-exemption-asked`)
-and the Android Runtime settings page has an "Allow background activity"
+and the Android settings page has an "Allow Background Activity"
 button for later.
 
 ## Why not the obvious fix

@@ -1,9 +1,11 @@
+- Zdroid 0.10 replaces the Bootstrap and Kali chroot runtimes with an Ubuntu runtime. Packages installed with `pkg` are removed on the first launch; install them again with `apt`. Your home folder stays, and the SSH keys, git config and Claude Code and Codex logins it holds are linked into the runtime's home (`/root`).
+- Files under `/sdcard` need Android's All files access: Zdroid opens the toggle once on first launch, and **Settings → Android → Allow Access to /sdcard** opens it again. Projects under the app's own folder need nothing.
+- Android stops child processes past 32 across all apps. On Android 14 and later, **Developer options → Disable child process restrictions** lifts the limit.
+- The runtime has no System V IPC, so PostgreSQL doesn't start in it.
 - With a mouse or trackpad connected, the pointer can't reach the buttons in a pop-up window's title bar: Zdroid captures the pointer for trackpad gestures. Close the Settings window with Ctrl+W, minimize it with Ctrl+M, close other Zdroid windows with Ctrl+Shift+W, or tap the buttons.
-- To keep SSH and agent sessions alive while Zdroid is in the background, turn on **Zdroid → Keep Running in Background**. On Samsung devices, also set **Settings → Apps → Zdroid → Battery** to **Unrestricted**.
+- Language servers, terminals and SSH sessions keep running in the background while they exist. For work without them, such as Zed's own agent, turn on **Zdroid → Keep Running in Background**. On Samsung devices, also set **Settings → Apps → Zdroid → Battery** to **Unrestricted**, or use **Settings → Android → Allow Background Activity**.
 - A separate Bluetooth or USB trackpad (not the Samsung Book Cover) may move rotated in landscape. Mice are unaffected.
-- External Termux integration is unavailable. If an older release saved that choice, select Bootstrap or Kali chroot in **Settings → Android** and restart.
 - A keyboard with a built-in touchpad that Android reports as one device isn't recognized as a keyboard: the keyboard button stays in the status bar, and tapping text can show the on-screen keyboard.
 - A finger can't drag tabs or project panel entries. Use a mouse or trackpad.
 - Zed's own agent and inline assistant work with your API keys (hosted providers and OpenAI-compatible endpoints). Zed-hosted models, Zed sign-in, web search, local model servers (Ollama, LM Studio, llama.cpp) and edit prediction aren't available.
-- Under Bootstrap, the agent panel's Claude Agent and Codex need npm and the Claude Code and Codex CLIs installed in the terminal, then a restart of Zdroid. See "Setting up your shell environment (Bootstrap)" in the README. Claude Agent hasn't been tested on a device yet.
-- A Bootstrap installed before Zdroid 0.9.19 can't install packages with this version, and `pkg upgrade` could break its apt. Reinstall it first with **Settings → Android → Open picker → Reinstall**. Packages you installed are removed; your home folder stays.
+- In the terminal, run Codex as `codex --no-daemon`: its background server sandboxes itself with bubblewrap, which Android doesn't allow in an app.

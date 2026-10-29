@@ -120,6 +120,23 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 - **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames zd-exec for keeping stdout open: fix that in zd-exec, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
+## 0.10.0 device checks
+
+0.10.0 merges Dylan's 0.4.0: the Ubuntu runtime replaces Bootstrap and Kali chroot, and targetSdk goes from 28 to 35. Install it over 0.9.23 and check:
+
+- First launch after the upgrade: the splash extracts the image, the essentials notification finishes, and `files/usr` is gone. `ls -la ~` in the terminal shows `projects`, `storage` and `.ssh` (and `.claude`, `.codex` where the Bootstrap home had them) linked into `/data/user/0/com.zdroid/files/home`; `git config user.name` reads the old home's identity.
+- Android's prompts: All files access opens once, the notification permission is asked when the runtime service first starts, and no "built for an older version" warning shows at install.
+- Terminal: `apt update && apt install -y build-essential`, `cd ~/projects/<project> && pwd -P` prints the `/data/user/0/...` path, `ssh` to a host with a key from `~/.ssh`.
+- rust-analyzer installed with rustup in a Rust project under `~/projects`: diagnostics, go to definition, and `cargo build` in the terminal, timed against 0.9.23 on the same project; the same for `git status` in a large repository.
+- An SSH remote project, with a password prompt (the async-task waker fix) and with a key.
+- Claude Agent and Codex in the agent panel, locally and on a remote; Zed's own agent through the LiteLLM endpoint.
+- The debugger: a CodeLLDB breakpoint in a Rust binary.
+- Background: with a terminal open, the runtime notification shows and leaves 30 s after the last terminal closes; Keep Running in Background keeps it with no terminal, and its Stop action turns that off; Keep Awake keeps a `sleep 600; date` running with the screen off; Quit and a Recents swipe leave no process behind (`adb shell ps -A | grep com.zdroid`).
+- `adb shell cmd connectivity airplane-mode enable` then disable while Zdroid runs: the runtime's `/etc/resolv.conf` follows the new network, and `curl -I https://github.com` works afterwards without a restart.
+- Settings → Android → Reset Runtime: apt packages are gone, `~/.bash_history` and the links stay.
+- A language server killed with `kill` from the terminal restarts with the "exited; restarted (1/3)" toast.
+- The in-app update from 0.10.0 to the next release (the updater at targetSdk 35).
+
 ## 0.9.21 device checks
 
 0.9.21 merges Zed v1.26.2. Zed now reads an SSH remote's environment by piping its script to `sh -s` over ssh's stdin instead of passing it as an argument. Check:
