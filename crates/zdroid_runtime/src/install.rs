@@ -182,7 +182,7 @@ fn install_inner(
     old: &Path,
 ) -> Result<()> {
     progress.step("Extracting");
-    let translator_rootfs = runtime.rootfs_dir().as_os_str().as_bytes().to_vec();
+    let translator_rootfs = runtime.kernel_rootfs_dir().as_os_str().as_bytes().to_vec();
     let bind_spec = runtime.bind_spec().into_bytes();
     let mut bindings = Bindings::with_defaults();
     bindings

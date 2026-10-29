@@ -39,8 +39,8 @@ nothing persistent may embed it.
 
 The kernel checks exec permission on the target file's SELinux label.
 `apk_data_file` has `rx_file_perms` for every untrusted app domain, so the
-loader runs whether or not the app keeps `targetSdk = 28`; the targetSdk pin
-stops being load-bearing for spawns once every spawn goes through it.
+loader runs in every app domain. This is what let the targetSdk pin at 28
+go (35 since 2026-10-28): every spawn goes through the loader.
 
 ## Failure mode if regressed
 

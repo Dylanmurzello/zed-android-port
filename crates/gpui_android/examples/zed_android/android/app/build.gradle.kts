@@ -268,14 +268,16 @@ android {
         // table from API 23, but cpal/livekit transitive crates require
         // libaaudio which is API 26.
         minSdk = 26
-        // targetSdk = 28 is the linchpin of the bundled Termux runtime:
-        // SELinux puts us in the `untrusted_app_27` domain where
-        // `execute_no_trans` on `app_data_file` is permitted, so we can
-        // execve $PREFIX/bin/* directly. Pinning > 28 lands in
-        // `untrusted_app_all` / numbered higher domains where exec is
-        // denied — the entire L2 plan stops working. Skipping Play Store
-        // eligibility is the explicit trade.
-        targetSdk = 28
+        // targetSdk 35. The old pin at 28 kept the app in a SELinux domain
+        // that may exec app-private files; the rootfs engine made that
+        // moot (the kernel only execs the loader in the native library
+        // dir, and the Ubuntu binaries are mapped, not exec'd). What the
+        // level buys: no "built for an older version" install warning, a
+        // real notification permission prompt (33+), and the foreground
+        // service type declared here is enforced (34+). What it costs:
+        // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE)
+        // on Android 11+; see AndroidManifest.xml.
+        targetSdk = 35
         versionCode = 18
         versionName = "0.3.3"
         ndk {
@@ -315,16 +317,6 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-    }
-
-    // `targetSdk = 28` is intentional (see the comment in defaultConfig). It
-    // pins us in the SELinux `untrusted_app_27` domain so the bundled Termux
-    // runtime can `execve` $PREFIX/bin/*. AGP's `lintVitalRelease` task
-    // flags this as `ExpiredTargetSdkVersion` and refuses to assemble the
-    // release APK. We're not Play-Store eligible by design — disable that
-    // single rule rather than bumping the SDK and breaking exec.
-    lint {
-        disable += "ExpiredTargetSdkVersion"
     }
 
     signingConfigs {

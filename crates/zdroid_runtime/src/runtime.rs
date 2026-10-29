@@ -43,13 +43,35 @@ pub struct InstalledImage {
 
 pub struct Runtime {
     data_path: PathBuf,
+    /// `data_path` as the kernel reports it. The kernel names a file by
+    /// the route it walked, and on Android 16 at targetSdk 35 the app's
+    /// files dir is reached through the `/data/data/<pkg>` bind mount
+    /// (`/data/user/0` is a symlink there), so `getcwd` and `/proc/*/cwd`
+    /// spell it `/data/data/...` while Zed spells it `/data/user/0/...`.
+    /// The engine compares the kernel's spelling against the rootfs and
+    /// the binding hosts, so those use this form; everything Zed opens
+    /// itself keeps `data_path`.
+    kernel_data_path: PathBuf,
 }
 
 impl Runtime {
     pub fn new(data_path: &Path) -> Self {
+        let kernel_data_path =
+            std::fs::canonicalize(data_path).unwrap_or_else(|_| data_path.to_path_buf());
         Self {
             data_path: data_path.to_path_buf(),
+            kernel_data_path,
         }
+    }
+
+    /// The files dir in the kernel's spelling (see the field).
+    pub fn kernel_data_path(&self) -> &Path {
+        &self.kernel_data_path
+    }
+
+    /// The rootfs dir as handed to the engine (`ZD_ROOTFS`).
+    pub fn kernel_rootfs_dir(&self) -> PathBuf {
+        self.kernel_data_path.join("rootfs")
     }
 
     /// The app files dir: Zed's data root and the identity-mapped part of
@@ -107,17 +129,25 @@ impl Runtime {
     /// the app files dir are identity-mapped so project paths mean the
     /// same thing on either side of the boundary.
     pub fn bind_spec(&self) -> String {
-        let files = self.data_path.to_string_lossy();
+        let host = self.kernel_data_path.to_string_lossy();
+        let zed_spelling = self.data_path.to_string_lossy();
+        // Guest spellings of the files dir, Zed's first: for equal host
+        // prefixes the engine maps a kernel path back to the first entry,
+        // so `getcwd` under a project reports the spelling Zed passed.
         let mut binds = vec![
-            format!("/tmp:{files}/tmp"),
-            format!("/dev/shm:{files}/tmp/shm"),
-            files.to_string(),
-            format!("/data/data/com.zdroid/files:{files}"),
-            format!("/data/user/0/com.zdroid/files:{files}"),
-            "/sdcard".to_string(),
-            "/storage".to_string(),
+            format!("/tmp:{host}/tmp"),
+            format!("/dev/shm:{host}/tmp/shm"),
+            format!("/data/user/0/com.zdroid/files:{host}"),
+            format!("/data/data/com.zdroid/files:{host}"),
         ];
-        binds.dedup();
+        if !binds
+            .iter()
+            .any(|entry| entry.starts_with(&format!("{zed_spelling}:")))
+        {
+            binds.push(format!("{zed_spelling}:{host}"));
+        }
+        binds.push("/sdcard".to_string());
+        binds.push("/storage".to_string());
         binds.join(&LIST_SEPARATOR.to_string())
     }
 
@@ -156,7 +186,7 @@ impl Runtime {
         let mut vars = vec![
             (
                 engine_env::ROOTFS.to_string(),
-                self.rootfs_dir().into_os_string(),
+                self.kernel_rootfs_dir().into_os_string(),
             ),
             (
                 engine_env::BINDS.to_string(),
@@ -377,5 +407,28 @@ impl CapturedRun {
 
     pub fn stderr_text(&self) -> String {
         String::from_utf8_lossy(&self.stderr).into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Runtime;
+
+    #[test]
+    fn engine_paths_use_the_kernel_spelling_and_zed_keeps_its_own() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let given = temp.path().to_path_buf();
+        let canonical = std::fs::canonicalize(&given).expect("canonicalize");
+        let runtime = Runtime::new(&given);
+        assert_eq!(runtime.data_path(), given);
+        assert_eq!(runtime.rootfs_dir(), given.join("rootfs"));
+        assert_eq!(runtime.kernel_rootfs_dir(), canonical.join("rootfs"));
+        let spec = runtime.bind_spec();
+        let host = canonical.to_string_lossy();
+        let entries: Vec<&str> = spec.split(';').collect();
+        assert_eq!(entries[2], format!("/data/user/0/com.zdroid/files:{host}"));
+        assert_eq!(entries[3], format!("/data/data/com.zdroid/files:{host}"));
+        assert!(entries.contains(&format!("{}:{host}", given.to_string_lossy()).as_str()));
+        assert!(!spec.contains(&format!(":{}/", given.to_string_lossy())) || given == canonical);
     }
 }

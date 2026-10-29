@@ -48,10 +48,13 @@ every exec.
   their place ahead of the guest PATH, Android partitions and the farm
   (which points at the loader itself) are dropped.
 - **Identity-mapped files dir.** `ZD_BINDS` maps `/data/data/com.zdroid/
-  files` and `/data/user/0/com.zdroid/files` to themselves, so a project
-  path means the same thing to the editor and to a tool; `/tmp` and
-  `/dev/shm` are bound to `<data>/files/tmp`, `/sdcard` and `/storage`
-  pass through.
+  files` and `/data/user/0/com.zdroid/files` to the files dir, so a
+  project path means the same thing to the editor and to a tool; `/tmp`
+  and `/dev/shm` are bound to `<data>/files/tmp`, `/sdcard` and `/storage`
+  pass through. The host side of every binding and `ZD_ROOTFS` use the
+  kernel's spelling of the files dir (`Runtime::kernel_data_path`), and
+  the `/data/user/0` alias is listed first so a kernel path maps back to
+  the spelling Zed passed: `android-files-dir-spelling.md`.
 - **Terminal.** alacritty replaces the inherited environment with its
   explicit map, so the Android branch of `terminal.rs` copies `HOME`,
   `PATH`, `SHELL`, `TMPDIR` and `LANG` from the process and applies the

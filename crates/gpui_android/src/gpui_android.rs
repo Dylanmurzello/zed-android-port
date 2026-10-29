@@ -20,6 +20,7 @@ mod multi_window;
 mod platform;
 mod saf;
 pub mod storage;
+pub mod pointer_authentication;
 pub mod selinux_canary;
 mod touch;
 mod window;

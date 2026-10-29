@@ -3,21 +3,23 @@
     <uses-feature android:name="android.hardware.vulkan.version" android:required="false"/>
 
     <!--
-      READ_EXTERNAL_STORAGE + WRITE_EXTERNAL_STORAGE are the legacy storage
-      grants. They're still real permissions (dangerous, runtime-prompted)
-      at targetSdk=28; the Settings dialog or our requestStoragePermissions()
-      JNI call gates them. MANAGE_EXTERNAL_STORAGE was dropped — that's an
-      API 30+ scoped-storage escape hatch that has no effect at targetSdk=28.
-      `requestLegacyExternalStorage` was also dropped — it's an API 29 opt-in
-      flag that's a no-op for us.
+      Shared storage. Android 11+ (targetSdk 30+) gates raw /sdcard paths
+      behind MANAGE_EXTERNAL_STORAGE, "All files access": a per-app toggle
+      in system settings that MainActivity.requestStoragePermissions opens
+      once on first launch and Settings > Android Runtime opens again.
+      READ/WRITE_EXTERNAL_STORAGE stay for Android 8 to 10, where they are
+      the runtime-prompted grants; requestLegacyExternalStorage keeps raw
+      paths on Android 10 and preserveLegacyExternalStorage keeps them
+      across the upgrade from the targetSdk 28 releases on Android 11.
+      Projects under the app files dir need none of this.
     -->
-    <!-- Required for any HTTP/HTTPS — Zed's HTTP client, plus all Termux
-         subprocesses (apt, pkg, curl, git, npm, etc.). Implicit pre-API 23,
-         explicit after. -->
+    <!-- Required for any HTTP/HTTPS: Zed's HTTP client and every tool in
+         the rootfs (apt, curl, git, npm). -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <!-- Required for the in-app updater to hand the downloaded APK to
          Android's package installer via ACTION_VIEW. The user still has
          to grant "Install unknown apps" for this package in system
@@ -45,6 +47,8 @@
         android:theme="@style/Theme.Zdroid.Splash"
         android:hasCode="true"
         android:appCategory="productivity"
+        android:requestLegacyExternalStorage="true"
+        android:preserveLegacyExternalStorage="true"
         android:resizeableActivity="true">
 
         <!--

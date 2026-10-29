@@ -1,23 +1,18 @@
-//! Runtime READ/WRITE_EXTERNAL_STORAGE prompt for Android.
+//! Shared storage access for Android.
 //!
-//! At `targetSdk = 28` we land in legacy-storage mode, but
-//! `READ_EXTERNAL_STORAGE` and `WRITE_EXTERNAL_STORAGE` are still dangerous
-//! permissions that Android won't grant at install time — they need a
-//! runtime dialog. SAF folder picking dodges this for tree access, but the
-//! moment `RealFs` reads `/storage/emulated/0/projects/foo.rs` directly
-//! (which is what happens after the SAF picker hands us back a
-//! `/storage/...` path), the syscall fails with `EACCES` until the user has
-//! granted those perms.
+//! Projects under the app files dir need no permission. Raw `/sdcard`
+//! paths (a folder picked from external storage, the `~/storage` links)
+//! do: on Android 8 to 10 the runtime-prompted `READ/WRITE_EXTERNAL_STORAGE`
+//! grants, on Android 11+ "All files access" (`MANAGE_EXTERNAL_STORAGE`), a
+//! per-app toggle in system settings rather than a dialog. SAF folder
+//! picking dodges this for tree access, but the moment `RealFs` reads
+//! `/storage/emulated/0/projects/foo.rs` directly, the syscall fails with
+//! `EACCES` until the user has granted it.
 //!
-//! This module is the JNI bridge to MainActivity's `requestStoragePermissions()`,
-//! which fires the dialog on first launch. Fire-and-forget by design — if
-//! the user denies, file ops EACCES with a clean error and they can grant
-//! later via Settings → Apps → zed_android → Permissions.
-//!
-//! The MANAGE_EXTERNAL_STORAGE escape hatch we used at `targetSdk=35` is
-//! deliberately not part of this flow. That permission is API 30+ only and
-//! requires a Settings deep-link rather than a runtime dialog; at
-//! `targetSdk=28` it has no effect anyway.
+//! This module is the JNI bridge to `MainActivity.requestStoragePermissions`
+//! (asked once at boot) and `requestAllFilesAccess` (the settings page
+//! action). Fire-and-forget by design: a denial leaves file ops on
+//! `/sdcard` failing with a clean error until granted.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -29,8 +24,9 @@ use jni::{JavaVM, objects::JObject};
 static REQUESTED: OnceLock<()> = OnceLock::new();
 
 /// Fire the `requestStoragePermissions()` JNI call once per process. Logs
-/// the result code (1 = already granted, 0 = dialog posted). Re-entry from
-/// activity recreation is a no-op via `OnceLock`.
+/// the result code (1 = granted, 0 = dialog or settings screen opened,
+/// 2 = not granted and nothing shown). Re-entry from activity recreation
+/// is a no-op via `OnceLock`.
 pub fn request_once(android_app: &AndroidApp) {
     if REQUESTED.get().is_some() {
         return;
@@ -40,7 +36,11 @@ pub fn request_once(android_app: &AndroidApp) {
             log::info!(
                 "storage: requestStoragePermissions returned {} ({})",
                 code,
-                if code == 1 { "already granted" } else { "dialog posted" }
+                match code {
+                    1 => "granted",
+                    0 => "dialog or settings screen opened",
+                    _ => "not granted, asked before",
+                }
             );
             let _ = REQUESTED.set(());
         }
@@ -64,6 +64,23 @@ fn request_inner(android_app: &AndroidApp) -> Result<i32> {
         .context("MainActivity.requestStoragePermissions")?
         .i()?;
     Ok(result)
+}
+
+/// Open the system "All files access" toggle (Android 11+) or the storage
+/// permission dialog on older releases. Returns `true` when a screen opened
+/// or access already holds.
+pub fn request_all_files_access() -> Result<bool> {
+    let android_app = crate::updater::android_app()?;
+    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
+    let mut env = vm
+        .attach_current_thread()
+        .context("attach_current_thread for all files access")?;
+    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
+    let opened = env
+        .call_method(&activity, "requestAllFilesAccess", "()Z", &[])
+        .context("MainActivity.requestAllFilesAccess")?
+        .z()?;
+    Ok(opened)
 }
 
 /// Termux-style `~/storage/` curated symlinks into shared storage.

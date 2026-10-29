@@ -34,14 +34,11 @@ A userland chroot without root or ptrace: the kernel only ever execs a 500 KB st
 
 Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/Dylanmurzello/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
 
-> [!NOTE]
-> Android may show a "built for an older version of Android" warning before you tap Install. Proceed anyway. `targetSdk` is still pinned at 28; the runtime no longer depends on it (the engine's loader lives in the APK's native library dir, which every targetSdk may exec), and the bump is a separate step. Background: [`docs/workarounds/targetsdk-28-execve.md`](crates/gpui_android/docs/workarounds/targetsdk-28-execve.md).
-
 ### First launch
 
-1. **Storage permissions.** The system prompts for read/write to `/sdcard` so the editor can reach anything outside its app-private dir. Grant it. Without it, "Open Project" can't see your files.
+1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid (on Android 8 to 10 it is a permission dialog instead); turn it on, or later from Settings → Android Runtime → Allow access to /sdcard.
 2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then `git` and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, Settings → Android Runtime → **Install git and certificates** runs it again.
-3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android 13+ hides its notification until you allow notifications for Zdroid in system settings, and some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; Settings → Android Runtime → **Allow background activity** asks for the exemption.
+3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; Settings → Android Runtime → **Allow background activity** asks for the exemption.
 
 ### Setting up your shell environment
 

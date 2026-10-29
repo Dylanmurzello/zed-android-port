@@ -60,6 +60,10 @@ grep -rn 'consts::OS' crates --include='*.rs'
 
 Anything left that feeds an asset name, archive type or platform table must call the helper; compile-time `#[cfg(target_os = "linux")]` platform blocks (rust-analyzer, ty, ruff, wasi-sdk) need `any(target_os = "linux", target_os = "android")`. Telemetry, user agents and CLI tools keep `consts::OS`. Writeup: `crates/gpui_android/docs/workarounds/runtime-os-asset-selection.md`.
 
+### Canonicalize hubs (files dir spelling)
+
+On Android the kernel spells the app files dir `/data/data/<pkg>/files` while the editor keys its state by `/data/user/0/<pkg>/files`. Two upstream functions carry a `#[cfg(target_os = "android")]` arm for that: `RealFs::canonicalize` in `crates/fs/src/fs.rs` (re-spells the kernel prefix through `util::env::respell_kernel_path`) and `paths::set_custom_data_dir` (does not canonicalize). After each merge, confirm both arms survived the refactor and grep for new direct `std::fs::canonicalize` calls on paths that can reach a worktree root or `paths::data_dir()`; they bypass the hub. Writeup: `crates/gpui_android/docs/workarounds/android-files-dir-spelling.md`.
+
 ### Vendored crates
 
 `crates/gpui_android/vendor/async-task` is upstream async-task at the revision the root `Cargo.toml` pins, plus one line in `src/raw.rs::RawTask::run` (the run-time waker takes its vtable pointer from the task header). Only the Android app's `[patch.crates-io]` points at it. When upstream Zed bumps the async-task revision, refresh the vendored copy from the new revision and re-apply that line; the writeup is `crates/gpui_android/docs/workarounds/async-task-waker-identity.md`.

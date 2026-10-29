@@ -24,7 +24,7 @@ replacement.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Noexec mount on /storage/emulated/0](android-noexec-mount.md) | Active | FUSE-mounted shared storage rejects execve regardless of file mode |
-| [`targetSdk=28` for execve from /data/data](targetsdk-28-execve.md) | Active | API 29+ blocks execve on app-private storage |
+| [`targetSdk=28` for execve from /data/data](targetsdk-28-execve.md) | Reverted | The engine execs only the loader in the native library dir, so the pin bought nothing; targetSdk is 35 |
 | [Termux ~/storage curated symlinks](termux-storage-symlinks.md) | Active | Surface common /sdcard subdirs without making them workspace roots |
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
 | [Noexec banner with one-tap Move action](noexec-banner-move.md) | Active | When users open from /sdcard anyway, fix in one tap |
@@ -47,9 +47,11 @@ is built.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
-| [Storage permission JNI shim](storage-permission-jni.md) | Active | `READ/WRITE_EXTERNAL_STORAGE` are runtime-prompted at targetSdk≤28 |
+| [Storage permission JNI shim](storage-permission-jni.md) | Active | Raw `/sdcard` paths need the runtime grants on Android 8 to 10 and All files access on 11+ |
 | [Rootfs engine integration](rootfs-engine-integration.md) | Active | How the editor reaches the Ubuntu rootfs: the loader link, the bundled image extracted on first launch, the symlink farm, the spawn bridge, reset |
 | [The guest environment contract](rootfs-guest-env.md) | Active | Editor keeps the host env, tools get the guest view at exec through `ZD_GUEST_ENV`; per-spawn PATH merge, terminal, SSH strip list |
+| [Two spellings of the app files dir](android-files-dir-spelling.md) | Active | At targetSdk 35 the kernel reports `/data/data/...` for the files dir; the engine gets that spelling, the editor keeps `/data/user/0` |
+| [Pointer authentication keys and wasm fibers](android-pointer-authentication-fibers.md) | Active | From targetSdk 31 bionic gives every thread its own IA key; wasmtime fibers resumed on another worker died with a PAC exception; the IA key is disabled at boot |
 | [Runtime config location + not-configured state](runtime-config-migration.md) | Superseded | One runtime, no selection file; the sentinel is the only state |
 | [JNI DNS bridge](jni-dns-bridge.md) | Active | Android has no `/etc/resolv.conf`; ConnectivityManager's servers seed the guest rootfs resolv.conf |
 | [Asset selection by runtime OS](runtime-os-asset-selection.md) | Active | Downloaded tools run in the Linux userland, so every asset-selection site asks `util::runtime_os()` instead of `consts::OS` |
@@ -70,7 +72,7 @@ is built.
 | [SSL_CERT_FILE / CURL_CA_BUNDLE](ssl-cert-bundle.md) | Removed | In-process trust via webpki-roots; subprocess CA is adapter-owned |
 | [.gitconfig safe.directory = *](gitconfig-safe-directory.md) | Active | libgit2 dubious-ownership check fires for media_rw-owned /sdcard repos |
 | [Activity-recreation idempotency](activity-recreation-idempotency.md) | Active | `android_main` re-enters; everything must be re-entrant |
-| [SELinux context canary log](selinux-canary.md) | Active | Detect if `targetSdk` regresses by checking `untrusted_app_27` domain |
+| [SELinux context canary log](selinux-canary.md) | Active | Logs the app's SELinux domain at boot for reading spawn failures against it |
 | [MultiWorkspace wrapper + load keymap last](multiworkspace-keymap-order.md) | Active | Workspace KeyContext + boot-order rules make keybindings actually fire |
 | [Create worktree before attaching project panel](worktree-before-panel-attach.md) | Active | ProjectPanel::starts_open() needs the worktree present before add_panel runs |
 

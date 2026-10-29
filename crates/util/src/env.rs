@@ -74,3 +74,6 @@ pub fn register_workspace_root(path: Option<PathBuf>) {
 pub fn workspace_root() -> Option<&'static PathBuf> {
     WORKSPACE_ROOT.get().and_then(Option::as_ref)
 }
+
+#[cfg(target_os = "android")]
+pub use gpui_util::{register_files_dir_spellings, respell_kernel_path};

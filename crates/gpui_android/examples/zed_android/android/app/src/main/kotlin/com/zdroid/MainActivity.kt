@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -1110,6 +1111,23 @@ class MainActivity : GameActivity(), ImeHost {
     /// clean error.
     @Suppress("unused") // called from Rust via JNI
     fun requestStoragePermissions(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: raw /sdcard paths need "All files access", a
+            // per-app toggle in system settings rather than a dialog. Open
+            // it once per install; the Android Runtime settings page opens
+            // it again on request.
+            if (Environment.isExternalStorageManager()) {
+                Log.i(TAG, "requestStoragePermissions: all files access granted")
+                return 1
+            }
+            val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) {
+                Log.i(TAG, "requestStoragePermissions: all files access not granted; asked before")
+                return 2
+            }
+            prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
+            return if (requestAllFilesAccess()) 0 else 2
+        }
         val needed = listOf(
             Manifest.permission.READ_EXTERNAL_STORAGE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE,
@@ -1125,6 +1143,34 @@ class MainActivity : GameActivity(), ImeHost {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_STORAGE_PERMS)
         }
         return 0
+    }
+
+    /// Open the system "All files access" toggle for this package on
+    /// Android 11+, or the storage permission dialog on older releases.
+    /// Returns true when a screen opened or access already holds.
+    @Suppress("unused")
+    fun requestAllFilesAccess(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return requestStoragePermissions() != 2
+        }
+        if (Environment.isExternalStorageManager()) return true
+        val direct = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "all files access screen unavailable; opening the list", t)
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                true
+            } catch (inner: Throwable) {
+                Log.w(TAG, "all files access settings unavailable", inner)
+                false
+            }
+        }
     }
 
     /// Returns Android's currently-active DNS server IPs as a comma-joined
@@ -1226,13 +1272,11 @@ class MainActivity : GameActivity(), ImeHost {
     private var notificationPermissionRequested: Boolean = false
 
     /// Android 13+ posts no notification, the foreground service's
-    /// included, until POST_NOTIFICATIONS is granted. At targetSdk 28
-    /// the platform is documented to prompt on its own after the first
-    /// channel is created; One UI 8 never did, and this explicit request
-    /// comes back denied without a dialog there (measured 2026-10-28).
-    /// The service runs either way; from targetSdk 33 this call becomes
-    /// the real prompt, so it is asked once, the first time the service
-    /// starts.
+    /// included, until POST_NOTIFICATIONS is granted. Asked once, the
+    /// first time the service starts; the service runs either way, a
+    /// denial only hides its notification. (The targetSdk 28 builds got
+    /// no dialog on One UI 8 and this request came back denied there,
+    /// measured 2026-10-28; from targetSdk 33 it is a real prompt.)
     private fun requestNotificationPermissionOnce() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (notificationPermissionRequested) return
@@ -1379,6 +1423,8 @@ class MainActivity : GameActivity(), ImeHost {
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3
         private const val REQ_POST_NOTIFICATIONS = 0xA4
+        private const val PREFS = "zdroid"
+        private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
         /// Software cursor side length in dp. Scaled by display
         /// density at instantiation time to give the sprite a
         /// consistent visual size across devices.

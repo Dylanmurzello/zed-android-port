@@ -89,6 +89,7 @@ fn android_main(app: AndroidApp) {
     );
     info!("zed_android: android_main entry");
     gpui_android::process_hygiene::ensure_standard_fds();
+    gpui_android::pointer_authentication::disable_return_address_key();
 
     let data_path = app
         .internal_data_path()
@@ -100,6 +101,16 @@ fn android_main(app: AndroidApp) {
     // device's active resolvers; Android has no resolv.conf of its own.
     zdroid_runtime::set_nameservers(gpui_android::dns_bridge::android_dns_servers(&app));
     let runtime = Runtime::new(&data_path);
+    if runtime.kernel_data_path() != data_path {
+        info!(
+            "zed_android: the kernel spells the files dir {}",
+            runtime.kernel_data_path().display()
+        );
+    }
+    util::env::register_files_dir_spellings(
+        data_path.clone(),
+        runtime.kernel_data_path().to_path_buf(),
+    );
 
     // The Zed-Rust process env comes from the runtime: the host shape
     // (HOME, PATH with the symlink farm first) plus the engine block every
@@ -149,15 +160,13 @@ fn android_main(app: AndroidApp) {
     // registry slot.
     util::env::register_workspace_root(Some(runtime.workspace_root()));
 
-    // Surface the SELinux domain in logcat — this is the canary for the
-    // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
-    // every subsequent execve into $PREFIX/bin/* will EACCES.
+    // Log the SELinux domain so a spawn failure can be read against it.
     gpui_android::selinux_canary::check_selinux_context();
+    gpui_android::pointer_authentication::check_pointer_authentication();
 
-    // Best-effort runtime READ/WRITE_EXTERNAL_STORAGE prompt. Replaces the
-    // MANAGE_EXTERNAL_STORAGE → Settings deep-link flow we used at
-    // targetSdk=35. Fire-and-forget: dialog shows on first launch, user
-    // grants once, RealFs reads of /storage/emulated/0/... start working.
+    // Shared storage access for raw /sdcard paths: the All files access
+    // toggle on Android 11+, the runtime permission dialog below. Asked
+    // once per install; the Android Runtime settings page opens it again.
     gpui_android::storage::request_once(&app);
 
     // The rootfs engine's loader ships in the APK's native library dir

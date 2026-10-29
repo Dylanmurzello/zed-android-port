@@ -152,6 +152,21 @@ fn android_runtime_page() -> SettingsPage {
                 }),
                 files: USER,
             }),
+            SettingsPageItem::SectionHeader("Shared storage"),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Allow access to /sdcard".into(),
+                description: Some(
+                    "Android 11 and later gate files under /sdcard behind the All files \
+                     access toggle. Zdroid opens it once on first launch; use this to open \
+                     it again. Projects under the app's own files need no permission."
+                        .into(),
+                ),
+                button_text: "Open".into(),
+                on_click: Arc::new(|_settings_window, _window, cx| {
+                    dispatch_runtime_action("zdroid_runtime::AllowAllFilesAccess", cx);
+                }),
+                files: USER,
+            }),
             SettingsPageItem::SectionHeader("Background"),
             SettingsPageItem::SettingItem(SettingItem {
                 title: "Keep Awake",

@@ -6,11 +6,12 @@
 //! resolve to the same on-disk file:
 //!
 //! - **Android mount-bind aliases**: `/data/user/0/<pkg>` and
-//!   `/data/data/<pkg>` are two independent mount entries that the
-//!   kernel points at the same inode. Neither is a symlink at the
-//!   `readlink(2)` level, so `std::fs::canonicalize` is a no-op for
-//!   both forms. They CAN be distinguished only via `stat()` —
-//!   `(st_dev, st_ino)` is identical.
+//!   `/data/data/<pkg>` name the same inode. In the targetSdk 28 era
+//!   both were mount entries and `std::fs::canonicalize` was a no-op
+//!   for either form; at targetSdk 35 `/data/user/0` is a symlink in
+//!   the app's namespace, so canonicalize turns the first into the
+//!   second (see `android-files-dir-spelling.md`). Either way `stat()`
+//!   tells: `(st_dev, st_ino)` is identical.
 //! - **macOS firmlinks**: `/var` ↔ `/private/var`, `/tmp` ↔
 //!   `/private/tmp`. Same shape: kernel-managed equivalence with no
 //!   user-visible symlink.

@@ -98,13 +98,14 @@ adb shell settings put global settings_enable_monitor_phantom_procs false
 Samsung adds its own "Sleeping apps" list on top of the battery exemption;
 an app put to sleep there loses its children regardless of the service.
 
-`POST_NOTIFICATIONS` is runtime-granted on Android 13+. At targetSdk 28
-the system asks on first use; if the user denies it the service still
-runs, only the notification is hidden (the app then appears under Active
-apps in the notification shade instead).
+`POST_NOTIFICATIONS` is runtime-granted on Android 13+. Since targetSdk 35
+the app asks with a real dialog the first time the service starts; if the
+user denies it the service still runs, only the notification is hidden
+(the app then appears under Active apps in the notification shade
+instead). The targetSdk 28 builds never got a dialog on One UI 8.
 
 ## See also
 
 - `android-lsp-auto-restart.md` for what happens when a server dies anyway
-- `targetsdk-28-execve.md`: the service does not depend on the pin, and
-  `FOREGROUND_SERVICE_SPECIAL_USE` is already declared for a later bump
+- `targetsdk-28-execve.md`: the pin that was lifted; the service type and
+  `FOREGROUND_SERVICE_SPECIAL_USE` are enforced from targetSdk 34 and declared

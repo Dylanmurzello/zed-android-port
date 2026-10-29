@@ -6,14 +6,12 @@
          side `nativeIsZedReady` flag. After the splash exits (smooth
          fade in `setOnExitAnimationListener`) the activity switches
          to `Theme.Zdroid.Main`.
-         The icon is intentionally static — `windowSplashScreenAnimated
-         Icon` accepts AnimatedVectorDrawable but the AndroidX
-         back-port on targetSdk=28 doesn't start the AVD's animators,
-         so a fancier "breathing rings" overlay would need to live in
-         a SurfaceControl overlay (the same architecture as the
-         hardware cursor sprite) and is deferred until the targetSdk
-         move past 28 makes the native SplashScreen icon-animator path
-         render. -->
+         The icon is intentionally static: `windowSplashScreenAnimated
+         Icon` accepts an AnimatedVectorDrawable, but the AVD's
+         animators never started in the targetSdk 28 builds (not
+         retested since the move to 35), so a "breathing rings"
+         overlay would need a SurfaceControl layer like the hardware
+         cursor sprite. Deferred. -->
     <style name="Theme.Zdroid.Splash" parent="Theme.AppCompat.NoActionBar">
         <!-- Window background = the brand color, so the initial cold-
              boot window (between zygote fork and SplashActivity

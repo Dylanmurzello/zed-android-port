@@ -44,13 +44,14 @@ Read that list. Note user-visible behavior changes vs internal/refactor commits.
 
 ```sh
 cd crates/gpui_android/examples/zed_android
-ANDROID_NDK_HOME=/opt/homebrew/share/android-commandlinetools/ndk/27.0.12077973 \
-  cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release
+export ANDROID_NDK_HOME=/opt/homebrew/share/android-commandlinetools/ndk/27.0.12077973
+RUSTFLAGS="-C target-feature=+fp16" \
+  cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --release
 cd android
-gradle assembleRelease
+gradle clean assembleRelease
 ```
 
-APK lands at `app/build/outputs/apk/release/app-release.apk`. ~9 minutes for a clean release build, ~1 minute incremental.
+APK lands at `app/build/outputs/apk/release/app-release.apk`. ~9 minutes for a clean release build. Always `clean` for a release: an incremental package can keep the dead bytes of a replaced native library inside the zip (a debug APK measured 257 MB with 148 MB of listed entries), and `clean` also refetches the rootfs image into `build/rootfs/` (33 MB, SHA-256 checked). The gradle tasks need `ANDROID_NDK_HOME` exported, not only prefixed to the cargo line.
 
 Confirm signing — should match the persistent zdroid-release keystore fingerprint:
 
@@ -66,13 +67,16 @@ A different cert means users would have to uninstall/reinstall to upgrade — ne
 
 `adb install -r app/build/outputs/apk/release/app-release.apk` over the previous release (same cert preserves data dir), then:
 
+A device that runs debug builds carries the debug certificate, and the release-signed APK will not install over it without an uninstall, which deletes the rootfs. Do not uninstall on a device whose rootfs you want to keep: run the list below on that device with a debug build of the release commit, and run the release-signed APK itself through the install, first-launch and self-test items on the emulator or a device you can wipe.
+
 - [ ] App boots cleanly. No `RustPanic` / `Fatal signal 11` in `adb logcat -d`.
 - [ ] Welcome screen reads "Welcome to Zdroid" / "Welcome back to Zdroid". Logo is the orb mark.
 - [ ] Menu bar reads "Zdroid". Settings has no Auto Update or Telemetry sections.
 - [ ] **Open Project** from the welcome screen pops the SAF picker. Pick a folder, project loads.
 - [ ] **Clone Repository** from the welcome screen pops the URL modal. Submit a small public repo URL. Toast appears with Cancel button. Clone completes, project opens.
 - [ ] Open a folder on `/sdcard/`. Yellow Move chip appears in the title bar. Tap, confirm Copy. Toast with Cancel button shows. Cancel mid-copy: dst at `~/projects/<name>` is removed cleanly.
-- [ ] On a wiped install (`adb shell pm clear com.zdroid`), the first launch extracts the rootfs behind the splash (`adb logcat -d | grep runtime_setup` shows `rootfs installed from the bundled image`), the "Installing git and certificates" notification completes, and Settings → Android Runtime names the installed image.
+- [ ] On a wiped install (`adb shell pm clear com.zdroid`; never on a device whose rootfs you want to keep), the first launch extracts the rootfs behind the splash (`adb logcat -d | grep runtime_setup` shows `rootfs installed from the bundled image`), opens the All files access toggle for Zdroid, asks to allow notifications once the first child starts, the "Installing git and certificates" notification completes, and Settings → Android Runtime names the installed image.
+- [ ] `pwd` in the terminal prints the directory, not `.` with a `getcwd` error, both under a project and after `cd /usr` (the kernel's spelling of the files dir must match the engine's).
 - [ ] Over the previous release, `files/rootfs` is untouched, `readlink files/zd-runtime/bash` points at the new `/data/app/~~...` loader, and no `files/usr` or `files/bin/zd-exec` remains.
 - [ ] `zdroid runtime: engine self test` from the command palette passes every step.
 - [ ] Integrated terminal opens as `root@zdroid`. `apt install -y python3 && python3 -c 'import os; print(os.getcwd())'` prints the project dir.

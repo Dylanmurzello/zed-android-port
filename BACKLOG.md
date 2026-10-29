@@ -174,6 +174,18 @@ The `android-activity` crate (which we use) wraps a subset of GameActivity APIs.
 
 (add new sections here as they come up; keep each one self-contained with what / why / what's-needed-to-resolve)
 
+### Untrusted worktrees are silent on Android (2026-10-28)
+
+**What:** when a worktree is not in the trust store, upstream shows a Restricted Mode indicator in the title bar (`title_bar::render_restricted_mode`) and the security modal; the Android title bar renders neither, so language servers stay off with only a log line (`project::trusted_worktrees: Worktree ... is not trusted`). Seen while the files dir changed spelling under the targetSdk bump (every project was untrusted for a run, nothing on screen).
+
+**What's needed:** render the restricted-mode control in the Android title bar (or a workspace notification with Trust / Keep restricted) and route it to `TrustedWorktrees::trust`.
+
+### gpui's fallback prompt on Android is unstyled (2026-10-28)
+
+**What:** `AndroidPlatform::prompt` returns `None`, so `window.prompt` draws gpui's generic in-window fallback: narrow, the detail text clipped. Reset runtime's confirmation is the first user of it.
+
+**What's needed:** register Zed's prompt builder (`workspace::init` sets one on desktop through `cx.set_prompt_builder`) for the Android app, or a themed `MessageNotification` with buttons for the few confirmations the port has.
+
 ## Post-2026-08 upstream-merge follow-ups
 
 The 2026-08-07 merge (d066a73609 -> 87e698fb6f, 1492 commits) landed with parallel APIs and deferred cleanups. None block shipping; all shrink future merge cost or unlock upstream features.

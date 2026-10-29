@@ -48,13 +48,20 @@ struct ServiceState {
     /// `(active, keep_awake)` as last pushed to the Activity; `None` until
     /// the first push.
     pushed: Option<(bool, bool)>,
+    /// No push before this instant after a failed one: Android 12+ refuses
+    /// a foreground service start from the background, and retrying every
+    /// scan would only repeat the exception.
+    retry_after: Option<Instant>,
 }
 
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState {
     last_scan: None,
     idle_since: None,
     pushed: None,
+    retry_after: None,
 });
+
+const RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 fn service_state() -> std::sync::MutexGuard<'static, ServiceState> {
     match SERVICE.lock() {
@@ -90,12 +97,19 @@ pub(crate) fn tick(android_app: &AndroidApp) {
     if state.pushed == Some(wanted) || (!active && state.pushed.is_none()) {
         return;
     }
+    if state.retry_after.is_some_and(|instant| now < instant) {
+        return;
+    }
     match set_runtime_service(android_app, active, keep_awake) {
         Ok(()) => {
             log::info!("runtime_service: active={active} keep_awake={keep_awake}");
             state.pushed = Some(wanted);
+            state.retry_after = None;
         }
-        Err(error) => log::warn!("runtime_service: set active={active}: {error:#}"),
+        Err(error) => {
+            log::warn!("runtime_service: set active={active}: {error:#}");
+            state.retry_after = Some(now + RETRY_BACKOFF);
+        }
     }
 }
 

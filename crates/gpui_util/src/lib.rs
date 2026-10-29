@@ -57,6 +57,35 @@ pub fn register_environment_root(root: std::path::PathBuf) {
     }
 }
 
+/// The app files dir in the two spellings that matter on Android: the
+/// one the editor keys its state by (`/data/user/0/<pkg>/files`, what
+/// `internal_data_path` returns) and the one the kernel reports for
+/// paths under it (`/data/data/<pkg>/files` on Android 16 at targetSdk
+/// 35, where `/data/user/0` is a symlink in the app's mount namespace).
+/// `None` once registered means the two agree.
+#[cfg(target_os = "android")]
+static FILES_DIR_SPELLINGS: OnceLock<Option<(std::path::PathBuf, std::path::PathBuf)>> =
+    OnceLock::new();
+
+/// Called from `lib.rs` at boot, once.
+#[cfg(target_os = "android")]
+pub fn register_files_dir_spellings(editor: std::path::PathBuf, kernel: std::path::PathBuf) {
+    let spellings = (editor != kernel).then_some((editor, kernel));
+    if FILES_DIR_SPELLINGS.set(spellings).is_err() {
+        log::debug!("gpui_util: files dir spellings already registered; ignoring re-register");
+    }
+}
+
+/// `path` with the kernel's spelling of the files dir replaced by the
+/// editor's; `None` when `path` is not under the kernel's spelling or
+/// the spellings agree.
+#[cfg(target_os = "android")]
+pub fn respell_kernel_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let (editor, kernel) = FILES_DIR_SPELLINGS.get()?.as_ref()?;
+    let rest = path.strip_prefix(kernel).ok()?;
+    Some(editor.join(rest))
+}
+
 /// Android-only env-root bridge helper.
 ///
 /// Zed-the-app runs on Android's bionic libc, but every spawn target
@@ -90,6 +119,10 @@ pub fn env_root_program_path(program: &OsStr) -> Option<std::path::PathBuf> {
     if !path.is_absolute() {
         return None;
     }
+    // A path a tool or the kernel produced may carry the kernel's
+    // spelling of the files dir.
+    let respelled = respell_kernel_path(path);
+    let path = respelled.as_deref().unwrap_or(path);
     // `starts_with` matches on full path components, so a literal
     // prefix like `<root>foo` won't false-match against `<root>/foo`.
     if !path.starts_with(root) {

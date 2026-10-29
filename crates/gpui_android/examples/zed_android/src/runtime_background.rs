@@ -2,7 +2,9 @@
 //! `android_runtime.keep_awake` setting feeding the runtime foreground
 //! service, and the battery-optimization exemption Android asks the user
 //! for in a system dialog. The service itself is driven from the process
-//! tree in `gpui_android::runtime_service`.
+//! tree in `gpui_android::runtime_service`. The All files access toggle
+//! for `/sdcard` lives here too, as the other system screen the settings
+//! page opens.
 
 use gpui::{App, Context, actions};
 use settings::{Settings as _, SettingsStore};
@@ -14,6 +16,9 @@ actions!(
         /// Ask Android to exempt Zdroid from battery optimization, so
         /// background language servers and terminals are not stopped.
         AllowBackgroundActivity,
+        /// Open the system toggle that lets Zdroid read and write files
+        /// under /sdcard (All files access on Android 11 and later).
+        AllowAllFilesAccess,
     ]
 );
 
@@ -21,6 +26,7 @@ pub fn register(cx: &mut App) {
     cx.observe_new(
         |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
             workspace.register_action(allow_background_activity);
+            workspace.register_action(allow_all_files_access);
         },
     )
     .detach();
@@ -41,6 +47,21 @@ fn allow_background_activity(
     _cx: &mut Context<Workspace>,
 ) {
     request_battery_exemption();
+}
+
+fn allow_all_files_access(
+    _workspace: &mut Workspace,
+    _: &AllowAllFilesAccess,
+    _window: &mut gpui::Window,
+    _cx: &mut Context<Workspace>,
+) {
+    match gpui_android::storage::request_all_files_access() {
+        Ok(true) => {
+            log::info!("runtime_background: all files access screen opened or already granted")
+        }
+        Ok(false) => log::warn!("runtime_background: all files access settings unavailable"),
+        Err(error) => log::warn!("runtime_background: all files access request failed: {error:#}"),
+    }
 }
 
 /// Ask once, on the launch that set the runtime up. The marker keeps the

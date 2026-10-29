@@ -330,8 +330,8 @@ pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) 
                 .l()?;
             // ActivityManager.AppTask.getTaskInfo() returns ActivityManager.RecentTaskInfo,
             // which extends TaskInfo. The taskId field is `id` on RecentTaskInfo
-            // (deprecated API 29+ but still works at targetSdk=28) and
-            // `taskId` on TaskInfo (API 29+). Try the modern field first.
+            // (deprecated since API 29, still populated) and `taskId` on
+            // TaskInfo (API 29+). Try the modern field first.
             let task_info = env
                 .call_method(
                     &app_task,

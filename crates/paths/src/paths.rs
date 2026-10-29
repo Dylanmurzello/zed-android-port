@@ -107,9 +107,15 @@ pub fn set_custom_data_dir(dir: &str) -> &'static PathBuf {
     CUSTOM_DATA_DIR.get_or_init(|| {
         let path = PathBuf::from(dir);
         std::fs::create_dir_all(&path).expect("failed to create custom data directory");
+        #[cfg(not(target_os = "android"))]
         let canonicalized = path
             .canonicalize()
             .expect("failed to canonicalize custom data directory's path to an absolute path");
+        // The kernel's spelling of the app files dir differs from the one
+        // the editor keys its state by, and the given path is absolute
+        // already (android-files-dir-spelling.md).
+        #[cfg(target_os = "android")]
+        let canonicalized = path;
         // On Windows, `canonicalize` produces extended-length paths prefixed
         // with `\\?\`. Strip that prefix so downstream consumers (e.g.
         // Node.js language servers) that receive derived paths as arguments
