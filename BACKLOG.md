@@ -102,6 +102,10 @@ Still unverified on a device: streamed responses and tool calls through an OpenA
 
 Tried on the tablet on 2026-10-28 with the workaround: the Codex thread opened, then every request failed with "workspace routing discovery failed". Codex looks for a CA bundle in Linux paths Android doesn't have, and Bootstrap set `SSL_CERT_FILE` only in the terminal; since 0.9.19 it sets it for the whole app, so agents and language servers get it too; the tablet confirmed the fix. Claude Agent is still untested.
 
+## Scrolling runs at about 64 fps on the 120 Hz panel
+
+Measured on 2026-10-29 on 0.9.21, scrolling a file in landscape with `adb shell input swipe`: a frame every 15.6ms on average, and 83% of the gaps between frames were longer than one refresh. `android_main` spends about 12.5ms of CPU per frame on the prime core at its maximum clock, so the CPU scheduler can't help; a performance hint session changed nothing (`crates/gpui_android/docs/workarounds/choreographer-vsync.md`). A profile with the build's symbols split each frame's main-thread time into painting glyphs (24%: `TextSystem::raster_bounds` 12.6% and `WgpuAtlas::get_or_insert_with` 8.6% of the thread's own time, two locked hash lookups per glyph per frame), the editor's layout (about 20%), sorting sprites and uploading them to the GPU (about 10%), and stack switching (7%), the only part desktop doesn't pay: stacker couldn't read the stack limit on Android. 0.9.23 fixes that (`crates/gpui_android/docs/workarounds/stacker-android-stack-limit.md`): scrolling through new lines went from a frame every 15.2ms to 14.2ms, but each frame still costs about 12.5ms of CPU. The per-glyph lookups are the largest remaining cost, and reducing them means changing gpui's glyph caching.
+
 ## Platform gaps found in the 2026-10-28 audit
 
 - **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.

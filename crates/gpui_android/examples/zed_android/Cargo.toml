@@ -157,6 +157,11 @@ webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev 
 # Avoid panicking when a failed EGL call reports EGL_SUCCESS.
 # https://github.com/timothee-haudebourg/khronos-egl/pull/37
 khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+# Not in the root table: Zdroid's own patch. stacker 0.1.25 can't read a
+# thread's stack limit on Android, so gpui's stack guard mapped a new stack on
+# every guarded call; see
+# crates/gpui_android/docs/workarounds/stacker-android-stack-limit.md.
+stacker = { git = "https://github.com/ilkersigirci/stacker", rev = "81eb8f789c55a9330e5b3c9f737f63e684c2f00f" }
 
 # corgi runs build.rs/proc-macros in a sandbox with no write access outside the
 # action's own OUT_DIR. Upstream `scratch` bakes its build-time OUT_DIR in via

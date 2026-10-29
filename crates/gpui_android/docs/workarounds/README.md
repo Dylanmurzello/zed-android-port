@@ -94,6 +94,7 @@ next to the files. These are the app's side:
 | [Construct buffer inside open_window](construct-buffer-inside-open-window.md) | Active | Sibling of refcell-drain; buffer constructor needs to live under the same borrow |
 | [wgpu device-lost recovery](wgpu-device-lost-recovery.md) | Active | Android GPU driver loses context under memory pressure; need explicit drop+recreate |
 | [Force a paint after surface attach](force-paint-after-surface-attach.md) | Active | Fresh swapchain doesn't get an invalidation event; force one explicit paint |
+| [stacker reads the stack limit on Android](stacker-android-stack-limit.md) | Active | stacker couldn't read the stack limit on Android, so gpui's stack guard mapped a new stack on every guarded call |
 | [Render-pipeline perf polish](deferred-render-pipeline-perf.md) | Deferred | 120Hz opt-in, Mailbox present mode, FrameMetrics instrumentation, ALooper spurious-wake hunt; "feels native-but-not-native" latency budget |
 
 ## Multi-window (L7)
