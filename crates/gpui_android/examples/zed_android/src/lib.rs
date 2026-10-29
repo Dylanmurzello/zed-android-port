@@ -532,10 +532,10 @@ fn android_main(app: AndroidApp) {
         runtime.kernel_data_path().to_path_buf(),
     );
 
-    // The Zed process env comes from the runtime: the host shape (HOME,
-    // PATH with the loader links first) plus the engine variables every
-    // child needs to reach the loader configured. The integrated terminal
-    // inherits it.
+    // The Zed process env comes from the runtime: the host shape (the
+    // guest's HOME, PATH with the loader links first) plus the engine
+    // variables every child needs to reach the loader configured. The
+    // integrated terminal inherits it.
     //
     // SAFETY: `set_var` / `remove_var` mutate libc-shared process
     // state. The invariant is "no other thread reads/writes libc env

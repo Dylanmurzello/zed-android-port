@@ -212,11 +212,12 @@ impl Runtime {
     }
 
     /// Mutations to apply to the Zed process env at boot. Zed's own
-    /// process keeps the host shape (HOME, PATH with the farm first); the
-    /// engine block rides along so every child spawned from it, through
-    /// the farm or the bridge, reaches the loader configured.
+    /// process keeps the host shape (PATH with the farm first) and the
+    /// guest's home; the engine block rides along so every child spawned
+    /// from it, through the farm or the bridge, reaches the loader
+    /// configured.
     pub fn env_for_zed_process(&self) -> Vec<(String, EnvOp)> {
-        let mut ops = crate::env::baseline_env(&self.data_path);
+        let mut ops = crate::env::baseline_env(&self.data_path, &self.workspace_root());
         for (key, value) in self.engine_env() {
             ops.push((key, EnvOp::Set(value)));
         }
@@ -437,5 +438,21 @@ mod tests {
         );
         assert!(!path.contains("/root"), "{path}");
         assert!(path.ends_with(":/usr/bin:/sbin:/bin"), "{path}");
+    }
+
+    #[test]
+    fn the_editor_and_the_guest_share_the_home_folder() {
+        let runtime = Runtime::new(std::path::Path::new("/data/user/0/com.zdroid/files"));
+        let home = runtime
+            .env_for_zed_process()
+            .into_iter()
+            .find_map(|(key, op)| match op {
+                crate::env::EnvOp::Set(value) if key == "HOME" => Some(value),
+                _ => None,
+            });
+        assert_eq!(
+            home.as_deref(),
+            Some(std::ffi::OsStr::new("/data/user/0/com.zdroid/files/home"))
+        );
     }
 }

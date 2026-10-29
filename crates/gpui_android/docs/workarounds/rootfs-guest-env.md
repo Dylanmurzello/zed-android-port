@@ -7,10 +7,9 @@
 ## Problem
 
 Two processes with different ideas of the world share one environment.
-The editor is a bionic process whose `HOME` is the app files dir and
-whose PATH has to find the farm; the tools it spawns are Ubuntu
-processes that expect a home of their own, `PATH=/usr/local/sbin:...` and
-`TMPDIR=/tmp`. Upstream Zed hands `std::env::vars()` to every worktree
+The editor is a bionic process whose PATH has to find the farm; the tools
+it spawns are Ubuntu processes that expect `USER=root`,
+`PATH=/usr/local/sbin:...` and `TMPDIR=/tmp`. Upstream Zed hands `std::env::vars()` to every worktree
 and language server, so whatever the editor's environment is, the tools
 inherit it.
 
@@ -25,7 +24,10 @@ every exec.
 ## Solution
 
 - **Editor process (`Runtime::env_for_zed_process`).** `baseline_env`
-  keeps the host shape: `HOME=<data>/files`, `TMPDIR=<data>/files/tmp`,
+  keeps the host shape: `HOME=<data>/files/home` (the guest's home, so `~`
+  is one folder to both: the SSH hosts Zed lists, the `~/.gitconfig` it
+  watches, where a terminal opens without a project, `~/` links in the
+  terminal), `TMPDIR=<data>/files/tmp`,
   `PATH=<data>/files/zd-runtime:<data>/files/bin:<system PATH>`, `TERM`,
   `COLORTERM`, `LANG`, `ZED_BUILD_REMOTE_SERVER=never`, no `LD_PRELOAD`.
   On top of it the engine block every loader invocation needs:
@@ -69,10 +71,16 @@ every exec.
 
 ## Why not the obvious fix
 
-Giving the editor the guest's `HOME` too would move every upstream
-`dirs::home_dir()` consumer (settings, databases, logs all derive from
-it) into the user's home folder. Applying `ZD_GUEST_ENV` at every exec was the first version and
-silently undid `export PATH`, `su -` and `env -i` inside the guest.
+Applying `ZD_GUEST_ENV` at every exec was the first version and silently
+undid `export PATH`, `su -` and `env -i` inside the guest.
+
+The editor's `HOME` used to stay the files dir, on the belief that Zed's
+settings, databases and logs derive from it. They don't here:
+`paths::set_custom_data_dir` puts config, data, logs, extensions and
+temp files under the files dir whatever `HOME` is, and what's left of
+`HOME` in Zed (SSH config, `~/.gitconfig`, journal, `~` expansion, the
+fallback working directory) means the user's home. With two homes, Zed
+read `files/.ssh/config` while ssh read `files/home/.ssh/config`.
 
 ## Failure mode
 
