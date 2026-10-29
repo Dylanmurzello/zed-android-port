@@ -304,13 +304,16 @@ pub extern "C" fn sigsys(_signal: i32, info: *mut SigInfo, context: *mut UContex
         regs[0] = PROBE_ACK;
         return;
     }
+    // The call's own x0: the result replaces it, and the refusal log
+    // reads a path from it.
+    let first_argument = regs[0];
     if !is_engine_tag(tag) {
         compat_trap(number, regs);
-        census(number, regs, false);
+        census(number, regs, first_argument, false);
         return;
     }
     dispatch(number, regs, uc_sigmask, pc);
-    census(number, regs, true);
+    census(number, regs, first_argument, true);
 }
 
 /// A SIGSYS that is not the engine's comes from Android's filter or from
@@ -454,7 +457,7 @@ fn log_unknown(number: u32) {
 /// rule nothing emulates yet, and the symptom never names the syscall,
 /// so this line does. ENOSYS counts only for engine traps, where it means
 /// a trapped syscall the handler did not serve.
-fn census(number: u32, regs: &[u64; 31], engine_trap: bool) {
+fn census(number: u32, regs: &[u64; 31], first_argument: u64, engine_trap: bool) {
     let errno = if regs[0] == sys::neg_errno(sys::EACCES) {
         sys::EACCES
     } else if regs[0] == sys::neg_errno(sys::EPERM) {
@@ -467,11 +470,11 @@ fn census(number: u32, regs: &[u64; 31], engine_trap: bool) {
     if config::get().log.is_empty() {
         return;
     }
-    log_refusal(number, errno, regs);
+    log_refusal(number, errno, regs, first_argument);
 }
 
 #[inline(never)]
-fn log_refusal(number: u32, errno: i32, regs: &[u64; 31]) {
+fn log_refusal(number: u32, errno: i32, regs: &[u64; 31], first_argument: u64) {
     let mut line = log::Line::new();
     line.push(b"zdload: refused exe=");
     line.push(config::get().guest_exe.as_bytes());
@@ -485,7 +488,8 @@ fn log_refusal(number: u32, errno: i32, regs: &[u64; 31]) {
     if errno != sys::ENOSYS {
         // Only a syscall the kernel answered has had its pointers validated.
         for index in guest_path_args(number).into_iter().flatten() {
-            let Some(path) = (unsafe { cstr_bounded(regs[index] as *const u8, MAX_PATH) }) else {
+            let argument = if index == 0 { first_argument } else { regs[index] };
+            let Some(path) = (unsafe { cstr_bounded(argument as *const u8, MAX_PATH) }) else {
                 continue;
             };
             line.push(b" path=");
