@@ -60,22 +60,28 @@ writeup is the editor side.
 - **The environment.** `rootfs-guest-env.md`.
 - **Reset.** Settings → Android → Reset Runtime terminates the
   editor's children (`runtime_service::terminate_descendants`) and
-  extracts the bundled image again over a fresh staging dir; projects
-  and editor state are outside the rootfs and untouched, and the guest's
-  home (`/root`) moves into the new tree.
-- **The home folder.** `/root` holds links to `~/projects` and
-  `~/storage` in the app's home folder (`<data>/files/home`), and to
-  what a Bootstrap-era home there held: `.ssh`, `.gitconfig`, `.claude`,
-  `.claude.json` and `.codex`. The links point at the identity-mapped
-  path, so a tool's `getcwd` under `~/projects` reports the path Zed
-  uses. Binding `/root` to the home folder instead would make the
-  engine's longest-prefix reverse lookup report `/root/projects/...`,
-  which the editor can't match to its worktrees.
-- **Upgrades from Bootstrap and chroot releases.** Boot deletes the old bootstrap prefix
-  (`<data>/files/usr`), the `bin/zd-exec` binary and the adapter
-  selection file; the chroot-era editor state under `home/.zed-env` is
-  the user's own settings and is left alone. Farm entries that still
-  point at `../bin/zd-exec` are swept by the farm refresh.
+  extracts the bundled image again over a fresh staging dir; the home
+  folder and editor state are outside the rootfs and untouched.
+- **The home folder.** The guest's home is the app's home folder,
+  `<data>/files/home`: `$HOME` in the guest view and root's entry in the
+  rootfs's `/etc/passwd`, which ssh reads instead of `$HOME`. It holds
+  `projects/`, the `storage/` links into shared storage, dotfiles, SSH keys
+  and per-user toolchains (`~/.cargo`, `~/.local`); the Files app shows it
+  as Zdroid's root. Being outside the rootfs at an identity-mapped path, it
+  survives a reset, and a tool's `getcwd` under `~/projects` reports the
+  path Zed uses. The image's `/root` would be neither: a reset replaces
+  it, and the engine's reverse lookup reports paths under it as
+  `/root/...`, which the editor can't match to its worktrees. The
+  installer gives the folder the image's root `.bashrc` and `.profile`
+  where it has none.
+- **Upgrades from Bootstrap and chroot releases.** They aren't migrated:
+  their programs, and what Zed installed with them, don't run in the
+  rootfs. When boot finds the old prefix (`<data>/files/usr`) or the
+  `bin/zd-exec` bridge, it sets nothing up and restores no session; an
+  empty window asks to clear the app's data, and every other answer quits
+  (`runtime_setup::open_clean_start`,
+  `ActivityManager.clearApplicationUserData`). Open Files lets the user
+  copy the home folder out first.
 
 ## Why not the obvious fix
 

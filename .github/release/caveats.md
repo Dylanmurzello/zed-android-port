@@ -1,4 +1,4 @@
-- Zdroid 0.10 replaces the Bootstrap and Kali chroot runtimes with an Ubuntu runtime. Packages installed with `pkg` are removed on the first launch; install them again with `apt`. Your home folder stays, and the SSH keys, git config and Claude Code and Codex logins it holds are linked into the runtime's home (`/root`).
+- Zdroid 0.10 replaces the Bootstrap and Kali chroot runtimes with an Ubuntu runtime and doesn't open an earlier version's data: on the first launch it asks to clear Zdroid's data, which deletes the home folder (projects, SSH keys, logins), the settings, the extensions and the API keys. To keep something, choose **Open Files** in that dialog and copy it from Zdroid to Downloads first.
 - Files under `/sdcard` need Android's All files access: Zdroid opens the toggle once on first launch, and **Settings → Android → Allow Access to /sdcard** opens it again. Projects under the app's own folder need nothing.
 - Android stops child processes past 32 across all apps. On Android 14 and later, **Developer options → Disable child process restrictions** lifts the limit.
 - The runtime has no System V IPC, so PostgreSQL doesn't start in it.

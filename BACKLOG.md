@@ -114,18 +114,19 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 ## 0.10.0 device checks
 
-0.10.0 merges Dylan's 0.4.0: the Ubuntu runtime replaces Bootstrap and Kali chroot, and targetSdk goes from 28 to 35. Install it over 0.9.23 and check:
+0.10.0 merges Dylan's 0.4.0: the Ubuntu runtime replaces Bootstrap and Kali chroot, and targetSdk goes from 28 to 35. Time the rust-analyzer and `git status` checks below on 0.9.23 first, then install 0.10.0 over it and check:
 
-- First launch after the upgrade: the splash extracts the image, the essentials notification finishes, and `files/usr` is gone. `ls -la ~` in the terminal shows `projects`, `storage` and `.ssh` (and `.claude`, `.codex` where the Bootstrap home had them) linked into `/data/user/0/com.zdroid/files/home`; `git config user.name` reads the old home's identity.
+- Over 0.9.23, the first launch shows only the "Zdroid needs a fresh start" dialog over an empty window: Esc and **Quit** close Zdroid, **Open Files** opens the Files app at Zdroid's home folder and closes Zdroid, **Clear Data** clears it and closes Zdroid.
+- After clearing: the splash extracts the image and the essentials notification finishes. In the terminal, `echo $HOME` and `pwd -P` under `~/projects/<project>` print the `/data/user/0/com.zdroid/files/home/...` paths, and `ls -a ~` lists `projects`, `storage`, `.bashrc` and `.profile`.
 - Android's prompts: All files access opens once, the notification permission is asked when the runtime service first starts, and no "built for an older version" warning shows at install.
-- Terminal: `apt update && apt install -y build-essential`, `cd ~/projects/<project> && pwd -P` prints the `/data/user/0/...` path, `ssh` to a host with a key from `~/.ssh`.
+- Terminal: `apt update && apt install -y build-essential`, `ssh` to a host with a key in `~/.ssh`, and the Files app shows the same `~` as the terminal.
 - rust-analyzer installed with rustup in a Rust project under `~/projects`: diagnostics, go to definition, and `cargo build` in the terminal, timed against 0.9.23 on the same project; the same for `git status` in a large repository.
 - An SSH remote project from a new connection, with a password prompt (the async-task waker fix) and with a key: the terminal and an agent thread start on the remote.
 - Claude Agent and Codex in the agent panel, locally and on a remote; Zed's own agent through the LiteLLM endpoint.
 - The debugger: a CodeLLDB breakpoint in a Rust binary.
 - Background: with a terminal open, the runtime notification shows and leaves 30 s after the last terminal closes; Keep Running in Background keeps it with no terminal, and its Stop action turns that off; Keep Awake keeps a `sleep 600; date` running with the screen off; Quit and a Recents swipe leave no process behind (`adb shell ps -A | grep com.zdroid`).
 - `adb shell cmd connectivity airplane-mode enable` then disable while Zdroid runs: the runtime's `/etc/resolv.conf` follows the new network, and `curl -I https://github.com` works afterwards without a restart.
-- Settings → Android → Reset Runtime: apt packages are gone, `~/.bash_history` and the links stay.
+- Settings → Android → Reset Runtime: apt packages are gone, the home folder (projects, `~/.bash_history`, rustup's `~/.cargo`) stays.
 - A language server killed with `kill` from the terminal restarts with the "exited; restarted (1/3)" toast.
 - The in-app update from 0.10.0 to the next release (the updater at targetSdk 35).
 - Settings → Android shows Runtime (Reset Runtime, Install Essentials), Storage and Background (Allow Access to /sdcard, Allow Background Activity, Keep Awake) and the keyboard and trackpad toggles; Settings → General shows **Auto Update**, which the in-app updater honors.

@@ -106,6 +106,8 @@ Fork-specific changes to keep while resolving:
   - the language server restarts (his `lsp_store.rs`) to the app's `src/lsp_watchdog.rs`;
   - Android settings (his `workspace_settings.rs`, `default.json`, `page_data.rs`) to the app, as `android_input` and `android_runtime` are, and to `crates/settings_ui/src/page_data/android.rs`;
   - his app code to the app's copies of Zed's startup code (`src/zed.rs`, `src/lib.rs`).
+- The guest's home is the app's home folder (`files/home`), not his `/root`: `guest_env_spec`, `guest_path` and `binary_dirs` in `crates/zdroid_runtime/src/runtime.rs`, and `seed`/`seed_home` in `install.rs`.
+- Installs from before 0.10 aren't migrated: `runtime_setup::open_clean_start` asks to clear the data instead of his `sweep_previous_runtimes`.
 - Dylan's engine crates, `crates/zd_engine_core` and `crates/zd_loader`, are unformatted, and their `rustfmt.toml` keeps CI's format check off them. Take his versions as they are.
 - `async-task` isn't vendored: the revision Zed pins has his fix.
 

@@ -9,7 +9,7 @@
 Two processes with different ideas of the world share one environment.
 The editor is a bionic process whose `HOME` is the app files dir and
 whose PATH has to find the farm; the tools it spawns are Ubuntu
-processes that expect `HOME=/root`, `PATH=/usr/local/sbin:...` and
+processes that expect a home of their own, `PATH=/usr/local/sbin:...` and
 `TMPDIR=/tmp`. Upstream Zed hands `std::env::vars()` to every worktree
 and language server, so whatever the editor's environment is, the tools
 inherit it.
@@ -32,8 +32,11 @@ every exec.
   `ZD_ROOTFS`, `ZD_BINDS`, `ZD_FAKE_ROOT=1`, `ZD_HOSTNAME=zdroid`,
   `ZD_CLOSE_FDS=1`, `ZD_GUEST_ENV`, and `ZD_LOG` when the dev toggle file
   `<data>/files/etc/zd-engine-log` exists. `SHELL` is the loader link.
-- **Guest view (`ZD_GUEST_ENV`).** `HOME=/root;USER=root;LOGNAME=root;
-  SHELL=/bin/bash;PATH=<guest PATH>;LANG=C.UTF-8;TMPDIR=/tmp`. The loader
+- **Guest view (`ZD_GUEST_ENV`).** `HOME=<data>/files/home;USER=root;
+  LOGNAME=root;SHELL=/bin/bash;PATH=<guest PATH>;LANG=C.UTF-8;TMPDIR=/tmp`,
+  where the guest PATH is the engine's default with `~/.cargo/bin` and
+  `~/.local/bin` of that home in place of `/root`'s. The home is the app's
+  home folder, outside the rootfs (`rootfs-engine-integration.md`). The loader
   applies it at an exec the editor initiates and removes it from the
   guest's environment, and the handler never re-injects it, so a guest
   process changing its own environment is honoured downstream. The
@@ -66,9 +69,9 @@ every exec.
 
 ## Why not the obvious fix
 
-Making `HOME=/root` for the editor too would break every upstream
+Giving the editor the guest's `HOME` too would move every upstream
 `dirs::home_dir()` consumer (settings, databases, logs all derive from
-it). Applying `ZD_GUEST_ENV` at every exec was the first version and
+it) into the user's home folder. Applying `ZD_GUEST_ENV` at every exec was the first version and
 silently undid `export PATH`, `su -` and `env -i` inside the guest.
 
 ## Failure mode
