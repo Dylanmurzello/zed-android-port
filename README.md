@@ -55,6 +55,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
   - language servers, debug adapters, Node and ACP agents that Zed downloads picking their Linux builds, the agent registry's included;
   - the SSH client installed on first launch, next to git and the CA certificates;
   - one home folder for the editor, the terminal, the Files app and your projects (`~/projects`), which **Reset Runtime** leaves alone;
+  - the terminal runs root's login shell, so `chsh -s /usr/bin/zsh` switches it to zsh, and fonts in `~/.local/share/fonts` or installed with apt reach the editor and the terminal;
   - the runtime's DNS servers following Android's when the network changes;
   - a language server that Android stops restarted, up to three times in ten minutes.
 - The debugger, with CodeLLDB.
