@@ -1,29 +1,24 @@
 //! The Android code that Zed's crates call from small `cfg(target_os =
-//! "android")` blocks: process spawning (`gpui_util`, `util::command`), the
-//! local terminal's environment (`terminal`), npm's environment
-//! (`node_runtime`) and a path lookup fallback (`project`). Keeping it here
+//! "android")` blocks: process spawning (`gpui_util`, `util::command`), path
+//! spelling (`fs`) and a path lookup fallback (`project`). Keeping it here
 //! leaves one call in each of those crates, which are merged at every Zed
 //! sync.
 //!
-//! The app registers the active runtime's paths and variables at startup.
-//! Switching runtimes restarts the app, so each is set once; a second
-//! registration, when the Activity is recreated, is ignored.
+//! The app registers the runtime's paths at startup. A second registration,
+//! when the Activity is recreated, is ignored.
 
-use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::hash::BuildHasher;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// Invoked by short name so the kernel's PATH lookup finds the
-/// `$PREFIX/zd-runtime/zd-exec` symlink, like every other PATH-resolved
-/// spawn, and this crate needs no app-package paths.
-const ZD_EXEC_PROGRAM: &str = "zd-exec";
+/// Invoked by short name: the kernel's PATH lookup finds the
+/// `<files>/bin/zdload` link to the engine loader, so this crate needs no
+/// app-package paths.
+const BRIDGE_PROGRAM: &str = zd_engine_core::LOADER_LINK_NAME;
 
 static ENVIRONMENT_ROOT: OnceLock<PathBuf> = OnceLock::new();
-static TERMINAL_ENV: OnceLock<Vec<(String, OsString)>> = OnceLock::new();
-static NPM_LIBTERMUX_EXEC_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static FILES_DIR_SPELLINGS: OnceLock<Option<(PathBuf, PathBuf)>> = OnceLock::new();
 
 fn register<T>(slot: &OnceLock<T>, value: T, name: &str) {
     if slot.set(value).is_err() {
@@ -31,49 +26,44 @@ fn register<T>(slot: &OnceLock<T>, value: T, name: &str) {
     }
 }
 
-/// Registers the host-side root of a runtime whose binaries can't run on the
-/// host (the chroot's glibc userland). [`new_std_command`] then routes every
-/// absolute program path under it through `zd-exec`.
+/// Registers the app files dir. [`new_std_command`] then routes every
+/// absolute program path under it through the engine loader.
 pub fn register_environment_root(root: PathBuf) {
     register(&ENVIRONMENT_ROOT, root, "environment root");
 }
 
-/// Registers the variables the active runtime sets in local terminals, on
-/// top of the app's own environment, which the shell inherits.
-pub fn register_terminal_env(variables: Vec<(String, OsString)>) {
-    register(&TERMINAL_ENV, variables, "terminal environment");
+/// Registers the files dir as the editor spells it (`/data/user/0/...`,
+/// what its stored paths use) and as the kernel reports it
+/// (`/data/data/...` at targetSdk 35). See `android-files-dir-spelling.md`.
+pub fn register_files_dir_spellings(editor: PathBuf, kernel: PathBuf) {
+    let spellings = (editor != kernel).then_some((editor, kernel));
+    register(&FILES_DIR_SPELLINGS, spellings, "files dir spellings");
 }
 
-/// Registers Bootstrap's `libtermux-exec.so`, which rewrites the
-/// `/data/data/com.termux/` paths built into Termux's npm packages. Other
-/// runtimes register `None`.
-pub fn register_npm_libtermux_exec_path(path: Option<PathBuf>) {
-    register(&NPM_LIBTERMUX_EXEC_PATH, path, "npm libtermux-exec path");
+/// `path` with the kernel's spelling of the files dir replaced by the
+/// editor's, or `None` when `path` isn't under it or the spellings agree.
+pub fn respell_kernel_path(path: &Path) -> Option<PathBuf> {
+    let (editor, kernel) = FILES_DIR_SPELLINGS.get()?.as_ref()?;
+    let rest = path.strip_prefix(kernel).ok()?;
+    Some(editor.join(rest))
 }
 
 /// `gpui_util::new_std_command` on Android, which `util::command::Command`
 /// also starts from, so synchronous and asynchronous spawns are routed the
 /// same way.
 ///
-/// The app runs on bionic, but programs under the chroot's root need its
-/// glibc loader (`/lib/ld-linux-aarch64.so.1`), which the host doesn't
-/// have: those spawns become `zd-exec <program>`, which runs them inside
-/// the runtime. A script starting with `#!/usr/bin/env <interpreter>` fails
-/// the same way, because the host has no `/usr/bin/env`: it becomes
-/// `<interpreter> <script>`, and the interpreter's short name resolves
-/// through the runtime's `zd-runtime/<name>` symlinks. Anything else,
-/// including system binaries such as `/system/bin/sh`, spawns unchanged.
+/// The app runs on bionic, but the programs Zed keeps under the files dir
+/// (its Node, downloaded language servers and debug adapters) are Linux
+/// binaries for the runtime's Ubuntu userland: those spawns become `zdload
+/// <program>`, which maps the program into the rootfs. The loader handles
+/// `#!` lines itself. Anything else, including system binaries such as
+/// `/system/bin/sh` and programs found on PATH, spawns unchanged.
 pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     let program = program.as_ref();
-    if let Some(program_path) = environment_root_program(program) {
-        let mut command = std::process::Command::new(ZD_EXEC_PROGRAM);
-        command.arg(program_path);
-        return command;
-    }
-    match env_shebang_interpreter(program) {
-        Some((interpreter, script)) => {
-            let mut command = std::process::Command::new(interpreter);
-            command.arg(script);
+    match environment_root_program(program) {
+        Some(program_path) => {
+            let mut command = std::process::Command::new(BRIDGE_PROGRAM);
+            command.arg(program_path);
             command
         }
         None => std::process::Command::new(program),
@@ -83,35 +73,86 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
 fn environment_root_program(program: &OsStr) -> Option<PathBuf> {
     let root = ENVIRONMENT_ROOT.get()?;
     let path = Path::new(program);
-    // `starts_with` compares whole components, so `<root>foo` doesn't match.
-    (path.is_absolute() && path.starts_with(root)).then(|| path.to_path_buf())
-}
-
-/// Returns the interpreter and script path for an absolute `program` whose
-/// first line is `#!/usr/bin/env <interpreter>`. Shebangs passing options
-/// to env (`-S`), other shebangs, binaries and unreadable files return
-/// `None` and spawn unchanged, so their original error surfaces.
-fn env_shebang_interpreter(program: &OsStr) -> Option<(OsString, PathBuf)> {
-    use std::io::{BufRead, BufReader, Read};
-
-    let path = Path::new(program);
     if !path.is_absolute() {
         return None;
     }
-    let file = std::fs::File::open(path).ok()?;
-    // A shebang is short; don't read a large binary looking for a newline.
-    let mut reader = BufReader::new(file.take(256));
-    let mut first_line = String::new();
-    reader.read_line(&mut first_line).ok()?;
-    let interpreter = first_line
-        .trim_end()
-        .strip_prefix("#!/usr/bin/env ")?
-        .split_whitespace()
-        .next()?;
-    if interpreter.starts_with('-') {
+    // A path a tool or the kernel produced may use the kernel's spelling.
+    let respelled = respell_kernel_path(path);
+    let path = respelled.as_deref().unwrap_or(path);
+    // `starts_with` compares whole components, so `<root>foo` doesn't match.
+    if !path.starts_with(root) {
         return None;
     }
-    Some((OsString::from(interpreter), path.to_path_buf()))
+    // `zd-runtime/` and `bin/` hold links to the loader itself, which would
+    // open its own link as the guest program; the kernel execs them.
+    if path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin")) {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
+/// `util::command::Command::env` on Android, for `PATH`.
+///
+/// The loader replaces a child's environment with the guest view in
+/// `ZD_GUEST_ENV` at every exec the editor starts, so a `PATH` set on one
+/// spawn would never reach the guest. npm runs package scripts as `sh -c
+/// "node install.js"` with the managed Node's `bin` on that `PATH`. Returns
+/// the `ZD_GUEST_ENV` to set on the child, with `host_path`'s entries ahead
+/// of the guest's own `PATH`, or `None` when the app doesn't run the engine.
+pub fn guest_env_for_path(host_path: &OsStr) -> Option<(&'static str, OsString)> {
+    let spec = std::env::var(zd_engine_core::env::GUEST_ENV).ok()?;
+    let root = ENVIRONMENT_ROOT.get().map(PathBuf::as_path);
+    let merged = merge_guest_path(&spec, &host_path.to_string_lossy(), root);
+    Some((zd_engine_core::env::GUEST_ENV, merged.into()))
+}
+
+/// Puts `host_path`'s entries ahead of the `PATH` in the guest environment
+/// `spec`. Android's partitions and the loader links in `zd-runtime/` and
+/// `bin/` don't exist in the guest, so they're dropped.
+fn merge_guest_path(spec: &str, host_path: &str, root: Option<&Path>) -> String {
+    const HOST_ONLY_PREFIXES: &[&str] = &[
+        "/system/",
+        "/apex/",
+        "/vendor/",
+        "/product/",
+        "/odm/",
+        "/data/app/",
+    ];
+    let host_only = |entry: &str| {
+        HOST_ONLY_PREFIXES
+            .iter()
+            .any(|prefix| entry.starts_with(prefix))
+            || root.is_some_and(|root| {
+                let path = Path::new(entry);
+                path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin"))
+            })
+    };
+    let mut entries: Vec<&str> = Vec::new();
+    for entry in host_path.split(':') {
+        if entry.starts_with('/') && !host_only(entry) && !entries.contains(&entry) {
+            entries.push(entry);
+        }
+    }
+    let separator = zd_engine_core::LIST_SEPARATOR.to_string();
+    let mut items: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for item in spec.split(&separator) {
+        if let Some(guest_path) = item.strip_prefix("PATH=") {
+            for entry in guest_path.split(':') {
+                if !entry.is_empty() && !entries.contains(&entry) {
+                    entries.push(entry);
+                }
+            }
+            items.push(format!("PATH={}", entries.join(":")));
+            replaced = true;
+        } else if !item.is_empty() {
+            items.push(item.to_string());
+        }
+    }
+    if !replaced {
+        items.push(format!("PATH={}", entries.join(":")));
+    }
+    items.join(&separator)
 }
 
 /// `util::command::Command::current_dir` on Android.
@@ -138,7 +179,7 @@ pub fn safe_current_dir(dir: &Path) -> PathBuf {
     {
         return dir.to_path_buf();
     }
-    if let Some(home) = std::env::var_os("TERMUX__HOME").or_else(|| std::env::var_os("HOME")) {
+    if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
         if home.is_dir() {
             log::debug!("zdroid_hooks: running in {home:?} instead of shared storage {dir:?}");
@@ -146,35 +187,6 @@ pub fn safe_current_dir(dir: &Path) -> PathBuf {
         }
     }
     PathBuf::from("/system/bin")
-}
-
-/// Adds the active runtime's terminal variables to a local terminal's
-/// environment. The shell inherits the app's environment, and these replace
-/// what they name in it. Kept out of `terminal::insert_zed_terminal_env`,
-/// which also builds the environment sent to SSH remotes, where these paths
-/// don't exist.
-pub fn insert_terminal_env<S: BuildHasher>(env: &mut HashMap<String, String, S>) {
-    for (name, value) in TERMINAL_ENV.get().into_iter().flatten() {
-        env.insert(name.clone(), value.to_string_lossy().into_owned());
-    }
-}
-
-/// Adds what npm needs under Bootstrap to `node_runtime::npm_command_env`'s
-/// environment: `libtermux-exec.so` to rewrite the Termux paths in package
-/// scripts' shebangs, and the musl variants of packages with native
-/// binaries, which run on Bootstrap's bundled musl loader. The chroot uses
-/// its own libc and shebang paths, so it gets neither.
-pub fn insert_npm_env<S: BuildHasher>(env: &mut HashMap<String, String, S>) {
-    let Some(termux_exec) = NPM_LIBTERMUX_EXEC_PATH.get().and_then(Option::as_ref) else {
-        return;
-    };
-    if termux_exec.is_file() {
-        env.insert(
-            "LD_PRELOAD".into(),
-            termux_exec.to_string_lossy().into_owned(),
-        );
-    }
-    env.insert("npm_config_libc".into(), "musl".into());
 }
 
 /// `child`'s path relative to `parent`, when one of `child`'s ancestors is
@@ -200,6 +212,35 @@ fn file_identity(path: &Path) -> Option<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SPEC: &str = "HOME=/root;PATH=/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp";
+
+    #[test]
+    fn managed_node_dir_leads_and_host_dirs_drop() {
+        let root = Path::new("/data/user/0/com.zdroid/files");
+        let host_path = "/data/user/0/com.zdroid/files/node/v24/bin:/data/user/0/com.zdroid/files/zd-runtime:/data/user/0/com.zdroid/files/bin:/system/bin";
+        assert_eq!(
+            merge_guest_path(SPEC, host_path, Some(root)),
+            "HOME=/root;PATH=/data/user/0/com.zdroid/files/node/v24/bin:/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp"
+        );
+    }
+
+    #[test]
+    fn a_captured_guest_path_keeps_its_order() {
+        let host_path = "/root/.local/bin:/usr/bin:/usr/local/bin:/bin";
+        assert_eq!(
+            merge_guest_path(SPEC, host_path, None),
+            "HOME=/root;PATH=/root/.local/bin:/usr/bin:/usr/local/bin:/bin;TMPDIR=/tmp"
+        );
+    }
+
+    #[test]
+    fn a_spec_without_path_gains_one() {
+        assert_eq!(
+            merge_guest_path("HOME=/root", "/opt/bin:relative:/system/bin", None),
+            "HOME=/root;PATH=/opt/bin"
+        );
+    }
 
     #[test]
     fn strip_prefix_by_identity_finds_an_ancestor() {

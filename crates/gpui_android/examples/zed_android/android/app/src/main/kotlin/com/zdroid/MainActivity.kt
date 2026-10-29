@@ -3,6 +3,8 @@ package com.zdroid
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.app.ActivityManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
@@ -10,11 +12,15 @@ import android.database.ContentObserver
 import android.graphics.drawable.Animatable
 import android.hardware.input.InputManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
@@ -459,7 +465,15 @@ class MainActivity : GameActivity(), ImeHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installSplashOverlay()
-        KeepAliveService.startIfEnabled(this)
+        ZdRuntimeService.startIfBackgroundMode(this)
+        watchDnsServers()
+        // Reopening from Recents brings back the intent that started the
+        // task, which may be an earlier "Open with".
+        val relaunched = savedInstanceState != null ||
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (!relaunched) {
+            OpenedFiles.handle(this, intent)
+        }
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -976,6 +990,12 @@ class MainActivity : GameActivity(), ImeHost {
         return super.dispatchKeyEvent(event)
     }
 
+    /// A file another app opened while Zdroid runs (`OpenFileActivity`).
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        OpenedFiles.handle(this, intent)
+    }
+
     override fun onResume() {
         super.onResume()
         // The setting may have changed while the system's settings were in
@@ -1019,10 +1039,13 @@ class MainActivity : GameActivity(), ImeHost {
 
     /** Backs the Zdroid menu's background-mode toggle. */
     @Suppress("unused") // called from Rust via JNI
-    fun isBackgroundModeEnabled(): Boolean = KeepAliveService.isEnabled(this)
+    fun isBackgroundModeEnabled(): Boolean = ZdRuntimeService.isBackgroundModeEnabled(this)
 
     @Suppress("unused") // called from Rust via JNI
-    fun setBackgroundModeEnabled(enabled: Boolean) = KeepAliveService.setEnabled(this, enabled)
+    fun setBackgroundModeEnabled(enabled: Boolean) {
+        ZdRuntimeService.setBackgroundModeEnabled(this, enabled)
+        if (enabled) requestNotificationPermissionOnce()
+    }
 
     /** Backs gpui's credential API; see `gpui_android/src/credentials.rs`. */
     @Suppress("unused") // called from Rust via JNI
@@ -1040,9 +1063,7 @@ class MainActivity : GameActivity(), ImeHost {
     @Suppress("unused") // called from Rust via JNI
     /**
      * Open an HTTPS URL in the user's default browser. Called via JNI from
-     * the Rust side's `cx.open_url(...)`. Empty Android-platform stub before;
-     * fix for the runtime picker's "Get module" button which delegates to
-     * `cx.open_url(SPAWND_RELEASE_URL)`.
+     * the Rust side's `cx.open_url(...)`.
      *
      * Safe to call from any thread; `runOnUiThread` so `startActivity` runs
      * on main. Logs and swallows ActivityNotFoundException (rare on a stock
@@ -1123,6 +1144,23 @@ class MainActivity : GameActivity(), ImeHost {
     /// clean error.
     @Suppress("unused") // called from Rust via JNI
     fun requestStoragePermissions(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: raw /sdcard paths need "All files access", a
+            // per-app toggle in system settings rather than a dialog. Open
+            // it once per install; the Android settings page opens it again
+            // on request.
+            if (Environment.isExternalStorageManager()) {
+                Log.i(TAG, "requestStoragePermissions: all files access granted")
+                return 1
+            }
+            val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) {
+                Log.i(TAG, "requestStoragePermissions: all files access not granted; asked before")
+                return 2
+            }
+            prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
+            return if (requestAllFilesAccess()) 0 else 2
+        }
         val needed = listOf(
             Manifest.permission.READ_EXTERNAL_STORAGE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE,
@@ -1140,11 +1178,68 @@ class MainActivity : GameActivity(), ImeHost {
         return 0
     }
 
+    /// Android's own Clear storage for this app: deletes all of its data and
+    /// ends the process. Backs the clean start that an install from before
+    /// 0.10 needs.
+    @Suppress("unused") // called from Rust via JNI
+    fun clearAppData(): Boolean {
+        val activityManager = getSystemService(ActivityManager::class.java) ?: return false
+        return activityManager.clearApplicationUserData()
+    }
+
+    /// Opens the home folder, `ZedDocumentsProvider`'s root, in Android's
+    /// Files app, where folders can be copied to shared storage.
+    @Suppress("unused") // called from Rust via JNI
+    fun openHomeInFiles(): Boolean {
+        val root = DocumentsContract.buildRootUri(
+            "com.zdroid.documents",
+            File(filesDir, "home").absolutePath,
+        )
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(root, DocumentsContract.Root.MIME_TYPE_ITEM)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return try {
+            startActivity(intent)
+            true
+        } catch (error: ActivityNotFoundException) {
+            Log.w(TAG, "no app opens the documents provider's root", error)
+            false
+        }
+    }
+
+    /// Open the system "All files access" toggle for this package on
+    /// Android 11+, or the storage permission dialog on older releases.
+    /// Returns true when a screen opened or access already holds.
+    @Suppress("unused")
+    fun requestAllFilesAccess(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return requestStoragePermissions() != 2
+        }
+        if (Environment.isExternalStorageManager()) return true
+        val direct = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "all files access screen unavailable; opening the list", t)
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                true
+            } catch (inner: Throwable) {
+                Log.w(TAG, "all files access settings unavailable", inner)
+                false
+            }
+        }
+    }
+
     /// Returns Android's currently-active DNS server IPs as a comma-joined
-    /// string. The Rust side writes them to /sdcard/.zed/r in resolv.conf
-    /// format so Bun-compiled CLIs (whose c-ares is patched to read from
-    /// /sdcard/.zed/r) can do DNS without proot. Falls back to empty
-    /// string if no active network — caller layers in public-DNS defaults.
+    /// string, which the Rust side writes to the runtime's
+    /// /etc/resolv.conf at boot ([watchDnsServers] keeps it current). Falls
+    /// back to empty string if no active network — caller layers in
+    /// public-DNS defaults.
     @Suppress("unused") // called from Rust via JNI
     fun getActiveDnsServers(): String {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -1154,6 +1249,33 @@ class MainActivity : GameActivity(), ImeHost {
         return props.dnsServers
             .mapNotNull { it.hostAddress }
             .joinToString(",")
+    }
+
+    private var dnsCallback: ConnectivityManager.NetworkCallback? = null
+
+    /// Reports the default network's DNS servers to Rust whenever they
+    /// change (Wi-Fi to mobile data, a VPN connecting), so the runtime's
+    /// `/etc/resolv.conf` follows Android's. Its programs use glibc's
+    /// resolver, which reads only that file. Android calls back once right
+    /// after registering, with the current servers.
+    private fun watchDnsServers() {
+        val connectivity = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                val servers = linkProperties.dnsServers
+                    .mapNotNull { it.hostAddress }
+                    .joinToString(",")
+                if (servers.isNotEmpty()) {
+                    NativeBridge.nativeDnsServersChanged(servers)
+                }
+            }
+        }
+        try {
+            connectivity.registerDefaultNetworkCallback(callback)
+            dnsCallback = callback
+        } catch (t: Throwable) {
+            Log.w(TAG, "DNS server updates unavailable", t)
+        }
     }
 
     /// Returns the running app's versionName (e.g. "0.2.0"). The in-app
@@ -1169,6 +1291,13 @@ class MainActivity : GameActivity(), ImeHost {
             ""
         }
     }
+
+    /// Directory the installer extracted this APK's native libraries to.
+    /// The rootfs engine's loader (libzdload.so) lives here and is exec'd
+    /// by path: it is the only app-owned location SELinux lets a process
+    /// execute from regardless of targetSdk.
+    @Suppress("unused") // called from Rust via JNI
+    fun nativeLibraryDir(): String = applicationInfo.nativeLibraryDir ?: ""
 
     /// Whether Android lets Zdroid install APKs ("Install unknown apps").
     @Suppress("unused") // called from Rust via JNI
@@ -1297,6 +1426,74 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
+    /// Rust reconciles the runtime foreground service against the
+    /// process tree (`gpui_android::runtime_service`) and pushes the
+    /// result here on transitions. Starting is idempotent and re-reads
+    /// `keepAwake`, so a settings change while active is one more start.
+    /// Returns false when Android refused the start, so Rust retries.
+    @Suppress("unused") // called from Rust via JNI
+    fun setRuntimeServiceActive(active: Boolean, keepAwake: Boolean): Boolean {
+        val applied = ZdRuntimeService.setChildrenActive(this, active, keepAwake)
+        if (active) requestNotificationPermissionOnce()
+        return applied
+    }
+
+    private var notificationPermissionRequested: Boolean = false
+
+    /// Android 13+ posts no notification, the foreground service's
+    /// included, until POST_NOTIFICATIONS is granted. Asked once, the
+    /// first time the service starts; the service runs either way, a
+    /// denial only hides its notification.
+    private fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (notificationPermissionRequested) return
+        notificationPermissionRequested = true
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        runOnUiThread {
+            try {
+                ActivityCompat.requestPermissions(this, arrayOf(permission), REQ_POST_NOTIFICATIONS)
+            } catch (t: Throwable) {
+                Log.w(TAG_RUNTIME, "POST_NOTIFICATIONS request failed", t)
+            }
+        }
+    }
+
+    @Suppress("unused")
+    fun isIgnoringBatteryOptimizations(): Boolean {
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return power.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    /// Open the system dialog that exempts this package from battery
+    /// optimization (Doze and app standby stop background children
+    /// otherwise). Returns true when the dialog opened or the exemption
+    /// already holds; falls back to the exemption list screen on builds
+    /// that refuse the direct request.
+    @Suppress("unused")
+    fun requestIgnoreBatteryOptimizations(): Boolean {
+        if (isIgnoringBatteryOptimizations()) return true
+        val direct = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "battery exemption dialog unavailable; opening the list", t)
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                true
+            } catch (inner: Throwable) {
+                Log.w(TAG_RUNTIME, "battery optimization settings unavailable", inner)
+                false
+            }
+        }
+    }
+
     /// Force a clean process exit when the Activity is destroyed.
     ///
     /// gpui_android has multiple static-state init paths (event channels,
@@ -1324,11 +1521,24 @@ class MainActivity : GameActivity(), ImeHost {
             "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations — exiting process for clean restart",
         )
         splashHandler.removeCallbacksAndMessages(null)
+        dnsCallback?.let { callback ->
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
+        }
+        dnsCallback = null
         getSystemService(InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)
         cursorOverlay?.release()
         cursorOverlay = null
+        // A swiped-away task reaches here with the Rust side still alive:
+        // end the children it spawned before the process goes, then drop
+        // the runtime service so no orphan notification lingers.
+        try {
+            NativeBridge.nativeBeforeProcessExit()
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "nativeBeforeProcessExit failed", t)
+        }
+        stopService(Intent(this, ZdRuntimeService::class.java))
         super.onDestroy()
         Process.killProcess(Process.myPid())
     }
@@ -1340,6 +1550,11 @@ class MainActivity : GameActivity(), ImeHost {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_POST_NOTIFICATIONS) {
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            Log.i(TAG_RUNTIME, "POST_NOTIFICATIONS granted=$granted")
+            return
+        }
         if (requestCode != REQ_STORAGE_PERMS) {
             return
         }
@@ -1385,10 +1600,14 @@ class MainActivity : GameActivity(), ImeHost {
         private const val TAG = "zed_android_saf"
         private const val TAG_CAPTURE = "zed_android_capture"
         private const val TAG_UPDATE = "zed_android_update"
+        private const val TAG_RUNTIME = "zed_android_runtime"
         private const val REQ_OPEN_TREE = 0xA1
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3
         private const val REQ_INSTALL_PERMISSION = 0xA4
+        private const val REQ_POST_NOTIFICATIONS = 0xA5
+        private const val PREFS = "zdroid"
+        private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
         /// Software cursor side length in dp. Scaled by display
         /// density at instantiation time to give the sprite a
         /// consistent visual size across devices.

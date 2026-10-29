@@ -1147,10 +1147,6 @@ impl TerminalBuilder {
             }
 
             insert_zed_terminal_env(&mut env, &version);
-            // Kept out of `insert_zed_terminal_env`, which also builds the
-            // environment of SSH remotes, where the app's paths don't exist.
-            #[cfg(target_os = "android")]
-            zdroid_hooks::insert_terminal_env(&mut env);
 
             #[derive(Default)]
             struct ShellParams {

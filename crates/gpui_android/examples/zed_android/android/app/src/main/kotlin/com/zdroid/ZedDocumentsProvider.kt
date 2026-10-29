@@ -17,8 +17,8 @@ import java.util.LinkedList
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 
-/// Exposes Zed's `~` (i.e. `/data/data/com.zdroid/files/home`) to
-/// other apps via Android's Storage Access Framework. After install Zed
+/// Exposes Zdroid's `~` (i.e. `/data/data/com.zdroid/files/home`) to
+/// other apps via Android's Storage Access Framework. After install Zdroid
 /// shows up in any system "Open from / Save to" picker as its own root —
 /// same pattern as Termux. Read-write; users can browse, edit, share files
 /// from `~` without ADB or run-as.
@@ -26,8 +26,8 @@ import kotlin.io.path.deleteRecursively
 /// Lifecycle gotcha: ContentProviders attach earlier than Activities. The
 /// system can fork our process, run `Application.onCreate`, then
 /// `ContentProvider.onCreate`, then service queries — without ever
-/// touching `MainActivity` or `android_main`. So the bootstrap extractor
-/// and env setup haven't run yet on a cold provider query. We rely on
+/// touching `MainActivity` or `android_main`. So the runtime setup and
+/// env setup haven't run yet on a cold provider query. We rely on
 /// `ZedApplication.onCreate` mkdir-ing `~` so the root is at least
 /// browsable; the provider also defends with an `isDirectory()` check.
 ///
@@ -54,8 +54,8 @@ class ZedDocumentsProvider : DocumentsProvider() {
         cursor.newRow().apply {
             add(DocumentsContract.Root.COLUMN_ROOT_ID, baseDir.absolutePath)
             add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, baseDir.absolutePath)
-            add(DocumentsContract.Root.COLUMN_TITLE, "Zed")
-            add(DocumentsContract.Root.COLUMN_SUMMARY, "Zed home directory")
+            add(DocumentsContract.Root.COLUMN_TITLE, "Zdroid")
+            add(DocumentsContract.Root.COLUMN_SUMMARY, "Home folder")
             add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*")
             add(
                 DocumentsContract.Root.COLUMN_FLAGS,

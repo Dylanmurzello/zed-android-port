@@ -3,45 +3,60 @@
     <uses-feature android:name="android.hardware.vulkan.version" android:required="false"/>
 
     <!--
-      READ_EXTERNAL_STORAGE + WRITE_EXTERNAL_STORAGE are the legacy storage
-      grants. They're still real permissions (dangerous, runtime-prompted)
-      at targetSdk=28; the Settings dialog or our requestStoragePermissions()
-      JNI call gates them. MANAGE_EXTERNAL_STORAGE was dropped — that's an
-      API 30+ scoped-storage escape hatch that has no effect at targetSdk=28.
-      `requestLegacyExternalStorage` was also dropped — it's an API 29 opt-in
-      flag that's a no-op for us.
+      Shared storage. Android 11+ (targetSdk 30+) gates raw /sdcard paths
+      behind MANAGE_EXTERNAL_STORAGE, "All files access": a per-app toggle
+      in system settings that MainActivity.requestStoragePermissions opens
+      once on first launch and Settings > Android opens again.
+      READ/WRITE_EXTERNAL_STORAGE stay for Android 8 to 10, where they are
+      the runtime-prompted grants; requestLegacyExternalStorage keeps raw
+      paths on Android 10 and preserveLegacyExternalStorage keeps them
+      across the upgrade from the targetSdk 28 releases on Android 11.
+      Projects under the app files dir need none of this.
     -->
-    <!-- Required for any HTTP/HTTPS — Zed's HTTP client, plus all Termux
-         subprocesses (apt, pkg, curl, git, npm, etc.). Implicit pre-API 23,
-         explicit after. -->
+    <!-- Required for any HTTP/HTTPS: Zed's HTTP client and every tool in
+         the rootfs (apt, curl, git, npm). -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <!-- Opt-in background mode (KeepAliveService). -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-    <!-- Required for the in-app updater to hand the downloaded APK to
-         Android's package installer via ACTION_VIEW. The user still has
-         to grant "Install unknown apps" for this package in system
-         settings the first time; we just need the manifest permission
-         to be allowed to invoke the installer at all. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+    <!-- Required for the in-app updater's package installer session. The
+         user still has to grant "Install unknown apps" for this package in
+         system settings the first time. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Runtime foreground service (ZdRuntimeService). FOREGROUND_SERVICE
+         is required from API 28; FOREGROUND_SERVICE_SPECIAL_USE is checked
+         from targetSdk 34 and declared ahead of that bump; WAKE_LOCK backs
+         the optional keep-awake lock; REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+         lets the app open the exemption dialog; POST_NOTIFICATIONS is the
+         service notification on Android 13+ (the service runs without it,
+         the notification is just hidden). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!--
-      allowBackup is off because the home directory holds credentials, such
+      Backups are off because the home directory holds credentials, such
       as ~/.ssh keys and git tokens, which `adb backup` and cloud or
       device-to-device backups would otherwise copy off the device.
+      allowBackup covers Android 11 and earlier; from Android 12,
+      dataExtractionRules does, since allowBackup no longer stops
+      device-to-device transfers for apps targeting it.
     -->
     <application
         android:name=".ZedApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Zdroid"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.Zdroid.Splash"
         android:hasCode="true"
         android:appCategory="productivity"
+        android:requestLegacyExternalStorage="true"
+        android:preserveLegacyExternalStorage="true"
         android:resizeableActivity="true">
 
         <!--
@@ -77,6 +92,40 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!--
+          "Open with" and "Edit with" from other apps, such as the Files app:
+          a trampoline that hands the file to MainActivity
+          (OpenFileActivity.kt). The types are the ones Android and file
+          managers give text, source and data files. application/octet-stream
+          is what Android reports for a file with no registered type, such as
+          .gitignore, .ipynb, an SSH .pub key or a file without an extension
+          (seen in One UI's media store).
+        -->
+        <activity
+            android:name=".OpenFileActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <action android:name="android.intent.action.EDIT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/x-sh"/>
+                <data android:mimeType="application/yaml"/>
+                <data android:mimeType="application/x-yaml"/>
+                <data android:mimeType="application/toml"/>
+                <data android:mimeType="application/sql"/>
+                <data android:mimeType="application/octet-stream"/>
             </intent-filter>
         </activity>
 
@@ -133,8 +182,21 @@
             </intent-filter>
         </receiver>
 
+        <!--
+          Holds the process out of the cached state while language servers
+          or terminal shells are running, so Android's phantom process
+          killer leaves them alone, and while Keep Running in Background
+          is on. Rust reports the process tree
+          (gpui_android::runtime_service); see
+          docs/workarounds/runtime-foreground-service.md.
+        -->
         <service
-            android:name=".KeepAliveService"
-            android:exported="false"/>
+            android:name=".ZdRuntimeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the editor's language servers, terminal shells and agent sessions running while the app is in the background"/>
+        </service>
     </application>
 </manifest>

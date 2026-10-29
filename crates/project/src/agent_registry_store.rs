@@ -587,7 +587,8 @@ fn resolve_icon_url(entry: &RegistryEntry) -> Option<String> {
 fn current_platform_key() -> Option<&'static str> {
     let os = if cfg!(target_os = "macos") {
         "darwin"
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        // Android runs Linux builds in its runtime.
         "linux"
     } else if cfg!(target_os = "windows") {
         "windows"

@@ -36,4 +36,7 @@ UPSTREAM_MERGE.md       merge=ours
 # they intentionally use default 3-way merge so upstream improvements
 # flow through.
 crates/gpui_android/**         merge=ours
+crates/zd_engine_core/**       merge=ours
+crates/zd_loader/**            merge=ours
+crates/zdroid_hooks/**         merge=ours
 crates/zdroid_runtime/**       merge=ours

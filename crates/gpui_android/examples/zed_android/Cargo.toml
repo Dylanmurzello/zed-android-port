@@ -37,9 +37,13 @@ feedback = { path = "../../../feedback" }
 file_finder = { path = "../../../file_finder" }
 fs = { path = "../../../fs" }
 futures = "0.3"
+dap_adapters = { path = "../../../dap_adapters" }
 debug_adapter_extension = { path = "../../../debug_adapter_extension" }
+debugger_tools = { path = "../../../debugger_tools" }
+debugger_ui = { path = "../../../debugger_ui" }
 extension = { path = "../../../extension" }
 extension_host = { path = "../../../extension_host" }
+lsp = { path = "../../../lsp" }
 extensions_ui = { path = "../../../extensions_ui" }
 git_ui = { path = "../../../git_ui" }
 git = { path = "../../../git" }
@@ -105,6 +109,7 @@ util = { path = "../../../util" }
 watch = { path = "../../../watch" }
 web_search = { path = "../../../web_search" }
 workspace = { path = "../../../workspace" }
+zd_engine_core = { path = "../../../zd_engine_core" }
 zdroid_hooks = { path = "../../../zdroid_hooks" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
 platform_title_bar = { path = "../../../platform_title_bar" }

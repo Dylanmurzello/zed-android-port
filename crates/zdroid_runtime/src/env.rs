@@ -1,0 +1,55 @@
+//! Environment the Zed process runs with.
+
+use std::ffi::OsString;
+use std::path::Path;
+
+/// One change to the app process's environment, from
+/// [`Runtime::env_for_zed_process`](crate::Runtime::env_for_zed_process).
+#[derive(Debug, Clone)]
+pub enum EnvOp {
+    /// Set the variable, replacing any existing value.
+    Set(OsString),
+    /// Remove the variable if it's set.
+    Remove,
+}
+
+/// The host side of the Zed process's environment, which the runtime
+/// extends with the engine block. Keeps the process bionic-clean and puts the
+/// zd-runtime symlink farm first on PATH so kernel PATH lookups from
+/// `Command::new("java")` resolve through the bridge.
+pub fn baseline_env(data_path: &Path, home: &Path) -> Vec<(String, EnvOp)> {
+    let zd_runtime = data_path.join("zd-runtime");
+    let bin = data_path.join("bin");
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut path = OsString::new();
+    path.push(&zd_runtime);
+    path.push(":");
+    path.push(&bin);
+    path.push(":");
+    path.push(&existing_path);
+
+    vec![
+        // The guest's home too, so `~` is one folder to the editor and to the
+        // tools: the SSH hosts Zed lists, the `~/.gitconfig` it watches, where
+        // a terminal opens without a project. Zed's own config, data and temp
+        // dirs follow the custom data dir instead.
+        ("HOME".into(), EnvOp::Set(home.as_os_str().to_owned())),
+        (
+            "TMPDIR".into(),
+            EnvOp::Set(data_path.join("tmp").into_os_string()),
+        ),
+        ("TERM".into(), EnvOp::Set(OsString::from("xterm-256color"))),
+        ("COLORTERM".into(), EnvOp::Set(OsString::from("truecolor"))),
+        ("LANG".into(), EnvOp::Set(OsString::from("en_US.UTF-8"))),
+        // Cross-compiling a remote server on the device is never viable;
+        // force upstream's CDN-or-existing-on-remote path.
+        (
+            "ZED_BUILD_REMOTE_SERVER".into(),
+            EnvOp::Set(OsString::from("never")),
+        ),
+        // A leaked preload from an ancestor shell would make every remote
+        // SSH subprocess print `cannot be preloaded`.
+        ("LD_PRELOAD".into(), EnvOp::Remove),
+        ("PATH".into(), EnvOp::Set(path)),
+    ]
+}

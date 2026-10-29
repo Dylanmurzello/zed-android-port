@@ -39,7 +39,7 @@ impl NoexecMoveModal {
             return;
         }
         let Some(projects_root) = gpui_android::storage::projects_dir() else {
-            self.error = Some("Configure an Android runtime before importing projects.".into());
+            self.error = Some("The projects folder isn't set up yet. Restart Zdroid.".into());
             cx.notify();
             return;
         };

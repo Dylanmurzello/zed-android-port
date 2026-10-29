@@ -234,6 +234,7 @@ impl VsCodeSettings {
             status_bar: self.status_bar_settings_content(),
             tab_bar: self.tab_bar_settings_content(),
             android_input: None,
+            android_runtime: None,
             tab_switcher: None,
             tabs: self.item_settings_content(),
             telemetry: self.telemetry_settings_content(),

@@ -20,15 +20,11 @@ body:
     validations:
       required: true
 
-  - type: dropdown
+  - type: input
     attributes:
-      label: Runtime adapter
-      description: Which adapter is selected in the runtime picker (or `~/etc/zd-runtime.toml`)?
-      options:
-        - Bootstrap (in-app Termux userland)
-        - Kali chroot (zd-spawnd + Magisk module)
-        - External Termux (legacy unsupported selection)
-        - Not configured yet
+      label: Rootfs version
+      description: The first line of `~/rootfs/.rootfs-version` (run `cat /data/user/0/com.zdroid/files/rootfs/.rootfs-version` in the Zdroid terminal), or "not installed" if setup failed.
+      placeholder: "ubuntu-base-26.04.1-base-arm64.tar.gz"
     validations:
       required: true
 
@@ -74,6 +70,6 @@ body:
   - type: textarea
     attributes:
       label: Additional context
-      description: Anything else useful. Magisk module version (if chroot), `pkg list-installed` snippet (if bootstrap), root status, ROM build number.
+      description: Anything else useful. An `apt list --installed` snippet from the Zdroid terminal, ROM build number.
     validations:
       required: false

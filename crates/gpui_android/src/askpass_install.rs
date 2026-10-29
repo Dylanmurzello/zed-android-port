@@ -1,5 +1,5 @@
 //! Install the `zed-askpass-helper` binary from APK assets to an
-//! app-private path, decoupled from the Termux-flavored `$PREFIX`.
+//! app-private path.
 //!
 //! The askpass crate (`crates/askpass/src/askpass.rs`) sets `SSH_ASKPASS`
 //! to a generated script that execs whatever path `askpass::set_askpass_program`
@@ -7,17 +7,18 @@
 //! itself, with `--askpass=<sock>`). On Android `current_exe()` is
 //! `/system/bin/app_process64` (the Zygote launcher hosting the DEX
 //! runtime), and ssh exec'ing it outside of an Activity context aborts
-//! under SELinux `untrusted_app_27` with `Error changing dalvik-cache
-//! ownership: Permission denied`. The helper here is a tiny standalone
-//! aarch64 ELF (no JVM, no DEX) that does the same netcat-style relay
+//! with `Error changing dalvik-cache ownership: Permission denied`. The
+//! helper here is a tiny static aarch64 ELF (no JVM, no DEX), which the
+//! runtime's ssh runs through the engine loader, doing the same netcat-style relay
 //! the desktop `askpass::main` does: read prompt from stdin, write to a
 //! Unix socket the gpui process is listening on, read the password
 //! back, print it to stdout.
 //!
-//! It installs to `<data>/files/zed-askpass-helper`, outside any
-//! runtime's userland, so it works the same with every runtime.
+//! It installs to `<data>/files/zed-askpass-helper`, which the runtime
+//! sees at the same path.
 //!
-//! Idempotent: a byte-length comparison decides whether to re-extract.
+//! Idempotent: the installed copy is compared with the asset before
+//! extracting again.
 
 use std::ffi::CString;
 use std::fs;
@@ -36,28 +37,6 @@ const ASSET_NAME: &str = "zed-askpass-helper";
 /// and matches the APK-bundled asset. Returns the absolute path to the
 /// installed binary so the caller can hand it to `askpass::set_askpass_program`.
 pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<PathBuf> {
-    // One-time sweep: pre-Phase 2 of the Termux-divestment refactor
-    // installed this same binary at `$PREFIX/bin/zed-askpass-helper`
-    // (= `<data_path>/usr/bin/zed-askpass-helper`). Users upgrading
-    // over time still have that orphan sitting on disk consuming ~500
-    // KB. The new install location is app-private (no `usr/` prefix)
-    // so anything previously seeded at the old path is dead bytes.
-    // Best-effort remove; logged, not propagated, since this is
-    // hygiene, not a precondition.
-    let stale = data_path.join("usr/bin/zed-askpass-helper");
-    if stale.exists() {
-        match fs::remove_file(&stale) {
-            Ok(()) => log::info!(
-                "askpass_install: swept pre-Phase-2 stale binary at {}",
-                stale.display()
-            ),
-            Err(err) => log::warn!(
-                "askpass_install: could not remove stale {}: {err}",
-                stale.display()
-            ),
-        }
-    }
-
     let target = data_path.join(ASSET_NAME);
 
     let asset_manager = android_app.asset_manager();
@@ -69,7 +48,7 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
 
     if let Ok(meta) = fs::metadata(&target)
         && meta.len() as usize == expected_len
-        && crate::zd_exec_install::asset_matches_file(&mut asset, &target)?
+        && asset_matches_file(&mut asset, &target)?
     {
         log::debug!(
             "askpass_install: {} up to date ({} bytes); skipping",
@@ -106,4 +85,23 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
         target.display()
     );
     Ok(target)
+}
+
+/// Compares an APK asset stream with an installed file in fixed-size
+/// chunks, so neither binary has to be held in memory twice.
+fn asset_matches_file(asset: &mut impl Read, target: &Path) -> Result<bool> {
+    let mut installed = fs::File::open(target)?;
+    let mut asset_buffer = [0_u8; 64 * 1024];
+    let mut installed_buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = asset.read(&mut asset_buffer)?;
+        if read == 0 {
+            return Ok(true);
+        }
+        if installed.read_exact(&mut installed_buffer[..read]).is_err()
+            || asset_buffer[..read] != installed_buffer[..read]
+        {
+            return Ok(false);
+        }
+    }
 }

@@ -5,11 +5,14 @@
 
 mod android_input;
 mod app_updater;
+mod engine_self_test;
 mod header;
 mod logging;
+mod lsp_watchdog;
 mod menu_bar;
 mod noexec_modal;
-mod runtime_picker;
+mod runtime_background;
+mod runtime_setup;
 mod title_bar;
 mod zed;
 
@@ -25,7 +28,7 @@ use db::AppDatabase;
 use db::kvp::KeyValueStore;
 use editor::Editor;
 use fs::{Fs, RealFs};
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use gpui::{App, AppContext as _, AsyncApp, TaskExt as _, UpdateGlobal as _};
 use gpui_tokio::Tokio;
 use log::{error, info};
@@ -46,9 +49,9 @@ use util::ResultExt as _;
 use workspace::{
     AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast, Workspace,
     WorkspaceDb, WorkspaceSettings, WorkspaceStore, notifications::NotificationId,
-    restore_multiworkspace, workspace_windows_for_location,
+    restore_multiworkspace,
 };
-use zdroid_runtime::{RuntimeId, RuntimeProvider, adapters, config::RuntimeFile};
+use zdroid_runtime::Runtime;
 
 /// The Zed release this app is built from, reported as the app version so
 /// SSH projects fetch the matching stable remote server. Read from
@@ -367,36 +370,6 @@ fn minimal_window_options(_: Option<uuid::Uuid>, _cx: &mut App) -> gpui::WindowO
     gpui::WindowOptions::default()
 }
 
-/// Build the active adapter from `runtime.toml`, returning the boxed
-/// provider so callers can ask for its `environment_root()` and
-/// adapter-derived metadata. Returns None when no toml exists or the
-/// adapter construction fails (defaults are filled in by the picker
-/// the first time the user opens it).
-fn build_active_provider(data_path: &std::path::Path) -> Option<Box<dyn RuntimeProvider>> {
-    let file = RuntimeFile::load(&data_path.join("usr/etc/zd-runtime.toml"))
-        .ok()
-        .flatten()?;
-    let resolved = file.resolve().ok()?;
-    adapters::for_config(&resolved).ok()
-}
-
-/// Same as `build_active_provider` but never returns `None`. When no
-/// runtime.toml exists yet (first launch before the picker is opened)
-/// we fall back to a default Bootstrap adapter so the env-init path
-/// always has someone to ask. The user's eventual picker selection
-/// rewrites runtime.toml and the next launch picks up the chosen
-/// adapter via `build_active_provider`.
-fn active_provider(data_path: &std::path::Path) -> Box<dyn RuntimeProvider> {
-    if let Some(provider) = build_active_provider(data_path) {
-        return provider;
-    }
-    let file = RuntimeFile::with_defaults(RuntimeId::Bootstrap);
-    let resolved = file
-        .resolve()
-        .expect("default Bootstrap RuntimeFile must resolve");
-    adapters::for_config(&resolved).expect("default Bootstrap adapter must construct")
-}
-
 // The next four are copies of the functions in Zed's crates/zed/src/main.rs.
 fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
     [
@@ -533,26 +506,36 @@ fn android_main(app: AndroidApp) {
     logging::init_logger();
     info!("zed_android: android_main entry");
 
+    gpui_android::process_hygiene::ensure_standard_fds();
+    // Before the threads that run wasm fibers exist; see the module.
+    gpui_android::pointer_authentication::disable_return_address_key();
+
     let data_path = app
         .internal_data_path()
-        .unwrap_or_else(|| PathBuf::from("/data/data/com.zdroid/files"));
+        .unwrap_or_else(|| PathBuf::from(zdroid_runtime::DEFAULT_DATA_PATH));
     info!("zed_android: data_path = {}", data_path.display());
+    zdroid_runtime::set_data_path(data_path.clone());
+    gpui_android::process_hygiene::ensure_working_directory(&data_path);
+    // The runtime seeds the guest's /etc/resolv.conf and time zone from
+    // the device's; Android has neither file.
+    zdroid_runtime::set_nameservers(gpui_android::dns_bridge::android_dns_servers(&app));
+    zdroid_runtime::set_timezone(gpui_android::system_properties::timezone());
+    let runtime = Runtime::new(&data_path);
+    if runtime.kernel_data_path() != data_path {
+        info!(
+            "zed_android: the kernel spells the files dir {}",
+            runtime.kernel_data_path().display()
+        );
+    }
+    zdroid_hooks::register_files_dir_spellings(
+        data_path.clone(),
+        runtime.kernel_data_path().to_path_buf(),
+    );
 
-    // The Zed-Rust process env is now adapter-owned. Every set_var/
-    // remove_var that used to live inline here is produced by the
-    // active runtime adapter's `env_for_zed_process`:
-    //
-    //   - Chroot adapter ships a bionic-clean env (no PREFIX, no
-    //     TERMUX__*, no libtermux-exec preload). PATH front-loaded with
-    //     the zd-runtime symlink farm so `Command::new("java")` finds
-    //     zd-exec → zd-spawnd → chroot dispatch.
-    //
-    //   - Bootstrap adapter keeps the historical Termux-flavored env
-    //     so dpkg patches, apt Post-Invoke hooks, and bootstrap-side
-    //     tooling keep working unchanged.
-    //
-    // The integrated terminal inherits this environment; the provider's
-    // `env_for_terminal` variables, registered below, go on top of it.
+    // The Zed process env comes from the runtime: the host shape (the
+    // guest's HOME, PATH with the loader links first) plus the engine
+    // variables every child needs to reach the loader configured. The
+    // integrated terminal inherits it.
     //
     // SAFETY: `set_var` / `remove_var` mutate libc-shared process
     // state. The invariant is "no other thread reads/writes libc env
@@ -563,18 +546,14 @@ fn android_main(app: AndroidApp) {
     // DELIBERATELY NOT SET: LD_LIBRARY_PATH. Setting it globally
     // poisons every spawned subprocess (including /system/bin/
     // app_process64 trying to load /system/lib64/libsqlite.so against
-    // our OpenSSL 3.x); Upstream Termux packages that need it set it
-    // per-spawn in their launcher scripts. ZED_RELEASE_CHANNEL is also
-    // deliberately not flipped to "nightly": channel switching
-    // namespaces Zed's app data dir and would shadow the user's
-    // existing settings. The dev-channel hard-bail in
-    // `crates/remote/src/transport/ssh.rs` is patched directly.
-    let provider = active_provider(&data_path);
-    log::info!("zed_android: runtime adapter = {:?}", provider.id());
-
+    // our OpenSSL 3.x). ZED_RELEASE_CHANNEL is also deliberately not
+    // flipped to "nightly": channel switching namespaces Zed's app data
+    // dir and would shadow the user's existing settings. The dev-channel
+    // hard-bail in `crates/remote/src/transport/ssh.rs` is patched
+    // directly.
     static ENV_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let _ = ENV_INITIALIZED.get_or_init(|| {
-        let ops = provider.env_for_zed_process(&data_path);
+        let ops = runtime.env_for_zed_process();
         unsafe {
             for (key, op) in &ops {
                 match op {
@@ -602,74 +581,74 @@ fn android_main(app: AndroidApp) {
         log::warn!("zed_android: can't create {}: {error}", temp_dir.display());
     }
 
-    // Publish what the active runtime adds to the integrated terminal and
-    // npm, and where its projects live. These are set once: activity
-    // recreation re-enters android_main with the same runtime.
-    zdroid_hooks::register_terminal_env(provider.env_for_terminal(&data_path));
-    zdroid_hooks::register_npm_libtermux_exec_path(provider.npm_libtermux_exec_path(&data_path));
-    gpui_android::storage::register_workspace_root(provider.workspace_root(&data_path));
+    gpui_android::storage::register_workspace_root(runtime.workspace_root());
 
-    // Surface the SELinux domain in logcat — this is the canary for the
-    // targetSdk pin. If `untrusted_app_27` flips to `untrusted_app_all`
-    // every subsequent execve into $PREFIX/bin/* will EACCES.
+    // Logged so a spawn failure can be read against them.
     gpui_android::selinux_canary::check_selinux_context();
+    gpui_android::pointer_authentication::check_pointer_authentication();
 
-    // Best-effort runtime READ/WRITE_EXTERNAL_STORAGE prompt. Replaces the
-    // MANAGE_EXTERNAL_STORAGE → Settings deep-link flow we used at
-    // targetSdk=35. Fire-and-forget: dialog shows on first launch, user
-    // grants once, RealFs reads of /storage/emulated/0/... start working.
+    // Shared storage access for raw /sdcard paths: the All files access
+    // toggle on Android 11+, the runtime permission dialog before. Asked
+    // once per install; Settings → Android opens it again.
     gpui_android::storage::request_once(&app);
 
-    // Materialize Android's active DNS servers into /sdcard/.zed/r so
-    // hex-patched Bun-compiled CLIs (claude, codex, future) can resolve
-    // hostnames without proot. Patched binaries open `/sdcard/.zed/r`
-    // instead of the original `/etc/resolv.conf`. Falls back to public
-    // DNS if ConnectivityManager gives nothing (no active network yet).
-    gpui_android::dns_bridge::populate_resolv_conf(&app);
-
-    // Install zd-exec into <data>/files/bin/ from the APK-bundled
-    // asset. Idempotent (skipped when the installed copy matches the
-    // asset byte for byte), so it runs every boot. Without this, fresh
-    // installs land with no zd-exec and `terminal.shell` (which the chroot adapter sets to
-    // `<data>/files/bin/zd-exec`) fails with ENOENT. Phase 4 of the
-    // Termux-divestment refactor moved this off `$PREFIX/bin/`.
-    if let Err(err) = gpui_android::zd_exec_install::ensure_installed(&app, &data_path) {
-        log::warn!(
-            "zed_android: zd-exec install failed: {err:#}; \
-             chroot adapter's integrated terminal will fail to spawn"
-        );
+    // The engine's loader ships in the APK's native library dir (extracted
+    // on install), the one app-owned location the kernel may exec from at
+    // any targetSdk. Logged so a packaging regression (extractNativeLibs
+    // flipped back off, the strip task mangling the static ELF) shows at
+    // boot.
+    match gpui_android::runtime_links::loader_path(&app) {
+        Ok(path) => {
+            let size = std::fs::metadata(&path).map(|metadata| metadata.len()).ok();
+            log::info!(
+                "zed_android: engine loader = {} exists={} size={size:?}",
+                path.display(),
+                path.is_file(),
+            );
+            if path.is_file()
+                && let Err(err) = gpui_android::runtime_links::ensure_loader_link(&data_path, &path)
+            {
+                log::warn!("zed_android: loader link failed: {err:#}");
+            }
+        }
+        Err(err) => log::warn!("zed_android: engine loader path unavailable: {err:#}"),
     }
 
-    // Populate <data>/files/zd-runtime/ with symlinks for every binary
-    // the active runtime adapter advertises. Each symlink points at
-    // zd-exec; kernel PATH lookup intercepts Zed's
-    // `Command::new("java")` and routes through the bridge to wherever
-    // the binary actually lives. The adapter inspects its OWN
-    // filesystem (chroot walks the rootfs's /usr/bin etc.; bootstrap
-    // walks $PREFIX/bin) — no hardcoded list anywhere. apt-installing
-    // a new tool inside the chroot makes it show up after the next
-    // launch; switching adapters rewrites the set to match the new
-    // env (stale entries get swept). Pre-Phase-4 this lived at
-    // `$PREFIX/zd-runtime/`.
-    if let Some(provider) = build_active_provider(&data_path) {
-        let binaries = provider.list_binaries();
-        log::info!(
-            "zed_android: zd-runtime: {} binaries from {:?} adapter",
-            binaries.len(),
-            provider.id(),
-        );
-        if let Err(err) =
-            gpui_android::zd_exec_install::ensure_runtime_symlinks(&data_path, &binaries)
-        {
-            log::warn!(
-                "zed_android: zd-runtime symlinks failed: {err:#}; \
-                 LSPs that resolve binaries via PATH will fail to spawn"
-            );
-        }
-    } else {
-        log::info!(
-            "zed_android: zd-runtime: no active adapter; PATH interception \
-             skipped (runtime picker will set one up after first selection)"
+    // First launch: extract the bundled Ubuntu image now, while the splash
+    // is up. The outcome reaches the workspace as a notification (a failure
+    // with Retry, or the essentials step starting).
+    let boot_setup = runtime_setup::setup_at_boot(&app, &runtime);
+
+    // Resolvers change with the network, and the zone with the user's
+    // choice; refresh the guest's view of them every boot.
+    if let Err(err) =
+        zdroid_runtime::install::reseed_resolv(&runtime, &zdroid_runtime::nameservers())
+    {
+        log::warn!("zed_android: resolv.conf reseed failed: {err:#}");
+    }
+    if let Err(err) =
+        zdroid_runtime::install::reseed_timezone(&runtime, &zdroid_runtime::timezone())
+    {
+        log::warn!("zed_android: time zone seed failed: {err:#}");
+    }
+
+    // Populate <data>/files/zd-runtime/ with one symlink per program the
+    // rootfs holds, each pointing at the loader; kernel PATH lookup of
+    // `Command::new("rust-analyzer")` then lands in the rootfs. apt or
+    // cargo installing a tool shows up through the watcher in `boot`.
+    let binaries = runtime.list_binaries();
+    log::info!(
+        "zed_android: zd-runtime: {} binaries in the rootfs",
+        binaries.len()
+    );
+    if let Err(err) = gpui_android::runtime_links::ensure_runtime_symlinks(
+        &data_path,
+        &binaries,
+        &runtime.farm_link_target(),
+    ) {
+        log::warn!(
+            "zed_android: zd-runtime symlinks failed: {err:#}; \
+             LSPs that resolve binaries via PATH will fail to spawn"
         );
     }
 
@@ -723,94 +702,40 @@ fn android_main(app: AndroidApp) {
             .log_err();
     });
 
-    gpui_android::run(app, assets::Assets, move |cx: &mut App| {
-        if let Err(err) = boot(cx, &data_path) {
+    let application = gpui_android::application(app, assets::Assets);
+    // Files other apps open with Zdroid, such as "Open with" in the Files app.
+    let (open_requests, open_request_receiver) = futures::channel::mpsc::unbounded();
+    application.on_open_urls(move |urls| {
+        if open_requests.unbounded_send(urls).is_err() {
+            info!("zed_android: not opening files: the editor didn't start");
+        }
+    });
+    application.run(move |cx: &mut App| {
+        if let Err(err) = boot(cx, &data_path, boot_setup, open_request_receiver) {
             error!("zed_android: boot failed: {err:#}");
         }
     });
 }
 
-fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
+fn boot(
+    cx: &mut App,
+    data_path: &std::path::Path,
+    boot_setup: runtime_setup::BootSetup,
+    open_requests: futures::channel::mpsc::UnboundedReceiver<Vec<String>>,
+) -> Result<()> {
     // android_main can run multiple times for one process when the activity
     // is recreated; paths' OnceLocks survive across invocations. The second
     // call panics with "set_custom_data_dir called after data_dir or
     // config_dir was initialized". Guard with a static flag.
     static PATHS_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let _ = PATHS_INITIALIZED.get_or_init(|| {
-        // Each runtime adapter (chroot / bootstrap)
-        // gets a FULLY ISOLATED Zed install: its own config, keymap,
-        // themes, sqlite db, language servers, extensions, history,
-        // logs — everything. Switching adapters via the runtime picker
-        // is a workspace switch the way booting from a different SSD
-        // is a workspace switch: nothing bleeds across.
-        //
-        // We do this by setting `paths::set_custom_data_dir` to the
-        // active adapter's `environment_root` instead of the generic
-        // app data dir. Every `paths::*` function — `config_dir`,
-        // `database_dir`, `logs_dir`, `languages_dir`,
-        // `extensions_dir`, the lot — derives from this single root.
-        // Zed never has to know about adapters.
-        //
-        // First launch (no runtime.toml yet) falls back to the plain
-        // app data dir so the runtime picker UI itself can render and
-        // the user can pick an adapter. After they pick + reboot, this
-        // branch goes through `build_active_provider` and lands them
-        // in the per-adapter root.
-        let root = if let Some(provider) = build_active_provider(data_path) {
-            let env_root = provider.environment_root();
-            log::info!(
-                "zed_android: data_dir for {:?} adapter -> {}",
-                provider.id(),
-                env_root.display(),
-            );
-            // Test writability before handing the path to paths::set_custom_data_dir,
-            // which panics in `create_dir_all` if the path lives in another package's
-            // data dir (the removed External Termux adapter's root was
-            // /data/data/com.termux/..., which SELinux keeps us from writing). On
-            // PermissionDenied we fall back to the bare app data dir so the editor
-            // can still boot instead of panicking at every launch; the adapter's
-            // spawn-side dispatch (env_for_zed_process, zd-exec routing) is a
-            // separate seam from the editor's data_dir.
-            let env_root_usable = match std::fs::create_dir_all(&env_root) {
-                Ok(()) => true,
-                Err(err) => {
-                    log::warn!(
-                        "zed_android: {:?} adapter's environment_root {} is not \
-                         writable ({err:#}); falling back to bare app data dir for \
-                         editor data. Spawn-side dispatch is unaffected.",
-                        provider.id(),
-                        env_root.display(),
-                    );
-                    false
-                }
-            };
-            // Register the env_root with zdroid_hooks so absolute-path
-            // spawns under it get rewritten to route through `zd-exec`.
-            // Gated on `needs_command_bridge()` so adapters whose
-            // binaries run natively on the host (bootstrap's bionic-
-            // flavored Termux prefix) skip the rewrite. Without that gate, every
-            // absolute-path spawn from a bootstrap user (PATH-resolved
-            // rust-analyzer at $PREFIX/bin/rust-analyzer, downloaded
-            // LSPs under <data>/languages/, etc.) would rewrite to
-            // `zd-exec <abs>` and fail with ENOENT — bootstrap mode
-            // doesn't put zd-exec on PATH.
-            if provider.needs_command_bridge() {
-                zdroid_hooks::register_environment_root(env_root.clone());
-            }
-            if env_root_usable {
-                env_root.to_string_lossy().into_owned()
-            } else {
-                data_path.to_string_lossy().into_owned()
-            }
-        } else {
-            log::info!(
-                "zed_android: no runtime.toml; using bare app data_dir {} \
-                 (the runtime picker will set up per-adapter roots after first selection)",
-                data_path.display(),
-            );
-            data_path.to_string_lossy().into_owned()
-        };
-        paths::set_custom_data_dir(&root);
+        // Every `paths::*` function (config_dir, database_dir, logs_dir,
+        // languages_dir, extensions_dir) derives from the app files dir,
+        // which is identity-mapped into the guest so Zed and the tools it
+        // spawns agree on every path. Absolute-path spawns under it are
+        // routed through the loader by `zdroid_hooks`.
+        zdroid_hooks::register_environment_root(data_path.to_path_buf());
+        paths::set_custom_data_dir(&data_path.to_string_lossy());
     });
     info!("zed_android: paths data_dir set");
 
@@ -819,10 +744,15 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     for (kind, paths) in init_paths() {
         error!("zed_android: couldn't create {paths:?}: {kind}");
     }
-    let termux_home = data_path.join("home");
-    let projects_dir = termux_home.join("projects");
+    let home = data_path.join("home");
+    let projects_dir = home.join("projects");
     for path in [
-        &termux_home,
+        // The guest's `/dev/shm` and `/tmp` are bound to `tmp`; `etc` holds
+        // the runtime's markers and `bin` the loader link.
+        &data_path.join("tmp/shm"),
+        &data_path.join("etc"),
+        &data_path.join("bin"),
+        &home,
         // Default landing dir for the project picker. Lives on app-private
         // storage where execve and dlopen work natively, so cargo / go /
         // make / native-npm / native-pip all just run. SAF-picked projects
@@ -834,12 +764,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         }
     }
     logging::init_log_file();
-    // Termux-style ~/storage/* curated symlinks into shared storage. Lets
-    // users browse / open / save individual files from /sdcard via
-    // ~/storage/{shared,downloads,dcim,...} without ever treating those
-    // paths as a workspace root (which would hit the FUSE noexec wall on
-    // any compile-and-run flow). Idempotent on re-launch.
-    gpui_android::storage::setup_user_symlinks(&termux_home);
+    // ~/storage/* symlinks into shared storage. Lets users browse / open /
+    // save individual files from /sdcard via ~/storage/{shared,downloads,
+    // dcim,...} without ever treating those paths as a workspace root
+    // (which would hit the FUSE noexec wall on any compile-and-run flow).
+    // Idempotent on re-launch.
+    gpui_android::storage::setup_user_symlinks(&home);
 
     release_channel::init(zed_release_version(), cx);
     info!("zed_android: release_channel init");
@@ -848,6 +778,16 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     info!("zed_android: settings + theme + editor init");
     settings::init(cx);
     android_input::set_default_settings(cx);
+    runtime_background::set_default_settings(cx);
+    // Zed's own pickers for Open and Save As, which start in the home folder
+    // and reach /sdcard by path. Android's picker is for other apps'
+    // documents: it lists Zdroid's home only as one provider among many, and
+    // Zed can only use the folders in it that it could open by path anyway.
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            defaults.workspace.use_system_path_prompts = Some(false);
+        });
+    });
     zlog_settings::init(cx);
     // `gpui_tokio::init` registers the global Tokio runtime that wasmtime's
     // async support taps into for extension epoch interruption + WASI
@@ -893,15 +833,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     editor::init(cx);
     android_input::keep_cursor_on_screen_when_window_shrinks(cx);
 
-    let current_from_toml = RuntimeFile::load(&data_path.join("usr/etc/zd-runtime.toml"))
-        .ok()
-        .flatten()
-        .map(|f| f.runtime.kind);
-    cx.set_global(runtime_picker::ActiveRuntime {
-        current: current_from_toml,
-    });
     cx.set_global(onboarding::AndroidBasicsSections(vec![
-        runtime_picker::render_onboarding_section,
         android_input::render_onboarding_section,
     ]));
 
@@ -939,10 +871,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         );
     }
 
-    // auto_update::Check action interception. Same gpui dispatch trap
-    // as the OpenSettings deep-link: `auto_update::init` (just below)
-    // calls cx.observe_new to register the upstream Check handler at
-    // workspace_actions[0]. Upstream's handler calls `auto_update::check`
+    // auto_update::Check action interception. `auto_update::init` (just
+    // below) calls cx.observe_new to register the upstream Check handler
+    // at workspace_actions[0]. Upstream's handler calls `auto_update::check`
     // which, with ZED_UPDATE_EXPLANATION set, just shows a "Zed was
     // installed via a package manager" prompt instead of our actual
     // in-app updater. Bubble-phase action dispatch auto-stops after
@@ -979,11 +910,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
     info!("zed_android: UserStore + WorkspaceStore constructed");
 
-    // Zed's NodeRuntime, set up as in crates/zed/src/main.rs. It finds the
-    // runtime's Node and npm on PATH: the bootstrap ships Node, and npm
-    // comes from `pkg install npm`. Zed's own Node download has no Android
-    // build, so without them npm-based language servers and agents can't
-    // install.
+    // Zed's NodeRuntime, set up as in crates/zed/src/main.rs. It uses a Node
+    // the runtime has on PATH (`apt install nodejs npm`), or else downloads
+    // its own: the Linux build, which runs in the runtime.
     let (mut node_options_tx, node_options_rx) =
         watch::channel::<Option<node_runtime::NodeBinaryOptions>>(None);
     cx.observe_global::<SettingsStore>(move |cx| {
@@ -1094,6 +1023,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     AppState::set_global(app_state.clone(), cx);
     info!("zed_android: AppState assembled + set as global");
+    dap_adapters::init(cx);
+    runtime_setup::watch_rootfs_binaries(fs.clone(), data_path.to_path_buf(), cx);
 
     // Mirror production zed/src/main.rs:785 — without this every language's
     // tree-sitter captures parse but render with no syntax styling. Re-apply
@@ -1111,14 +1042,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     })
     .detach();
 
-    // Adapter-aware `terminal.shell`. The picker writes runtime.toml;
-    // we re-derive the spawn target every launch by asking the active
-    // adapter via `RuntimeProvider::terminal_shell` so flipping the
-    // adapter actually changes where the integrated terminal lands.
-    //
-    // alacritty's `pw_shell` lookup on Android returns /system/bin/sh
-    // (the parody) so this explicit Shell::Program is what makes any
-    // useful terminal work at all.
+    // `terminal.shell` is re-derived every launch: the loader under its
+    // stable link, running root's login shell from the rootfs's
+    // /etc/passwd as a login shell, so `chsh` picks the terminal's shell
+    // from the next launch. alacritty's `pw_shell` lookup on Android
+    // returns /system/bin/sh, so this explicit shell is what makes a useful
+    // terminal at all.
     //
     // It goes into Zed's default settings, not the user's settings.json.
     // Zed sends user settings to remote servers, and since Zed 1.25 a
@@ -1127,12 +1056,15 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // (`env: '.../usr/bin/bash': No such file or directory`). Defaults
     // stay on the device and rank below settings.json, so remote
     // terminals fall back to the remote's own shell.
-    let provider = active_provider(data_path);
-    let shell_path = provider
-        .terminal_shell(data_path)
-        .unwrap_or_else(|| data_path.join("usr/bin/bash"));
+    let terminal_shell = Runtime::new(data_path).terminal_shell();
+    let shell_path = terminal_shell.program;
     if shell_path.is_file() {
-        let shell = settings::Shell::Program(shell_path.to_string_lossy().to_string());
+        let shell_args = terminal_shell.args.join(" ");
+        let shell = settings::Shell::WithArguments {
+            program: shell_path.to_string_lossy().to_string(),
+            args: terminal_shell.args,
+            title_override: None,
+        };
         SettingsStore::update_global(cx, |store, cx| {
             store.update_default_settings(cx, |defaults| {
                 defaults
@@ -1143,33 +1075,12 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
             });
         });
         info!(
-            "zed_android: default terminal.shell -> {}",
+            "zed_android: default terminal.shell -> {} {shell_args}",
             shell_path.display()
         );
-
-        // Earlier versions wrote this value into settings.json, where it
-        // outranks the default and still reaches remotes.
-        let user_has_adapter_shell = cx
-            .global::<SettingsStore>()
-            .raw_user_settings()
-            .and_then(|user_settings| user_settings.content.terminal.as_ref())
-            .is_some_and(|terminal| terminal.project.shell.as_ref() == Some(&shell));
-        if user_has_adapter_shell {
-            cx.global::<SettingsStore>().update_settings_file(
-                app_state.fs.clone(),
-                move |content, _cx| {
-                    if let Some(terminal) = content.terminal.as_mut()
-                        && terminal.project.shell.as_ref() == Some(&shell)
-                    {
-                        terminal.project.shell = None;
-                    }
-                },
-            );
-        }
     } else {
         log::warn!(
-            "zed_android: adapter-derived shell {} missing on disk; \
-             leaving terminal.shell as-is",
+            "zed_android: loader link {} missing; leaving terminal.shell as-is",
             shell_path.display()
         );
     }
@@ -1205,6 +1116,10 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     };
     project::trusted_worktrees::init(db_trusted_paths, cx);
     Project::init(&client, cx);
+    // Debug adapters run in the runtime like any other tool (CodeLLDB's
+    // linux-arm64 build through the loader, with real ptrace).
+    debugger_ui::init(cx);
+    debugger_tools::init(cx);
 
     {
         let extension_host_proxy = extension::ExtensionHostProxy::global(cx);
@@ -1243,8 +1158,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     });
     vim::init(cx);
     // In the order of Zed's main(). Left out: audio, call and livekit
-    // (collab), Copilot edit prediction, debugger_ui and repl, and telemetry
-    // and crashes.
+    // (collab), Copilot edit prediction, repl, and telemetry and crashes.
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1327,43 +1241,6 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     recent_projects::init(cx);
     which_key::init(cx);
 
-    // OpenSettings interception for the not-yet-configured-runtime case.
-    // Terminal failures (and several other "Edit Settings" affordances
-    // scattered across Zed's UI) dispatch `zed_actions::OpenSettings`,
-    // which normally lands the user at the settings.json editor. Without
-    // a working Android runtime that panel can't solve anything: the user
-    // has to find Android > Open picker first. Skip the dead-end
-    // by routing OpenSettings straight to the picker when the runtime
-    // toml is missing.
-    //
-    // This observe_new MUST be registered BEFORE `settings_ui::init`
-    // because gpui's bubble-phase action dispatch auto-stops after the
-    // first listener that doesn't explicitly call `cx.propagate()`. To
-    // sit at position 0 on each workspace's dispatch-node listener list
-    // (so our handler runs before `settings_ui`'s) we need to register
-    // our observe_new first; `register_action` appends in observe-fire
-    // order. Reordering this past `settings_ui::init` silently breaks
-    // the deep-link.
-    cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
-        workspace.register_action(
-            |_workspace: &mut Workspace, _: &zed_actions::OpenSettings, window, cx| {
-                if std::path::Path::new("/data/data/com.zdroid/files/usr/etc/zd-runtime.toml")
-                    .exists()
-                {
-                    // Runtime configured: let settings_ui's handler open
-                    // the normal settings editor.
-                    cx.propagate();
-                    return;
-                }
-                log::info!(
-                    "zed_android: OpenSettings routed to runtime picker (no zd-runtime.toml yet)"
-                );
-                runtime_picker::open_runtime_picker_window(window, cx);
-            },
-        );
-    })
-    .detach();
-
     settings_ui::init(cx);
     logging::init(cx);
     terminal_view::init(cx);
@@ -1374,7 +1251,11 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     project::agent_server_store::AllAgentServersSettings::register(cx);
     onboarding::init(cx);
     menu_bar::register_actions(cx);
-    runtime_picker::register(cx);
+    let previous_runtime = matches!(boot_setup, runtime_setup::BootSetup::PreviousRuntime);
+    runtime_setup::register(boot_setup, cx);
+    engine_self_test::register(cx);
+    runtime_background::register(cx);
+    lsp_watchdog::init(cx);
     info!(
         "zed_android: workspace + diagnostics + search + file_finder + outline_panel + onboarding + menu_bar init complete"
     );
@@ -1421,26 +1302,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // menu fires the action inside a workspace context, which is the
     // only path users hit it from.
 
-    // Production's `prompt_and_open_paths` assumes multi-window: when no
-    // existing local workspace passes the `workspace_location` filter, it
-    // opens a new window via `Workspace::new_local(.., None, ..)`. Single-
-    // window Android rejects the second `cx.open_window`, so we replace
-    // the `Open` action with the same call production makes once it's
-    // already inside the right window — `MultiWorkspace::open_project`,
-    // which `find_or_create_local_workspace`s and reuses the empty
-    // workspace as the slot to swap. That path also dismisses any open
-    // Onboarding/WelcomePage items naturally because the workspace gets
-    // replaced.
-    cx.on_action(|_: &workspace::Open, cx: &mut App| open_with_picker(cx));
-    // Zed's default keymap binds Ctrl+O to `OpenFiles`, whose fallback handler
-    // in `workspace::init` opens a new window.
-    cx.on_action(|_: &workspace::OpenFiles, cx: &mut App| open_with_picker(cx));
-
-    // ImportFromSdcard action removed in L9 — the menu entry was redundant
-    // with the existing SAF picker (Open / Add Folder to Project), and the
-    // copy-into-`~/projects` flow it ran is now triggered from the noexec
-    // banner's confirmation dialog (see title_bar.rs::render_noexec_banner)
-    // when an opened worktree turns out to live on a noexec mount.
+    // Copying a project from shared storage into `~/projects` runs from the
+    // noexec banner's confirmation dialog (title_bar.rs::render_noexec_banner)
+    // when an opened worktree lives on a noexec mount.
 
     // From here to the end of boot(), as in Zed's main().
     cx.observe_global::<SettingsStore>({
@@ -1484,10 +1348,29 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         )
     };
 
-    let restore_task = cx.spawn({
+    // An earlier release's data: no session is restored, and the only way
+    // on is clearing it.
+    if previous_runtime {
+        runtime_setup::open_clean_start(app_state.clone(), cx);
+        return Ok(());
+    }
+
+    let restore_task = cx
+        .spawn({
+            let app_state = app_state.clone();
+            async move |cx| restore_or_create_workspace(app_state, cx).await.log_err()
+        })
+        .shared();
+
+    cx.spawn({
+        let restore_task = restore_task.clone();
         let app_state = app_state.clone();
-        async move |cx| restore_or_create_workspace(app_state, cx).await.log_err()
-    });
+        async move |cx| {
+            restore_task.await;
+            open_requested_files(open_requests, app_state, cx).await;
+        }
+    })
+    .detach();
 
     cx.spawn({
         let db = WorkspaceDb::global(cx);
@@ -1515,100 +1398,34 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn open_with_picker(cx: &mut App) {
-    let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
-        files: true,
-        directories: true,
-        multiple: false,
-        prompt: None,
-    });
-    cx.spawn(async move |cx| {
-        let picked = match paths.await {
-            Ok(Ok(Some(p))) => p,
-            Ok(Ok(None)) => return,
-            Ok(Err(err)) => {
-                error!("zed_android: Open picker failed: {err:#}");
-                return;
-            }
-            Err(_) => return,
-        };
-
-        // The first-launch onboarding path (show_onboarding_view →
-        // workspace::open_new) opens a plain `Workspace` window, not
-        // a `MultiWorkspace`. Returning-launch path is also `Workspace`
-        // until something attaches the multi-workspace shell. The Open
-        // action can fire on either, so try MultiWorkspace first then
-        // fall through to plain Workspace; the previous code silently
-        // no-op'd ("no active MultiWorkspace for Open" log + return)
-        // when invoked on the welcome screen of a fresh install.
-        let active = cx.update(|cx| cx.active_window());
-        let Some(active) = active else {
-            error!("zed_android: no active window for Open");
-            return;
-        };
-
-        if let Some(mw) = active.downcast::<MultiWorkspace>() {
-            let task = mw.update(cx, |mw, window, cx| {
-                mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
-            });
-            if let Ok(task) = task {
-                if let Err(err) = task.await {
-                    error!("zed_android: open_project failed: {err:#}");
-                }
-            }
-        } else if let Some(ws) = active.downcast::<workspace::Workspace>() {
-            // Fall-through path: add the picked folder as a worktree
-            // of the current workspace. The welcome page tab survives
-            // alongside (user can close it). Not as polished as the
-            // MultiWorkspace `find_or_create + replace` flow, but it
-            // unblocks Open Project from the welcome screen on every
-            // boot path.
-            let task = ws.update(cx, |ws, window, cx| {
-                ws.open_paths(picked, workspace::OpenOptions::default(), None, window, cx)
-            });
-            if let Ok(task) = task {
-                for result in task.await.into_iter().flatten() {
-                    result.log_err();
-                }
-            }
-        } else {
-            // active_window points at something that is neither a
-            // Workspace nor a MultiWorkspace. The classic case on Android
-            // (first-boot Open Project): the runtime picker ran in an
-            // ExtraWindowActivity, the user dismissed it, and the active
-            // window slot still points at that dismissed picker entity
-            // when the SAF Activity-result fires. Without this fallback
-            // the URI is dropped silently and the user sees "tapping Open
-            // Project does nothing until I close + reopen the app".
-            //
-            // Fall back to the first local MultiWorkspace window. Same
-            // recovery the upstream `prompt_and_open_paths` does for its
-            // own scheduling.
-            let fallback = cx.update(|cx| {
-                workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx)
-                    .into_iter()
-                    .next()
-            });
-            if let Some(mw) = fallback {
-                log::warn!(
-                    "zed_android: Open action active_window was not a workspace; \
-                     falling back to the first local MultiWorkspace"
-                );
-                let task = mw.update(cx, |mw, window, cx| {
-                    mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
-                });
-                if let Ok(task) = task {
-                    if let Err(err) = task.await {
-                        error!("zed_android: fallback open_project failed: {err:#}");
+/// Opens each file as `zed <file>` does on the desktop: in the window whose
+/// project holds it, else in the active window without adding a project
+/// folder.
+async fn open_requested_files(
+    mut open_requests: futures::channel::mpsc::UnboundedReceiver<Vec<String>>,
+    app_state: Arc<AppState>,
+    cx: &mut AsyncApp,
+) {
+    while let Some(urls) = open_requests.next().await {
+        let paths: Vec<PathBuf> = urls
+            .iter()
+            .filter_map(
+                |url| match url::Url::parse(url).map(|url| url.to_file_path()) {
+                    Ok(Ok(path)) => Some(path),
+                    _ => {
+                        error!("zed_android: can't open {url}: not a file URL");
+                        None
                     }
-                }
-            } else {
-                error!(
-                    "zed_android: no local MultiWorkspace window exists; \
-                     Open action dropped"
-                );
-            }
+                },
+            )
+            .collect();
+        if paths.is_empty() {
+            continue;
         }
-    })
-    .detach();
+        let task = cx
+            .update(|cx| workspace::open_paths(&paths, app_state.clone(), Default::default(), cx));
+        if let Err(error) = task.await {
+            error!("zed_android: opening {paths:?} failed: {error:#}");
+        }
+    }
 }

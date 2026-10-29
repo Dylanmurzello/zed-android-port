@@ -49,8 +49,8 @@ land on the noexec mount in the first place:
 
 - Workspaces live in `~/projects/` (= `$HOME/projects/`, app-private,
   exec-allowed).
-- `/storage/emulated/0` is exposed for browse/edit-single-file via Termux-
-  style `~/storage/*` symlinks but never as a workspace root.
+- `/storage/emulated/0` is exposed for browse/edit-single-file via the
+  `~/storage/*` symlinks but never as a workspace root.
 - SAF picks become a one-shot recursive copy into `~/projects/<basename>` —
   see [projects-workspace-import.md](projects-workspace-import.md).
 - If a user opens a project from /sdcard anyway, the title bar shows a
@@ -59,23 +59,23 @@ land on the noexec mount in the first place:
 
 ## Why this works
 
-`/data/data/<pkg>/files` is mounted with default exec permissions, and at
-`targetSdk=28` SELinux's `untrusted_app_27` domain allows `execute_no_trans`
-on `app_data_file`. Anything we put under `$HOME` runs natively.
+`/data/data/<pkg>/files` is mounted with default exec permissions. Since
+the rootfs engine nothing under `$HOME` is exec'd by the kernel at all: the
+loader in the APK's native library dir is exec'd and maps the binary, which
+every app domain allows (`app_data_file:file execute`), so the level of
+`targetSdk` no longer matters here. A noexec mount refuses that mapping
+too (`mmap(PROT_EXEC)` is EPERM there), which is why the banner stays.
 
 ## Failure mode if regressed
 
 - A future change that opens a project rooted on `/storage/emulated/0` and
   doesn't trigger the banner = silent EACCES on first build.
-- A Google-side floor raise to `targetSdk >= 29` = even `~/projects/`
-  becomes unrunnable (W^X on app data). Mitigation: Termux's
-  `system_linker_exec` pattern (run via `/system/bin/linker64 <bin>` so
-  the directly-invoked path is system-allowed). Plan documented in
-  [targetsdk-28-execve.md](targetsdk-28-execve.md).
+- A policy change that drops `app_data_file:file execute` for untrusted
+  apps would stop the loader from mapping guest binaries anywhere under
+  app data; nothing in-app can route around that.
 
 ## See also
 
 - [projects-workspace-import.md](projects-workspace-import.md)
 - [noexec-banner-move.md](noexec-banner-move.md)
-- [deferred-tier2-root-storage.md](deferred-tier2-root-storage.md)
-- [targetsdk-28-execve.md](targetsdk-28-execve.md)
+- [extract-native-libs-loader.md](extract-native-libs-loader.md)
