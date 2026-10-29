@@ -2,10 +2,15 @@
 
 **Status:** Active
 **Phase / Commit:** L4f (`66c979444b`); writer removed with the bootstrap adapter
-**Files:** `crates/gpui_android/src/dns_bridge.rs::android_dns_servers`, `MainActivity.kt::getActiveDnsServers()`
+**Files:** `crates/gpui_android/src/dns_bridge.rs` (`android_dns_servers`, `nativeDnsServersChanged`), `MainActivity.kt` (`getActiveDnsServers`, `watchDnsServers`)
 
 > The `/sdcard/.zed/r` writer described below is gone. The JNI query stays
-> and seeds the guest rootfs `/etc/resolv.conf` (rootfs engine).
+> and seeds the guest rootfs `/etc/resolv.conf` (rootfs engine) at boot,
+> and `MainActivity` registers a default-network callback whose
+> `onLinkPropertiesChanged` rewrites the file whenever the servers change
+> (Wi-Fi to mobile data, a VPN connecting). Termux's programs used
+> bionic's resolver, which asks Android directly; glibc's reads only the
+> file.
 
 ## Problem
 

@@ -10,6 +10,8 @@ import android.database.ContentObserver
 import android.graphics.drawable.Animatable
 import android.hardware.input.InputManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -462,6 +464,7 @@ class MainActivity : GameActivity(), ImeHost {
         super.onCreate(savedInstanceState)
         installSplashOverlay()
         ZdRuntimeService.startIfBackgroundMode(this)
+        watchDnsServers()
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -1206,6 +1209,33 @@ class MainActivity : GameActivity(), ImeHost {
             .joinToString(",")
     }
 
+    private var dnsCallback: ConnectivityManager.NetworkCallback? = null
+
+    /// Reports the default network's DNS servers to Rust whenever they
+    /// change (Wi-Fi to mobile data, a VPN connecting), so the runtime's
+    /// `/etc/resolv.conf` follows Android's. Its programs use glibc's
+    /// resolver, which reads only that file. Android calls back once right
+    /// after registering, with the current servers.
+    private fun watchDnsServers() {
+        val connectivity = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                val servers = linkProperties.dnsServers
+                    .mapNotNull { it.hostAddress }
+                    .joinToString(",")
+                if (servers.isNotEmpty()) {
+                    NativeBridge.nativeDnsServersChanged(servers)
+                }
+            }
+        }
+        try {
+            connectivity.registerDefaultNetworkCallback(callback)
+            dnsCallback = callback
+        } catch (t: Throwable) {
+            Log.w(TAG, "DNS server updates unavailable", t)
+        }
+    }
+
     /// Returns the running app's versionName (e.g. "0.2.0"). The in-app
     /// updater compares this against GitHub's `releases/latest` tag
     /// (e.g. "v0.2.1" with the `v` stripped) to decide whether to
@@ -1451,6 +1481,10 @@ class MainActivity : GameActivity(), ImeHost {
             "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations — exiting process for clean restart",
         )
         splashHandler.removeCallbacksAndMessages(null)
+        dnsCallback?.let { callback ->
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
+        }
+        dnsCallback = null
         getSystemService(InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)

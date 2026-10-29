@@ -226,4 +226,10 @@ object NativeBridge {
     /// reparent them to init, where an idle language server lives on.
     /// Implemented in `gpui_android::runtime_service`.
     external fun nativeBeforeProcessExit()
+
+    /// Called by `MainActivity` when the default network's DNS servers
+    /// change, with them comma-separated. Implemented in
+    /// `gpui_android::dns_bridge`, which rewrites the runtime's
+    /// `/etc/resolv.conf`.
+    external fun nativeDnsServersChanged(servers: String)
 }
