@@ -99,6 +99,7 @@ pub fn install(
     runtime: &Runtime,
     image: &mut dyn Read,
     nameservers: &[String],
+    timezone: &str,
     progress: &mut dyn ProgressSink,
 ) -> Result<()> {
     let rootfs = runtime.rootfs_dir();
@@ -106,7 +107,15 @@ pub fn install(
     let old = sibling(&rootfs, "old");
 
     preflight(runtime, &[&staging, &old])?;
-    let result = install_inner(runtime, image, nameservers, progress, &staging, &old);
+    let result = install_inner(
+        runtime,
+        image,
+        nameservers,
+        timezone,
+        progress,
+        &staging,
+        &old,
+    );
     if result.is_err() {
         sweep(&staging);
     }
@@ -177,6 +186,7 @@ fn install_inner(
     runtime: &Runtime,
     image: &mut dyn Read,
     nameservers: &[String],
+    timezone: &str,
     progress: &mut dyn ProgressSink,
     staging: &Path,
     old: &Path,
@@ -192,7 +202,7 @@ fn install_inner(
     extract(image, staging, &translator, progress)?;
 
     progress.step("Seeding configuration");
-    seed(staging, nameservers, &runtime.bind_guest_dirs())?;
+    seed(staging, nameservers, timezone, &runtime.bind_guest_dirs())?;
     let image = self::image();
     fs::write(
         staging.join(VERSION_FILE),
@@ -467,7 +477,12 @@ fn extract(
 /// Files the guest needs that the base image does not ship usable:
 /// resolvers (Android has no resolv.conf), a hostname, and debugger
 /// configs that keep SIGSYS traps from stopping gdb/lldb sessions.
-fn seed(root: &Path, nameservers: &[String], bind_guest_dirs: &[String]) -> Result<()> {
+fn seed(
+    root: &Path,
+    nameservers: &[String],
+    timezone: &str,
+    bind_guest_dirs: &[String],
+) -> Result<()> {
     let write = |relative: &str, contents: String| -> Result<()> {
         let path = root.join(relative);
         ensure_parent(&path)?;
@@ -475,6 +490,7 @@ fn seed(root: &Path, nameservers: &[String], bind_guest_dirs: &[String]) -> Resu
         fs::write(&path, contents).with_context(|| format!("write {}", path.display()))
     };
     write("etc/resolv.conf", resolv_conf(nameservers))?;
+    seed_timezone(root, timezone)?;
     write("etc/hostname", "zdroid\n".to_string())?;
     write(
         "etc/hosts",
@@ -514,6 +530,43 @@ fn resolv_conf(nameservers: &[String]) -> String {
         .iter()
         .map(|server| format!("nameserver {server}\n"))
         .collect()
+}
+
+/// `/etc/localtime` and `/etc/timezone` for the device's zone. The base
+/// image ships no tzdata, so the link dangles until the first `apt`
+/// install pulls it in; that is also what keeps tzdata's debconf
+/// questions quiet then (its config script takes the zone from an
+/// existing link and marks the questions seen), where a bare rootfs
+/// stops every first `apt install` at an interactive time zone menu.
+/// The link is relative, the installer's invariant for the whole tree.
+fn seed_timezone(root: &Path, timezone: &str) -> Result<()> {
+    let zone = if crate::is_zone_id(timezone) {
+        timezone
+    } else {
+        crate::FALLBACK_TIMEZONE
+    };
+    let localtime = root.join("etc/localtime");
+    ensure_parent(&localtime)?;
+    remove_existing(&localtime)?;
+    std::os::unix::fs::symlink(format!("../usr/share/zoneinfo/{zone}"), &localtime)
+        .with_context(|| format!("link {}", localtime.display()))?;
+    let timezone_file = root.join("etc/timezone");
+    remove_existing(&timezone_file)?;
+    fs::write(&timezone_file, format!("{zone}\n"))
+        .with_context(|| format!("write {}", timezone_file.display()))
+}
+
+/// Seed the time zone on an installed rootfs that has none (an install
+/// from before the seed existed). A zone the user or tzdata chose stays.
+pub fn reseed_timezone(runtime: &Runtime, timezone: &str) -> Result<()> {
+    if !runtime.is_installed() {
+        return Ok(());
+    }
+    let localtime = runtime.rootfs_dir().join("etc/localtime");
+    if fs::symlink_metadata(&localtime).is_ok() {
+        return Ok(());
+    }
+    seed_timezone(&runtime.rootfs_dir(), timezone)
 }
 
 /// Refresh the resolver file on an installed rootfs (DNS servers change

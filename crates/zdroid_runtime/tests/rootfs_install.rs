@@ -70,6 +70,7 @@ fn installs_the_bundled_image() {
         &runtime,
         &mut open_image(),
         &["1.1.1.1".into()],
+        "Etc/UTC",
         &mut cancelling,
     )
     .unwrap_err();
@@ -94,9 +95,18 @@ fn installs_the_bundled_image() {
         &runtime,
         &mut open_image(),
         &["1.1.1.1".into(), "8.8.8.8".into()],
+        "America/New_York",
         &mut sink,
     )
     .unwrap();
+    assert_eq!(
+        std::fs::read_link(runtime.rootfs_dir().join("etc/localtime")).unwrap(),
+        std::path::Path::new("../usr/share/zoneinfo/America/New_York")
+    );
+    assert_eq!(
+        std::fs::read_to_string(runtime.rootfs_dir().join("etc/timezone")).unwrap(),
+        "America/New_York\n"
+    );
 
     let rootfs = runtime.rootfs_dir();
     let version = fs::read_to_string(rootfs.join(VERSION_FILE)).unwrap();
@@ -172,7 +182,7 @@ fn installs_the_bundled_image() {
     eprintln!("alternatives links checked: {alternatives}");
 
     // A reset over an existing tree swaps and leaves no .old behind.
-    zdroid_runtime::install::install(&runtime, &mut open_image(), &["1.1.1.1".into()], &mut sink)
+    zdroid_runtime::install::install(&runtime, &mut open_image(), &["1.1.1.1".into()], "Etc/UTC", &mut sink)
         .unwrap();
     assert!(!rootfs.with_file_name("rootfs.old").exists());
     assert_eq!(

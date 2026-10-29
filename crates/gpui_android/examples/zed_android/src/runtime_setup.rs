@@ -90,6 +90,7 @@ pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
             runtime,
             &mut image,
             &zdroid_runtime::nameservers(),
+            &zdroid_runtime::timezone(),
             &mut LogProgressSink,
         )
     });
@@ -233,6 +234,7 @@ impl Job {
                     &runtime,
                     &mut image,
                     &zdroid_runtime::nameservers(),
+                    &zdroid_runtime::timezone(),
                     progress,
                 )
             }

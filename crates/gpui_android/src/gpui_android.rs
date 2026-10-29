@@ -22,6 +22,7 @@ mod saf;
 pub mod storage;
 pub mod pointer_authentication;
 pub mod selinux_canary;
+pub mod system_properties;
 mod touch;
 mod window;
 pub mod runtime_links;

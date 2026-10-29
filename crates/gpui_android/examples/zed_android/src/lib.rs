@@ -100,6 +100,9 @@ fn android_main(app: AndroidApp) {
     // The rootfs installer seeds the guest's /etc/resolv.conf from the
     // device's active resolvers; Android has no resolv.conf of its own.
     zdroid_runtime::set_nameservers(gpui_android::dns_bridge::android_dns_servers(&app));
+    // And the device's time zone for /etc/localtime: tzdata's first
+    // install asks for one otherwise.
+    zdroid_runtime::set_timezone(gpui_android::system_properties::timezone());
     let runtime = Runtime::new(&data_path);
     if runtime.kernel_data_path() != data_path {
         info!(
@@ -207,6 +210,11 @@ fn android_main(app: AndroidApp) {
         zdroid_runtime::install::reseed_resolv(&runtime, &zdroid_runtime::nameservers())
     {
         log::warn!("zed_android: resolv.conf reseed failed: {err:#}");
+    }
+    if let Err(err) =
+        zdroid_runtime::install::reseed_timezone(&runtime, &zdroid_runtime::timezone())
+    {
+        log::warn!("zed_android: time zone seed failed: {err:#}");
     }
 
     // Populate <data>/files/zd-runtime/ with one symlink per program the

@@ -66,3 +66,70 @@ pub fn nameservers() -> Vec<String> {
         _ => FALLBACK_NAMESERVERS.iter().map(|s| s.to_string()).collect(),
     }
 }
+
+static TIMEZONE: OnceLock<Option<String>> = OnceLock::new();
+
+/// The zone used when the platform reports none.
+pub const FALLBACK_TIMEZONE: &str = "Etc/UTC";
+
+/// Record the device's IANA time zone (`persist.sys.timezone`) so the
+/// installer can seed the guest's `/etc/localtime` and `/etc/timezone`.
+/// A name that is not a plain zone id is dropped.
+pub fn set_timezone(zone: Option<String>) {
+    let zone = zone.filter(|zone| is_zone_id(zone));
+    if TIMEZONE.set(zone).is_err() {
+        log::debug!("zdroid_runtime: timezone already set; ignoring re-set");
+    }
+}
+
+/// The recorded zone, or UTC.
+pub fn timezone() -> String {
+    match TIMEZONE.get() {
+        Some(Some(zone)) => zone.clone(),
+        _ => FALLBACK_TIMEZONE.to_string(),
+    }
+}
+
+/// An IANA zone id as tzdata files it: `Area/Location` components of
+/// letters, digits, `_`, `-` and `+`, nothing that walks the tree.
+pub fn is_zone_id(zone: &str) -> bool {
+    !zone.is_empty()
+        && zone.len() <= 64
+        && zone.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-+".contains(&byte))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_zone_id;
+
+    #[test]
+    fn zone_ids_are_plain_paths_under_zoneinfo() {
+        for zone in [
+            "America/New_York",
+            "Etc/UTC",
+            "UTC",
+            "Etc/GMT+5",
+            "America/Argentina/Buenos_Aires",
+        ] {
+            assert!(is_zone_id(zone), "{zone}");
+        }
+        for zone in [
+            "",
+            "/etc/passwd",
+            "../../etc",
+            "America/../..",
+            "a b",
+            "Europe/",
+            "zone\n",
+        ] {
+            assert!(!is_zone_id(zone), "{zone}");
+        }
+    }
+}

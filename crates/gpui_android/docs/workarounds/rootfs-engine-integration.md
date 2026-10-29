@@ -42,8 +42,11 @@ writeup is the editor side.
   streams the asset through the installer before the first paint: every
   symlink rewritten relative (the engine's invariant), modes kept, device
   nodes skipped, seeds for `resolv.conf`, `hostname`, `hosts`, the
-  debugger configs and the binding directory chains, then a two-rename
-  swap. Seconds on a tablet, no network. The essentials step (`apt-get
+  device's time zone (`/etc/localtime` as a relative link into
+  `zoneinfo` plus `/etc/timezone`, from `persist.sys.timezone`: the base
+  image has no tzdata, and without the link the first `apt install` that
+  pulls it in stops at an interactive time zone menu), the debugger
+  configs and the binding directory chains, then a two-rename swap. Seconds on a tablet, no network. The essentials step (`apt-get
   install ca-certificates git`, which the base image lacks) runs in the
   background afterwards with a notification; it is the one network-bound
   part and has a button on the settings page for a retry.
