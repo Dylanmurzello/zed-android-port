@@ -257,8 +257,11 @@ fn run_loader_selftest(runtime: &Runtime, report: &mut Report) {
 
 fn run_shell_builtins(runtime: &Runtime, data_path: &Path, report: &mut Report) {
     let cwd: PathBuf = data_path.join("home");
-    let script =
-        "echo HOME=$HOME; echo USER=$USER; pwd; read host < /etc/hostname; echo hostname=$host";
+    // `grep` is exec'd from the trap handler, which blocks every other
+    // signal while it runs: the program must still start with the shell's
+    // empty mask.
+    let script = "echo HOME=$HOME; echo USER=$USER; pwd; read host < /etc/hostname; \
+                  echo hostname=$host; grep SigBlk /proc/self/status";
     let run = runtime.run_captured(
         "/bin/sh",
         &["-c", script],
@@ -274,9 +277,11 @@ fn run_shell_builtins(runtime: &Runtime, data_path: &Path, report: &mut Report) 
             for line in run.stderr_text().lines() {
                 report.lines.push(format!("  sh stderr: {line}"));
             }
+            let home = format!("HOME={}", runtime.workspace_root().display());
             let ok = run.succeeded()
-                && stdout.contains("HOME=/root")
-                && stdout.contains("hostname=zdroid");
+                && stdout.contains(&home)
+                && stdout.contains("hostname=zdroid")
+                && stdout.contains("SigBlk:\t0000000000000000");
             report.record(
                 "sh",
                 ok,
