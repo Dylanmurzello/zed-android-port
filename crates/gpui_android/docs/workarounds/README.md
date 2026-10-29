@@ -38,7 +38,7 @@ trackpad, in both tablet mode and DeX.
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
 | [Copy projects from shared storage](noexec-banner-move.md) | Active | When users open from /sdcard anyway, copy the project into ~/projects |
 | [Trust grants restored from WorkspaceDb at boot](trust-restore-from-db.md) | Active | Production main.rs does this; we forgot |
-| [SAF picker integration](saf-picker-integration.md) | Active | gpui's prompt_for_paths needs Android Storage Access Framework + path-decoding gymnastics |
+| [SAF picker integration](saf-picker-integration.md) | Active, opt-in | gpui's prompt_for_paths needs Android Storage Access Framework + path-decoding gymnastics; used only with `use_system_path_prompts: true` |
 
 ## Runtime engine
 

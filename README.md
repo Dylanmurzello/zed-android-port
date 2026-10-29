@@ -65,6 +65,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Updates work like desktop Zed's: an **Update Available** button in the title bar, hourly checks (`"auto_update": false` turns them off), download progress, and Android's install session API. An update must be signed with the release certificate.
 - Credentials are stored in the Android Keystore. Plaintext ones from older versions are moved there.
 - **Open with** in the Files app opens text and source files in Zdroid, where they are.
+- **Open Folder** and **Open Files** use Zed's own path picker, which starts in your home folder and reaches `/sdcard` through `~/storage/shared`. `"use_system_path_prompts": true` brings back Android's picker, which lists the home folder as **Zdroid**.
 - Cloning into an existing folder or deleting folders from the Files app no longer loses data. Typed text isn't logged, and Android backups are off, since the home folder holds SSH keys and credentials.
 - APKs are built and signed in GitHub Actions with a provenance attestation: `gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port`.
 

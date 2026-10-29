@@ -100,7 +100,7 @@ Measured on 2026-10-29 on 0.9.21, scrolling a file in landscape with `adb shell 
 ## Platform gaps found in the 2026-10-28 audit
 
 - **A second clipboard write can be lost.** `clipboard.rs::write` returns early while `WRITE_IN_FLIGHT` is set, so copying twice in quick succession leaves the first text on the clipboard. Queue the latest write instead of dropping it. Tablet check: copy two different selections back to back, then paste.
-- **`prompt_for_paths` ignores `PathPromptOptions`.** It always opens the SAF folder picker (`ACTION_OPEN_DOCUMENT_TREE`), so requests for files or multiple paths get a single folder.
+- **`prompt_for_paths` ignores `PathPromptOptions`.** It always opens the SAF folder picker (`ACTION_OPEN_DOCUMENT_TREE`), so requests for files or multiple paths get a single folder. Since 0.10.0 it only runs with `use_system_path_prompts: true`.
 - **`reveal_path` and `open_with_system` are empty** in `platform.rs`, so "Reveal in file manager" and "Open with system app" do nothing.
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
@@ -135,6 +135,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - Native AI: a fresh agent panel shows the API-key setup without Zed sign-in or trial prompts; the LLM Providers page lists no Ollama, LM Studio or llama.cpp; configure an OpenAI-compatible model, stream a reply with a tool call, run an inline edit, restart and check the key is still there.
 - Keyboard-cover trackpad: quick two-finger taps still right-click, slow two-finger scrolls don't, and the cursor captures and releases in the main and extra windows.
 - Files app (DocumentsProvider): search through a symlink loop in `~`; renaming or deleting the Zdroid root must be refused.
+- Open Folder (Ctrl+K Ctrl+O), Open Files (Ctrl+O) and Add Folder to Project show Zed's own prompt, starting in `~` with `projects` and `storage` listed, and typing `/sdcard/` lists shared storage. On a fresh install, Open Project on the welcome page opens the folder in that window (the first entry of this backlog). With `"use_system_path_prompts": true`, Android's picker returns, and its side menu lists **Zdroid**.
 - **Open with** from the Files app (One UI's My Files and Google's Files): a `.py`, `.csv` and `.gitignore` on `/sdcard` open in place in the running window and save there; with Zdroid closed, it starts, restores the session and opens the file; a file inside an open project opens in that project; with All files access off, or from a cloud app, it opens as a copy in `~/received` with a toast; `adb logcat -s zdroid_open_file` shows each URI and the path it became.
 
 ## Findings from the 0.10.0 logs of 2026-10-29

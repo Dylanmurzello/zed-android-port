@@ -49,7 +49,7 @@ use util::ResultExt as _;
 use workspace::{
     AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast, Workspace,
     WorkspaceDb, WorkspaceSettings, WorkspaceStore, notifications::NotificationId,
-    restore_multiworkspace, workspace_windows_for_location,
+    restore_multiworkspace,
 };
 use zdroid_runtime::Runtime;
 
@@ -779,6 +779,15 @@ fn boot(
     settings::init(cx);
     android_input::set_default_settings(cx);
     runtime_background::set_default_settings(cx);
+    // Zed's own pickers for Open and Save As, which start in the home folder
+    // and reach /sdcard by path. Android's picker is for other apps'
+    // documents: it lists Zdroid's home only as one provider among many, and
+    // Zed can only use the folders in it that it could open by path anyway.
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            defaults.workspace.use_system_path_prompts = Some(false);
+        });
+    });
     zlog_settings::init(cx);
     // `gpui_tokio::init` registers the global Tokio runtime that wasmtime's
     // async support taps into for extension epoch interruption + WASI
@@ -1291,26 +1300,9 @@ fn boot(
     // menu fires the action inside a workspace context, which is the
     // only path users hit it from.
 
-    // Production's `prompt_and_open_paths` assumes multi-window: when no
-    // existing local workspace passes the `workspace_location` filter, it
-    // opens a new window via `Workspace::new_local(.., None, ..)`. Single-
-    // window Android rejects the second `cx.open_window`, so we replace
-    // the `Open` action with the same call production makes once it's
-    // already inside the right window — `MultiWorkspace::open_project`,
-    // which `find_or_create_local_workspace`s and reuses the empty
-    // workspace as the slot to swap. That path also dismisses any open
-    // Onboarding/WelcomePage items naturally because the workspace gets
-    // replaced.
-    cx.on_action(|_: &workspace::Open, cx: &mut App| open_with_picker(cx));
-    // Zed's default keymap binds Ctrl+O to `OpenFiles`, whose fallback handler
-    // in `workspace::init` opens a new window.
-    cx.on_action(|_: &workspace::OpenFiles, cx: &mut App| open_with_picker(cx));
-
-    // ImportFromSdcard action removed in L9 — the menu entry was redundant
-    // with the existing SAF picker (Open / Add Folder to Project), and the
-    // copy-into-`~/projects` flow it ran is now triggered from the noexec
-    // banner's confirmation dialog (see title_bar.rs::render_noexec_banner)
-    // when an opened worktree turns out to live on a noexec mount.
+    // Copying a project from shared storage into `~/projects` runs from the
+    // noexec banner's confirmation dialog (title_bar.rs::render_noexec_banner)
+    // when an opened worktree lives on a noexec mount.
 
     // From here to the end of boot(), as in Zed's main().
     cx.observe_global::<SettingsStore>({
@@ -1434,101 +1426,4 @@ async fn open_requested_files(
             error!("zed_android: opening {paths:?} failed: {error:#}");
         }
     }
-}
-
-fn open_with_picker(cx: &mut App) {
-    let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
-        files: true,
-        directories: true,
-        multiple: false,
-        prompt: None,
-    });
-    cx.spawn(async move |cx| {
-        let picked = match paths.await {
-            Ok(Ok(Some(p))) => p,
-            Ok(Ok(None)) => return,
-            Ok(Err(err)) => {
-                error!("zed_android: Open picker failed: {err:#}");
-                return;
-            }
-            Err(_) => return,
-        };
-
-        // The first-launch onboarding path (show_onboarding_view →
-        // workspace::open_new) opens a plain `Workspace` window, not
-        // a `MultiWorkspace`. Returning-launch path is also `Workspace`
-        // until something attaches the multi-workspace shell. The Open
-        // action can fire on either, so try MultiWorkspace first then
-        // fall through to plain Workspace; the previous code silently
-        // no-op'd ("no active MultiWorkspace for Open" log + return)
-        // when invoked on the welcome screen of a fresh install.
-        let active = cx.update(|cx| cx.active_window());
-        let Some(active) = active else {
-            error!("zed_android: no active window for Open");
-            return;
-        };
-
-        if let Some(mw) = active.downcast::<MultiWorkspace>() {
-            let task = mw.update(cx, |mw, window, cx| {
-                mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
-            });
-            if let Ok(task) = task {
-                if let Err(err) = task.await {
-                    error!("zed_android: open_project failed: {err:#}");
-                }
-            }
-        } else if let Some(ws) = active.downcast::<workspace::Workspace>() {
-            // Fall-through path: add the picked folder as a worktree
-            // of the current workspace. The welcome page tab survives
-            // alongside (user can close it). Not as polished as the
-            // MultiWorkspace `find_or_create + replace` flow, but it
-            // unblocks Open Project from the welcome screen on every
-            // boot path.
-            let task = ws.update(cx, |ws, window, cx| {
-                ws.open_paths(picked, workspace::OpenOptions::default(), None, window, cx)
-            });
-            if let Ok(task) = task {
-                for result in task.await.into_iter().flatten() {
-                    result.log_err();
-                }
-            }
-        } else {
-            // active_window points at something that is neither a
-            // Workspace nor a MultiWorkspace: an extra window (Settings, in
-            // its own ExtraWindowActivity) the user dismissed, whose entity
-            // the active window slot still points at when the SAF
-            // Activity-result fires. Without this fallback
-            // the URI is dropped silently and the user sees "tapping Open
-            // Project does nothing until I close + reopen the app".
-            //
-            // Fall back to the first local MultiWorkspace window. Same
-            // recovery the upstream `prompt_and_open_paths` does for its
-            // own scheduling.
-            let fallback = cx.update(|cx| {
-                workspace_windows_for_location(&SerializedWorkspaceLocation::Local, cx)
-                    .into_iter()
-                    .next()
-            });
-            if let Some(mw) = fallback {
-                log::warn!(
-                    "zed_android: Open action active_window was not a workspace; \
-                     falling back to the first local MultiWorkspace"
-                );
-                let task = mw.update(cx, |mw, window, cx| {
-                    mw.open_project(picked, workspace::OpenMode::Activate, window, cx)
-                });
-                if let Ok(task) = task {
-                    if let Err(err) = task.await {
-                        error!("zed_android: fallback open_project failed: {err:#}");
-                    }
-                }
-            } else {
-                error!(
-                    "zed_android: no local MultiWorkspace window exists; \
-                     Open action dropped"
-                );
-            }
-        }
-    })
-    .detach();
 }
