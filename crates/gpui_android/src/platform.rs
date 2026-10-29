@@ -1095,7 +1095,7 @@ impl AndroidPlatform {
             Some(rx) => rx,
             None => return,
         };
-        let tuning = self.android_gestures().tuning();
+        let mut tuning = None;
         while let Ok(event) = rx.try_recv() {
             // Route the event to whichever window it came from.
             // `PRIMARY_WINDOW_ID` (0) → MainActivity's primary window;
@@ -1116,6 +1116,7 @@ impl AndroidPlatform {
             let (inputs, gliding) = {
                 let mut window_state = window_ptr.state.borrow_mut();
                 let scale_factor = window_state.scale_factor;
+                let tuning = *tuning.get_or_insert_with(|| self.android_gestures().tuning());
                 let inputs = crate::captured_pointer::translate(
                     &mut window_state.captured,
                     event,
