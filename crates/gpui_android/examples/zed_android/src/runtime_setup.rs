@@ -1,8 +1,8 @@
 //! Setup of the Ubuntu runtime without a step for the user: the first
 //! launch extracts the bundled image before the editor shows, a failure
-//! lands in a notification with Retry, and the Android Runtime settings
-//! page offers a reset and the essentials step (git and CA certificates,
-//! which the base image does not ship).
+//! lands in a notification with Retry, and the Android settings page
+//! offers a reset and the essentials step (git, the SSH client and CA
+//! certificates, which the base image does not ship).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,7 +27,7 @@ actions!(
         /// Extract the bundled Ubuntu image again, replacing everything
         /// installed inside the runtime.
         ResetRuntime,
-        /// Install git and CA certificates into the runtime with apt.
+        /// Install git, the SSH client and CA certificates into the runtime with apt.
         InstallEssentials,
     ]
 );
@@ -149,9 +149,9 @@ fn reset_runtime(
         PromptLevel::Warning,
         "Reset the Ubuntu runtime?",
         Some(
-            "Everything installed inside it with apt, cargo, pip or npm is removed and the \
-             base image is extracted again. Projects under ~/projects and the editor \
-             settings are kept. Running terminals and language servers are stopped.",
+            "Everything installed inside it with apt is removed and the base image is \
+             extracted again. Your home folder (/root), projects and editor settings are \
+             kept. Running terminals and language servers are stopped.",
         ),
         &["Reset", "Cancel"],
         cx,
@@ -210,7 +210,7 @@ impl Job {
     fn title(self) -> &'static str {
         match self {
             Self::Install => "Setting up the Ubuntu runtime",
-            Self::Essentials => "Installing git and certificates",
+            Self::Essentials => "Installing git, the SSH client and certificates",
         }
     }
 
@@ -219,7 +219,7 @@ impl Job {
             Self::Install => {
                 "Ubuntu runtime reset. Restart Zdroid to reload the terminal and language servers."
             }
-            Self::Essentials => "git and CA certificates are installed.",
+            Self::Essentials => "git, the SSH client and CA certificates are installed.",
         }
     }
 

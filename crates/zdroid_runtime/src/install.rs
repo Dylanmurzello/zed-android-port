@@ -79,8 +79,10 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 const MIN_FREE_BYTES: u64 = 600 * 1024 * 1024;
-const ESSENTIALS_SCRIPT: &str =
-    "apt-get update && apt-get install -y --no-install-recommends ca-certificates git";
+/// The SSH client is what Zed runs for remote projects and git's SSH
+/// remotes, and git only recommends it.
+const ESSENTIALS_SCRIPT: &str = "apt-get update && apt-get install -y --no-install-recommends \
+     ca-certificates git openssh-client";
 
 fn sibling(rootfs: &Path, suffix: &str) -> PathBuf {
     let mut name = rootfs
@@ -218,13 +220,71 @@ fn install_inner(
     }
     fs::rename(staging, &rootfs)
         .with_context(|| format!("rename {} -> {}", staging.display(), rootfs.display()))?;
+    // The guest's home outlives a reset: dotfiles, SSH keys, logins and
+    // rustup's toolchains stay. On an error the old tree, home included,
+    // is left in place.
+    let old_home = old.join("root");
+    if old_home.is_dir() {
+        let home = rootfs.join("root");
+        remove_existing(&home)?;
+        fs::rename(&old_home, &home)
+            .with_context(|| format!("rename {} -> {}", old_home.display(), home.display()))?;
+    }
     sweep(old);
+    if let Err(error) = link_home(runtime) {
+        progress.warn(&format!("linking the home folder failed: {error:#}"));
+    }
     log::info!(
         "install: {} ({}) active at {}",
         image.name,
         image.sha256,
         rootfs.display()
     );
+    Ok(())
+}
+
+/// Things the guest's home (`/root`) reaches in the app's home folder
+/// (`<data>/files/home`), which Zed's project picker and the `~/storage`
+/// links use, and which held the home of the Bootstrap runtime that
+/// Zdroid had before this one.
+const LINKED_FROM_APP_HOME: &[&str] = &["projects", "storage"];
+const LINKED_IF_PRESENT: &[&str] = &[".ssh", ".claude", ".claude.json", ".codex"];
+
+/// Links `/root/<name>` to the app's home folder for [`LINKED_FROM_APP_HOME`]
+/// and for whichever of [`LINKED_IF_PRESENT`] a Bootstrap-era home holds,
+/// and makes the guest's git config include that home's. A name the guest's
+/// home already has is left alone. The targets are identity-mapped, so a
+/// tool's `getcwd` under `~/projects` reports the path Zed uses; binding
+/// `/root` to the folder instead would make the engine's reverse lookup
+/// report `/root/projects/...`.
+fn link_home(runtime: &Runtime) -> Result<()> {
+    let home = runtime.rootfs_dir().join("root");
+    let app_home = runtime.workspace_root();
+    let present = LINKED_IF_PRESENT
+        .iter()
+        .filter(|name| fs::symlink_metadata(app_home.join(name)).is_ok());
+    for name in LINKED_FROM_APP_HOME.iter().chain(present) {
+        let link = home.join(name);
+        if fs::symlink_metadata(&link).is_ok() {
+            continue;
+        }
+        symlink(app_home.join(name), &link).with_context(|| format!("link {}", link.display()))?;
+    }
+    let app_gitconfig = app_home.join(".gitconfig");
+    if app_gitconfig.is_file() {
+        let gitconfig = home.join(".gitconfig");
+        let include = format!("[include]\n\tpath = {}\n", app_gitconfig.display());
+        let current = fs::read_to_string(&gitconfig).unwrap_or_default();
+        if !current.contains(&include) {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&gitconfig)
+                .with_context(|| format!("open {}", gitconfig.display()))?;
+            std::io::Write::write_all(&mut file, include.as_bytes())
+                .with_context(|| format!("write {}", gitconfig.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -235,7 +295,7 @@ fn install_inner(
 // runtime spawns the loader directly.
 #[allow(clippy::disallowed_methods)]
 pub fn install_essentials(runtime: &Runtime, progress: &mut dyn ProgressSink) -> Result<()> {
-    progress.step("Installing git and certificates");
+    progress.step("Installing git, the SSH client and certificates");
     let mut command = runtime.command("/bin/sh");
     command
         .args(["-c", ESSENTIALS_SCRIPT])
@@ -570,12 +630,22 @@ pub fn reseed_timezone(runtime: &Runtime, timezone: &str) -> Result<()> {
 }
 
 /// Refresh the resolver file on an installed rootfs (DNS servers change
-/// with the network; boot calls this).
+/// with the network; boot and Android's network callback call this). The
+/// new file is renamed into place, so a lookup running meanwhile reads
+/// either the old servers or the new ones, never no file.
 pub fn reseed_resolv(runtime: &Runtime, nameservers: &[String]) -> Result<()> {
     if !runtime.is_installed() {
         return Ok(());
     }
     let path = runtime.rootfs_dir().join("etc/resolv.conf");
-    remove_existing(&path)?;
-    fs::write(&path, resolv_conf(nameservers)).with_context(|| format!("write {}", path.display()))
+    let contents = resolv_conf(nameservers);
+    if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file())
+        && fs::read_to_string(&path).is_ok_and(|current| current == contents)
+    {
+        return Ok(());
+    }
+    let staged = path.with_extension("conf.new");
+    fs::write(&staged, contents).with_context(|| format!("write {}", staged.display()))?;
+    fs::rename(&staged, &path)
+        .with_context(|| format!("rename {} -> {}", staged.display(), path.display()))
 }

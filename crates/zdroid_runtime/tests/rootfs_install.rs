@@ -90,6 +90,11 @@ fn installs_the_bundled_image() {
         "cancel left {leftovers:?}"
     );
 
+    // What a Bootstrap-era home left in the app's home folder.
+    let app_home = runtime.workspace_root();
+    fs::create_dir_all(app_home.join(".ssh")).unwrap();
+    fs::write(app_home.join(".gitconfig"), "[user]\n\tname = Zdroid\n").unwrap();
+
     let mut sink = LogProgressSink;
     zdroid_runtime::install::install(
         &runtime,
@@ -120,9 +125,12 @@ fn installs_the_bundled_image() {
 
     let mut found = Vec::new();
     absolute_symlinks(&rootfs, &mut found);
+    let data_link = format!("-> {}/", data_path.display());
     let allowed: Vec<_> = found
         .iter()
-        .filter(|line| !line.contains("-> /dev/") && !line.contains("-> /proc/"))
+        .filter(|line| {
+            !line.contains("-> /dev/") && !line.contains("-> /proc/") && !line.contains(&data_link)
+        })
         .cloned()
         .collect();
     assert!(
@@ -181,10 +189,39 @@ fn installs_the_bundled_image() {
     );
     eprintln!("alternatives links checked: {alternatives}");
 
-    // A reset over an existing tree swaps and leaves no .old behind.
-    zdroid_runtime::install::install(&runtime, &mut open_image(), &["1.1.1.1".into()], "Etc/UTC", &mut sink)
-        .unwrap();
+    let home = rootfs.join("root");
+    for name in ["projects", "storage", ".ssh"] {
+        assert_eq!(fs::read_link(home.join(name)).unwrap(), app_home.join(name));
+    }
+    assert!(fs::symlink_metadata(home.join(".codex")).is_err());
+    let gitconfig = fs::read_to_string(home.join(".gitconfig")).unwrap();
+    assert!(gitconfig.contains("directory = *"), "{gitconfig}");
+    assert!(
+        gitconfig.contains(&format!("path = {}", app_home.join(".gitconfig").display())),
+        "{gitconfig}"
+    );
+
+    // A reset over an existing tree swaps, keeps the guest's home and leaves
+    // no .old behind.
+    fs::write(home.join(".bash_history"), "ls\n").unwrap();
+    zdroid_runtime::install::install(
+        &runtime,
+        &mut open_image(),
+        &["1.1.1.1".into()],
+        "Etc/UTC",
+        &mut sink,
+    )
+    .unwrap();
     assert!(!rootfs.with_file_name("rootfs.old").exists());
+    assert_eq!(
+        fs::read_to_string(home.join(".bash_history")).unwrap(),
+        "ls\n"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join(".gitconfig")).unwrap(),
+        gitconfig,
+        "the include is added once"
+    );
     assert_eq!(
         fs::read_to_string(rootfs.join("etc/resolv.conf")).unwrap(),
         "nameserver 1.1.1.1\n"
