@@ -1048,9 +1048,7 @@ class MainActivity : GameActivity(), ImeHost {
     @Suppress("unused") // called from Rust via JNI
     /**
      * Open an HTTPS URL in the user's default browser. Called via JNI from
-     * the Rust side's `cx.open_url(...)`. Empty Android-platform stub before;
-     * fix for the runtime picker's "Get module" button which delegates to
-     * `cx.open_url(SPAWND_RELEASE_URL)`.
+     * the Rust side's `cx.open_url(...)`.
      *
      * Safe to call from any thread; `runOnUiThread` so `startActivity` runs
      * on main. Logs and swallows ActivityNotFoundException (rare on a stock
@@ -1134,8 +1132,8 @@ class MainActivity : GameActivity(), ImeHost {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+: raw /sdcard paths need "All files access", a
             // per-app toggle in system settings rather than a dialog. Open
-            // it once per install; the Android Runtime settings page opens
-            // it again on request.
+            // it once per install; the Android settings page opens it again
+            // on request.
             if (Environment.isExternalStorageManager()) {
                 Log.i(TAG, "requestStoragePermissions: all files access granted")
                 return 1
@@ -1194,10 +1192,10 @@ class MainActivity : GameActivity(), ImeHost {
     }
 
     /// Returns Android's currently-active DNS server IPs as a comma-joined
-    /// string. The Rust side writes them to /sdcard/.zed/r in resolv.conf
-    /// format so Bun-compiled CLIs (whose c-ares is patched to read from
-    /// /sdcard/.zed/r) can do DNS without proot. Falls back to empty
-    /// string if no active network — caller layers in public-DNS defaults.
+    /// string, which the Rust side writes to the runtime's
+    /// /etc/resolv.conf at boot ([watchDnsServers] keeps it current). Falls
+    /// back to empty string if no active network — caller layers in
+    /// public-DNS defaults.
     @Suppress("unused") // called from Rust via JNI
     fun getActiveDnsServers(): String {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -1401,9 +1399,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// Android 13+ posts no notification, the foreground service's
     /// included, until POST_NOTIFICATIONS is granted. Asked once, the
     /// first time the service starts; the service runs either way, a
-    /// denial only hides its notification. (The targetSdk 28 builds got
-    /// no dialog on One UI 8 and this request came back denied there,
-    /// measured 2026-10-28; from targetSdk 33 it is a real prompt.)
+    /// denial only hides its notification.
     private fun requestNotificationPermissionOnce() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (notificationPermissionRequested) return

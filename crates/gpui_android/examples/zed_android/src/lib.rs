@@ -581,7 +581,7 @@ fn android_main(app: AndroidApp) {
         log::warn!("zed_android: can't create {}: {error}", temp_dir.display());
     }
 
-    gpui_android::storage::register_workspace_root(Some(runtime.workspace_root()));
+    gpui_android::storage::register_workspace_root(runtime.workspace_root());
 
     // Logged so a spawn failure can be read against them.
     gpui_android::selinux_canary::check_selinux_context();
@@ -737,15 +737,15 @@ fn boot(
     for (kind, paths) in init_paths() {
         error!("zed_android: couldn't create {paths:?}: {kind}");
     }
-    let termux_home = data_path.join("home");
-    let projects_dir = termux_home.join("projects");
+    let home = data_path.join("home");
+    let projects_dir = home.join("projects");
     for path in [
         // The guest's `/dev/shm` and `/tmp` are bound to `tmp`; `etc` holds
         // the runtime's markers and `bin` the loader link.
         &data_path.join("tmp/shm"),
         &data_path.join("etc"),
         &data_path.join("bin"),
-        &termux_home,
+        &home,
         // Default landing dir for the project picker. Lives on app-private
         // storage where execve and dlopen work natively, so cargo / go /
         // make / native-npm / native-pip all just run. SAF-picked projects
@@ -757,12 +757,12 @@ fn boot(
         }
     }
     logging::init_log_file();
-    // Termux-style ~/storage/* curated symlinks into shared storage. Lets
-    // users browse / open / save individual files from /sdcard via
-    // ~/storage/{shared,downloads,dcim,...} without ever treating those
-    // paths as a workspace root (which would hit the FUSE noexec wall on
-    // any compile-and-run flow). Idempotent on re-launch.
-    gpui_android::storage::setup_user_symlinks(&termux_home);
+    // ~/storage/* symlinks into shared storage. Lets users browse / open /
+    // save individual files from /sdcard via ~/storage/{shared,downloads,
+    // dcim,...} without ever treating those paths as a workspace root
+    // (which would hit the FUSE noexec wall on any compile-and-run flow).
+    // Idempotent on re-launch.
+    gpui_android::storage::setup_user_symlinks(&home);
 
     release_channel::init(zed_release_version(), cx);
     info!("zed_android: release_channel init");
@@ -855,10 +855,9 @@ fn boot(
         );
     }
 
-    // auto_update::Check action interception. Same gpui dispatch trap
-    // as the OpenSettings deep-link: `auto_update::init` (just below)
-    // calls cx.observe_new to register the upstream Check handler at
-    // workspace_actions[0]. Upstream's handler calls `auto_update::check`
+    // auto_update::Check action interception. `auto_update::init` (just
+    // below) calls cx.observe_new to register the upstream Check handler
+    // at workspace_actions[0]. Upstream's handler calls `auto_update::check`
     // which, with ZED_UPDATE_EXPLANATION set, just shows a "Zed was
     // installed via a package manager" prompt instead of our actual
     // in-app updater. Bubble-phase action dispatch auto-stops after
@@ -895,11 +894,9 @@ fn boot(
     let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
     info!("zed_android: UserStore + WorkspaceStore constructed");
 
-    // Zed's NodeRuntime, set up as in crates/zed/src/main.rs. It finds the
-    // runtime's Node and npm on PATH: the bootstrap ships Node, and npm
-    // comes from `pkg install npm`. Zed's own Node download has no Android
-    // build, so without them npm-based language servers and agents can't
-    // install.
+    // Zed's NodeRuntime, set up as in crates/zed/src/main.rs. It uses a Node
+    // the runtime has on PATH (`apt install nodejs npm`), or else downloads
+    // its own: the Linux build, which runs in the runtime.
     let (mut node_options_tx, node_options_rx) =
         watch::channel::<Option<node_runtime::NodeBinaryOptions>>(None);
     cx.observe_global::<SettingsStore>(move |cx| {
@@ -1478,11 +1475,10 @@ fn open_with_picker(cx: &mut App) {
             }
         } else {
             // active_window points at something that is neither a
-            // Workspace nor a MultiWorkspace. The classic case on Android
-            // (first-boot Open Project): the runtime picker ran in an
-            // ExtraWindowActivity, the user dismissed it, and the active
-            // window slot still points at that dismissed picker entity
-            // when the SAF Activity-result fires. Without this fallback
+            // Workspace nor a MultiWorkspace: an extra window (Settings, in
+            // its own ExtraWindowActivity) the user dismissed, whose entity
+            // the active window slot still points at when the SAF
+            // Activity-result fires. Without this fallback
             // the URI is dropped silently and the user sees "tapping Open
             // Project does nothing until I close + reopen the app".
             //

@@ -75,20 +75,21 @@ pub fn request_all_files_access() -> Result<bool> {
     })
 }
 
-/// Termux-style `~/storage/` curated symlinks into shared storage.
+/// `storage/` symlinks into shared storage, in the app's home folder.
 ///
-/// Mirrors what `termux-setup-storage` does in stock Termux: makes the common
-/// /storage/emulated/0 subdirs available under $HOME/storage/<name> so users
-/// can `cd ~/storage/downloads`, edit a file, save it back. /storage/emulated/0
-/// is FUSE-mounted noexec, so this is browse / read / write only — never the
-/// place to compile or run from. Workspaces live in $HOME/projects (created
-/// alongside the symlinks) where exec is allowed.
+/// Like Termux's `termux-setup-storage`: makes the common /storage/emulated/0
+/// subdirs available under `<home>/storage/<name>`, which the runtime's
+/// `~/storage` links to, so users can `cd ~/storage/downloads`, edit a file,
+/// save it back. /storage/emulated/0 is FUSE-mounted noexec, so this is
+/// browse / read / write only — never the place to compile or run from.
+/// Workspaces live in `<home>/projects` (created alongside the symlinks)
+/// where exec is allowed.
 ///
 /// Idempotent: rechecks every symlink target on each call. Ignores entries that
 /// already point at the right place. Re-creates any that don't (covers the
 /// case where /storage layout changed between launches, e.g. SD card swap).
-pub fn setup_user_symlinks(termux_home: &Path) {
-    let storage_dir = termux_home.join("storage");
+pub fn setup_user_symlinks(home: &Path) {
+    let storage_dir = home.join("storage");
     if let Err(err) = std::fs::create_dir_all(&storage_dir) {
         log::warn!("storage: create {}: {err:#}", storage_dir.display());
         return;
@@ -130,29 +131,28 @@ pub fn setup_user_symlinks(termux_home: &Path) {
     }
 }
 
-static WORKSPACE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-/// Registers the active runtime's workspace root at startup. Switching
-/// runtimes restarts the app, so a second registration, when the Activity
-/// is recreated, is ignored.
-pub fn register_workspace_root(root: Option<PathBuf>) {
+/// Registers the app's home folder, where projects live, at startup. A second
+/// registration, when the Activity is recreated, is ignored.
+pub fn register_workspace_root(root: PathBuf) {
     if WORKSPACE_ROOT.set(root).is_err() {
         log::debug!("storage: workspace root already registered; ignoring the new value");
     }
 }
 
 fn workspace_root() -> Option<&'static PathBuf> {
-    WORKSPACE_ROOT.get().and_then(Option::as_ref)
+    WORKSPACE_ROOT.get()
 }
 
-/// Local projects live under the active runtime's workspace root.
+/// Local projects live under the app's home folder.
 pub fn projects_dir() -> Option<PathBuf> {
     workspace_root().map(|root| root.join("projects"))
 }
 
 /// Path of the JSON file storing per-folder "suppress noexec warning"
 /// entries. Lives under `<workspace_root>/.cache/zed-android/`. Returns
-/// `None` only if no adapter registered a workspace_root yet.
+/// `None` before the workspace root is registered at startup.
 fn noexec_suppressed_file() -> Option<PathBuf> {
     let root = workspace_root()?;
     let dir = root.join(".cache").join("zed-android");
@@ -185,7 +185,7 @@ pub fn is_noexec_suppressed(path: &Path) -> bool {
 pub fn add_noexec_suppressed(path: &Path) {
     let Some(file) = noexec_suppressed_file() else {
         log::warn!(
-            "noexec_suppressed: TERMUX__HOME unset; cannot persist suppression for {}",
+            "noexec_suppressed: no workspace root registered; cannot persist suppression for {}",
             path.display()
         );
         return;

@@ -1,24 +1,4 @@
-//! Health of the runtime and progress reporting for its long operations.
-
-/// Outcome of [`crate::Runtime::health_check`].
-#[derive(Debug, Clone)]
-pub enum HealthStatus {
-    /// The rootfs is installed and a guest program ran.
-    Healthy,
-    /// No rootfs under the data dir: first launch, or a failed setup.
-    NotInstalled,
-    /// The loader or the rootfs is there but a guest program did not run.
-    Failed {
-        /// First line for the UI; the full chain goes to the log.
-        error: String,
-    },
-}
-
-impl HealthStatus {
-    pub fn is_healthy(&self) -> bool {
-        matches!(self, Self::Healthy)
-    }
-}
+//! Progress reporting for the runtime's long operations.
 
 /// Sink the install flows write progress to. The UI hands a sink that
 /// updates a notification; headless paths pass [`LogProgressSink`].

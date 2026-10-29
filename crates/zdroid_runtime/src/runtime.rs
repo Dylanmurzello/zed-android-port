@@ -1,5 +1,5 @@
-//! The runtime handle: where the rootfs and the loader live, the
-//! environment the editor and its children run with, and a health probe.
+//! The runtime handle: where the rootfs and the loader live, and the
+//! environment the editor and its children run with.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -11,7 +11,6 @@ use anyhow::{Context, Result};
 use zd_engine_core::{DEFAULT_GUEST_PATH, LIST_SEPARATOR, LOADER_LINK_NAME, env as engine_env};
 
 use crate::env::EnvOp;
-use crate::progress::HealthStatus;
 
 /// Name of the per-install sentinel the installer writes last:
 /// `<image name>\n<sha256>\n`.
@@ -225,13 +224,6 @@ impl Runtime {
         ops
     }
 
-    /// Mutations to overlay on the integrated terminal's env at spawn
-    /// time, on top of the process env. The engine block is already in
-    /// the process env, so nothing more is needed.
-    pub fn env_for_terminal(&self) -> Vec<(String, EnvOp)> {
-        Vec::new()
-    }
-
     /// The loader under its own name with a leading flag runs the
     /// default shell with that flag: `/bin/bash -l`.
     pub fn terminal_shell(&self) -> TerminalShell {
@@ -292,7 +284,7 @@ impl Runtime {
     }
 
     /// Run a guest program to completion with a deadline, capturing its
-    /// output. Used by the health check and the self-test.
+    /// output. Used by the engine self-test.
     // The runtime is the loader's spawner itself and is only called from
     // background threads; the smol wrapper would route back through the
     // spawn bridge.
@@ -349,39 +341,6 @@ impl Runtime {
             stdout: stdout_reader.join().unwrap_or_default(),
             stderr: stderr_reader.join().unwrap_or_default(),
         })
-    }
-
-    /// Quick feasibility check: the loader and the rootfs are there and a
-    /// guest program runs. Under three seconds either way.
-    pub fn health_check(&self) -> HealthStatus {
-        let loader = self.loader_path();
-        if !loader.exists() {
-            return HealthStatus::Failed {
-                error: format!(
-                    "engine loader missing at {} (reinstall the app)",
-                    loader.display()
-                ),
-            };
-        }
-        if !self.is_installed() {
-            return HealthStatus::NotInstalled;
-        }
-        match self.run_captured("/bin/true", &[], None, Duration::from_secs(3)) {
-            Ok(run) if run.succeeded() => HealthStatus::Healthy,
-            Ok(run) if run.timed_out => HealthStatus::Failed {
-                error: "/bin/true did not exit within 3 s".to_string(),
-            },
-            Ok(run) => HealthStatus::Failed {
-                error: format!(
-                    "/bin/true exited with {:?}: {}",
-                    run.code,
-                    run.stderr_text().trim()
-                ),
-            },
-            Err(error) => HealthStatus::Failed {
-                error: format!("{error:#}"),
-            },
-        }
     }
 }
 

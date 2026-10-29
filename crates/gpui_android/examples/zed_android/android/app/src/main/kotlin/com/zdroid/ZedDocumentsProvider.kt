@@ -26,8 +26,8 @@ import kotlin.io.path.deleteRecursively
 /// Lifecycle gotcha: ContentProviders attach earlier than Activities. The
 /// system can fork our process, run `Application.onCreate`, then
 /// `ContentProvider.onCreate`, then service queries — without ever
-/// touching `MainActivity` or `android_main`. So the bootstrap extractor
-/// and env setup haven't run yet on a cold provider query. We rely on
+/// touching `MainActivity` or `android_main`. So the runtime setup and
+/// env setup haven't run yet on a cold provider query. We rely on
 /// `ZedApplication.onCreate` mkdir-ing `~` so the root is at least
 /// browsable; the provider also defends with an `isDirectory()` check.
 ///

@@ -11,7 +11,7 @@
 //! Zygote / Dalvik launcher that hosts the APK's main DEX runtime). When
 //! ssh execs that binary outside of an Activity context, Android aborts
 //! with `Error changing dalvik-cache ownership: Permission denied` —
-//! `untrusted_app_27` SELinux can't re-spawn another instance of the
+//! the app's SELinux domain can't re-spawn another instance of the
 //! Zygote. The askpass attempt SIGABRTs three times, ssh treats it as
 //! three failed password tries, and connection ends with `Permission
 //! denied (publickey,password)` even though the user never got a chance
@@ -20,7 +20,7 @@
 //! This helper is the missing piece: a tiny, regular ELF (not Zygote /
 //! not Dalvik / not app_process) that does the same socket-IPC dance the
 //! askpass crate's `main()` does on desktop. It gets bundled in the APK
-//! as an asset, extracted to `$PREFIX/bin/zed-askpass-helper` at boot,
+//! as an asset, extracted to `<data>/files/zed-askpass-helper` at boot,
 //! and wired in via `askpass::set_askpass_program` so any subsequent
 //! AskPassSession uses this binary instead of `current_exe()`.
 //!

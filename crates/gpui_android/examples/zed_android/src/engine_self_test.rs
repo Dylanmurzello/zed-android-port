@@ -2,9 +2,8 @@
 //! inside the app process and log what it reports.
 //!
 //! This is the only representative test vehicle: `adb shell run-as`
-//! runs in a different SELinux domain and the chroot terminal runs as
-//! root, so neither sees the seccomp filters and permissions a real
-//! spawn from Zed gets.
+//! runs in a different SELinux domain, so it doesn't see the seccomp
+//! filters and permissions a real spawn from Zed gets.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

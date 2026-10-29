@@ -32,7 +32,7 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     std::process::Command::new(program)
 }
 
-/// Android routes spawns into the active runtime's userland.
+/// Android routes spawns into the runtime's userland.
 #[cfg(target_os = "android")]
 pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     zdroid_hooks::new_std_command(program)

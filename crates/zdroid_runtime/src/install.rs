@@ -366,13 +366,6 @@ pub fn install_essentials(runtime: &Runtime, progress: &mut dyn ProgressSink) ->
     Ok(())
 }
 
-/// Whether the essentials step has something left to do.
-pub fn essentials_missing(runtime: &Runtime) -> bool {
-    let rootfs = runtime.rootfs_dir();
-    !rootfs.join("usr/bin/git").exists()
-        || !rootfs.join("etc/ssl/certs/ca-certificates.crt").exists()
-}
-
 fn shorten(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }

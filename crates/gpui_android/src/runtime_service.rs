@@ -5,10 +5,8 @@
 //! child of the app process, and Android treats an app's children as
 //! "phantom processes": once the app is cached (not visible, no foreground
 //! service) the phantom process killer stops them and the low-memory
-//! killer takes the app itself early. The chroot adapter never saw this
-//! because the root daemon forked its children; the rootfs engine's
-//! children are ours. A foreground service holds the process out of the
-//! cached state for as long as children exist.
+//! killer takes the app itself early. A foreground service holds the
+//! process out of the cached state for as long as children exist.
 //!
 //! Android mounts `/proc` with `hidepid=invisible`, so an app sees only
 //! the processes of its own uid: itself and its descendants. That makes

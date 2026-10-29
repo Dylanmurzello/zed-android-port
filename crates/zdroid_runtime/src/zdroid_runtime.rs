@@ -7,11 +7,11 @@
 //! the image from the APK's bundled copy and shapes the environment the
 //! editor and its children run with.
 //!
-//! - [`runtime`]: the [`Runtime`] handle (paths, environment, health).
+//! - [`runtime`]: the [`Runtime`] handle (paths, environment).
 //! - [`install`]: extraction of the bundled image, seeds, the optional
 //!   essentials step.
 //! - [`env`]: the baseline Zed-process environment.
-//! - [`progress`]: [`ProgressSink`] for long operations, [`HealthStatus`].
+//! - [`progress`]: [`ProgressSink`] for long operations.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -23,7 +23,7 @@ pub mod runtime;
 
 pub use env::EnvOp;
 pub use install::Image;
-pub use progress::{HealthStatus, ProgressSink};
+pub use progress::ProgressSink;
 pub use runtime::{Runtime, TerminalShell};
 
 /// App files dir when the platform did not hand us one.

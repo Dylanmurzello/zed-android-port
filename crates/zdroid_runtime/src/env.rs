@@ -30,7 +30,7 @@ pub fn baseline_env(data_path: &Path) -> Vec<(String, EnvOp)> {
 
     vec![
         // HOME stays the app's data root for upstream `dirs::home_dir()`
-        // consumers; adapters map the same path into their guest.
+        // consumers; the engine maps the same path into the guest.
         ("HOME".into(), EnvOp::Set(data_path.as_os_str().to_owned())),
         (
             "TMPDIR".into(),
