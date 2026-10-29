@@ -51,6 +51,7 @@ is built.
 | [Rootfs engine integration](rootfs-engine-integration.md) | Active | How the editor reaches the Ubuntu rootfs: the loader link, the bundled image extracted on first launch, the symlink farm, the spawn bridge, reset |
 | [The guest environment contract](rootfs-guest-env.md) | Active | Editor keeps the host env, tools get the guest view at exec through `ZD_GUEST_ENV`; per-spawn PATH merge, terminal, SSH strip list |
 | [Two spellings of the app files dir](android-files-dir-spelling.md) | Active | At targetSdk 35 the kernel reports `/data/data/...` for the files dir; the engine gets that spelling, the editor keeps `/data/user/0` |
+| [The `/proc` files the app sandbox refuses](android-proc-restrictions.md) | Active | `stat`, `loadavg`, `uptime`, `net/*`, `sys/*` are EACCES for apps; the engine serves them from `sysinfo`, the clocks, `uname` and `/sys`; found through npm's silent no-op |
 | [Pointer authentication keys and wasm fibers](android-pointer-authentication-fibers.md) | Active | From targetSdk 31 bionic gives every thread its own IA key; wasmtime fibers resumed on another worker died with a PAC exception; the IA key is disabled at boot |
 | [Runtime config location + not-configured state](runtime-config-migration.md) | Superseded | One runtime, no selection file; the sentinel is the only state |
 | [JNI DNS bridge](jni-dns-bridge.md) | Active | Android has no `/etc/resolv.conf`; ConnectivityManager's servers seed the guest rootfs resolv.conf |

@@ -17,6 +17,7 @@ mod handler;
 mod link;
 mod load;
 mod mem;
+mod procfs;
 mod scratch;
 mod selftest;
 mod socket;

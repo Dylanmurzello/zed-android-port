@@ -134,7 +134,11 @@ pub fn open_guest(
             host[..guest.len()].copy_from_slice(guest);
             host[guest.len()] = 0;
         }
-        Ok(Translated::ProcExe(_)) | Ok(Translated::ProcAuxv(_)) | Ok(Translated::ProcLink { .. }) | Err(_) => {
+        Ok(Translated::ProcExe(_))
+        | Ok(Translated::ProcAuxv(_))
+        | Ok(Translated::ProcLink { .. })
+        | Ok(Translated::ProcSynth(_))
+        | Err(_) => {
             return Err(LoadError::Translate);
         }
     }

@@ -108,7 +108,10 @@ proptest! {
                 prop_assert_eq!(buffer[len], 0);
             }
             Translated::Relative => prop_assert!(false, "absolute input came back relative"),
-            Translated::ProcExe(_) | Translated::ProcAuxv(_) | Translated::ProcLink { .. } => {}
+            Translated::ProcExe(_)
+            | Translated::ProcAuxv(_)
+            | Translated::ProcLink { .. }
+            | Translated::ProcSynth(_) => {}
         }
     }
 

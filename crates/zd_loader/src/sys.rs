@@ -25,6 +25,9 @@ pub const S_IFLNK: u32 = 0o120000;
 pub const S_IFIFO: u32 = 0o010000;
 pub const S_IFSOCK: u32 = 0o140000;
 pub const X_OK: usize = 1;
+pub const W_OK: usize = 2;
+pub const CLOCK_REALTIME: usize = 0;
+pub const CLOCK_BOOTTIME: usize = 7;
 
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFDIR: u32 = 0o040000;
@@ -441,4 +444,21 @@ pub fn exit_group(code: usize) -> ! {
             options(noreturn, nostack),
         );
     }
+}
+
+/// `sysinfo(2)` into its 112-byte structure.
+pub fn sysinfo(buffer: &mut [u8; 112]) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::SYSINFO, buffer.as_mut_ptr() as usize, 0, 0, 0, 0, 0) }).map(|_| ())
+}
+
+/// `clock_gettime(2)`: seconds and nanoseconds of `clock`.
+pub fn clock_gettime(clock: usize) -> Result<(i64, i64), i32> {
+    let mut spec = [0i64; 2];
+    check(unsafe { syscall6(nr::CLOCK_GETTIME, clock, spec.as_mut_ptr() as usize, 0, 0, 0, 0) })?;
+    Ok((spec[0], spec[1]))
+}
+
+/// `uname(2)` into the six 65-byte fields of `struct new_utsname`.
+pub fn uname(buffer: &mut [u8; 390]) -> Result<(), i32> {
+    check(unsafe { syscall6(nr::UNAME, buffer.as_mut_ptr() as usize, 0, 0, 0, 0, 0) }).map(|_| ())
 }

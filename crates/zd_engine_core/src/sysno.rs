@@ -90,6 +90,7 @@ pub mod nr {
     pub const GETGID: u32 = 176;
     pub const GETEGID: u32 = 177;
     pub const GETTID: u32 = 178;
+    pub const SYSINFO: u32 = 179;
     pub const SOCKET: u32 = 198;
     pub const BIND: u32 = 200;
     pub const ACCEPT: u32 = 202;

@@ -6,6 +6,7 @@
 //! process cwd, which the engine keeps equal to the translated guest cwd.
 
 use crate::bindings::Bindings;
+use crate::procfs::{self, SynthFile};
 use crate::path::{
     MAX_PATH, PathError, Writer, clamp_to_root, components, depth, dirname, is_absolute,
     normalize, relative_path, strip_prefix,
@@ -35,6 +36,10 @@ pub enum Translated {
     /// from the host directory behind the link, so the caller reads the
     /// link, re-anchors the rest in the guest view and translates again.
     ProcLink { link_len: usize },
+    /// A `/proc` file the app sandbox refuses: the caller tries the
+    /// kernel's file first and serves the engine's rendering when that
+    /// fails. The path is its own host spelling.
+    ProcSynth(SynthFile),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +92,9 @@ impl<'a> Translator<'a> {
             Some((who, ProcFile::Exe)) => return Ok(Translated::ProcExe(who)),
             Some((who, ProcFile::Auxv)) => return Ok(Translated::ProcAuxv(who)),
             None => {}
+        }
+        if let Some(file) = procfs::classify(&out[..len]) {
+            return Ok(Translated::ProcSynth(file));
         }
         let (prefix, rest_start): (&[u8], usize) = match self.bindings.match_guest(&out[..len]) {
             Some((binding, rest)) => (binding.host, len - rest.len()),
@@ -473,6 +481,21 @@ mod tests {
         assert_eq!(symlink("/tmp/back", "../../tmp/hn"), "hn");
         assert_eq!(symlink("/tmp/d/e/x", "../../d/y"), "../../d/y");
         assert_eq!(symlink("/usr/lib/x", "./a/../b"), "./a/../b");
+    }
+
+    #[test]
+    fn served_proc_files_are_recognised_after_clamping() {
+        let mut host = [0u8; 512];
+        assert!(matches!(
+            translator().guest_to_host(b"/proc/stat", &mut host),
+            Ok(Translated::ProcSynth(SynthFile::Stat))
+        ));
+        assert!(matches!(
+            translator().guest_to_host(b"/../proc/sys/kernel/pid_max", &mut host),
+            Ok(Translated::ProcSynth(SynthFile::SysPidMax))
+        ));
+        assert!(matches!(translator().guest_to_host(b"/proc/self/stat", &mut host), Ok(Translated::Host(_))));
+        assert!(matches!(translator().guest_to_host(b"/proc/cpuinfo", &mut host), Ok(Translated::Host(_))));
     }
 
     #[test]

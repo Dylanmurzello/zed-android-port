@@ -33,6 +33,7 @@ use crate::link;
 use crate::scratch::{self, Scratch, Working};
 use crate::socket;
 use crate::log;
+use crate::procfs as served_proc;
 use crate::sys::{self, KernelSigaction};
 
 /// `siginfo_t` for `SYS_SECCOMP`: the kernel's `_sigsys` union member.
@@ -904,7 +905,7 @@ fn path_syscall(
         regs[0] = sys::neg_errno(if regs[index] == 0 { sys::EFAULT } else { sys::ENAMETOOLONG });
         return;
     };
-    let [host, link, target, ..] = &mut scratch.paths;
+    let [host, link, target, _, render_buffer] = &mut scratch.paths;
     let mut args = args_of(regs);
     let mut translated = translate(translator, guest, host, link, target);
     if matches!(translated, Ok(Translated::Relative)) && index == 1 {
@@ -938,6 +939,11 @@ fn path_syscall(
             serve_auxv(who, number, regs, open_how_flags(regs[2] as *const u64), &mut scratch.bytes)
         }
         Ok(Translated::ProcAuxv(_)) => issue(number, &args),
+        Ok(Translated::ProcSynth(file)) => {
+            // The kernel's own file first: a device that allows it keeps it.
+            let result = issue(number, &args);
+            served_proc::serve(file, number, regs, result, &mut render_buffer[..])
+        }
         Ok(Translated::ProcLink { .. }) => sys::neg_errno(sys::EACCES),
         Err(errno) => sys::neg_errno(errno),
     };
@@ -1069,7 +1075,7 @@ fn socket(regs: &mut [u64; 31]) {
 }
 
 /// `open_how.flags` of an `openat2` call.
-fn open_how_flags(how: *const u64) -> usize {
+pub(crate) fn open_how_flags(how: *const u64) -> usize {
     if how.is_null() {
         return 0;
     }
@@ -1566,10 +1572,17 @@ fn serve_auxv(
             None => return issue(number, &args_of(regs)),
         }
     };
+    serve_bytes(c"auxv", bytes, flags)
+}
+
+/// A read-only descriptor on `bytes`: a memfd positioned at the start,
+/// close-on-exec unless the open asked otherwise. Write access is EACCES
+/// the way procfs answers it.
+pub(crate) fn serve_bytes(name: &core::ffi::CStr, bytes: &[u8], flags: usize) -> u64 {
     if flags & sys::O_ACCMODE != sys::O_RDONLY {
         return sys::neg_errno(sys::EACCES);
     }
-    let fd = match sys::memfd_create(c"auxv".as_ptr().cast(), sys::MFD_CLOEXEC) {
+    let fd = match sys::memfd_create(name.as_ptr().cast(), sys::MFD_CLOEXEC) {
         Ok(fd) => fd,
         Err(errno) => return sys::neg_errno(errno),
     };
