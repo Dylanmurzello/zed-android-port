@@ -136,6 +136,12 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - Keyboard-cover trackpad: quick two-finger taps still right-click, slow two-finger scrolls don't, and the cursor captures and releases in the main and extra windows.
 - Files app (DocumentsProvider): search through a symlink loop in `~`; renaming or deleting the Zed root must be refused.
 
+## Findings from the 0.10.0 logs of 2026-10-29
+
+Logcat of 0.10.0 (versionCode 65) on the tablet, from a fresh install through an SSH remote project.
+
+- **The first launch blocks Android's UI thread while the image extracts.** `runtime_setup::setup_at_boot` runs on `android_main` before the event loop, so `onStart` and `onResume` each wait 2 s for the native thread (`android_app_set_activity_state timed out waiting for cmd 11`, then `12`, then `Slow operation onPostResume since onResume, duration=2011`). Extraction took 4 s on the tablet; meanwhile the UI thread can't draw or take input, close to Android's 5 s input ANR. Fix: enter the event loop first and install from a background task behind a progress view, or extract on a thread while `android_main` keeps polling.
+
 ## Input review of 2026-10-26: open findings
 
 An audit of `crates/gpui_android`'s input code found 22 problems. These are the ones still open when rechecked on 2026-10-27 (after #41). The first, captured trackpad and mouse events dropping the modifier keys, sat unrecorded until it showed up as "Ctrl+click on a link does nothing"; that is why the rest are listed here. The touch rewrite planned under "Post-2026-08 upstream-merge follow-ups" would fix the touch items (6 to 8) as a side effect.
