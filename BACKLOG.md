@@ -135,6 +135,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - Native AI: a fresh agent panel shows the API-key setup without Zed sign-in or trial prompts; the LLM Providers page lists no Ollama, LM Studio or llama.cpp; configure an OpenAI-compatible model, stream a reply with a tool call, run an inline edit, restart and check the key is still there.
 - Keyboard-cover trackpad: quick two-finger taps still right-click, slow two-finger scrolls don't, and the cursor captures and releases in the main and extra windows.
 - Files app (DocumentsProvider): search through a symlink loop in `~`; renaming or deleting the Zed root must be refused.
+- **Open with** from the Files app (One UI's My Files and Google's Files): a `.py`, `.csv` and `.gitignore` on `/sdcard` open in place in the running window and save there; with Zdroid closed, it starts, restores the session and opens the file; a file inside an open project opens in that project; with All files access off, or from a cloud app, it opens as a copy in `~/received` with a toast; `adb logcat -s zdroid_open_file` shows each URI and the path it became.
 
 ## Findings from the 0.10.0 logs of 2026-10-29
 

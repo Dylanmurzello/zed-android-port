@@ -28,7 +28,7 @@ use db::AppDatabase;
 use db::kvp::KeyValueStore;
 use editor::Editor;
 use fs::{Fs, RealFs};
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use gpui::{App, AppContext as _, AsyncApp, TaskExt as _, UpdateGlobal as _};
 use gpui_tokio::Tokio;
 use log::{error, info};
@@ -702,8 +702,16 @@ fn android_main(app: AndroidApp) {
             .log_err();
     });
 
-    gpui_android::run(app, assets::Assets, move |cx: &mut App| {
-        if let Err(err) = boot(cx, &data_path, boot_setup) {
+    let application = gpui_android::application(app, assets::Assets);
+    // Files other apps open with Zdroid, such as "Open with" in the Files app.
+    let (open_requests, open_request_receiver) = futures::channel::mpsc::unbounded();
+    application.on_open_urls(move |urls| {
+        if open_requests.unbounded_send(urls).is_err() {
+            info!("zed_android: not opening files: the editor didn't start");
+        }
+    });
+    application.run(move |cx: &mut App| {
+        if let Err(err) = boot(cx, &data_path, boot_setup, open_request_receiver) {
             error!("zed_android: boot failed: {err:#}");
         }
     });
@@ -713,6 +721,7 @@ fn boot(
     cx: &mut App,
     data_path: &std::path::Path,
     boot_setup: runtime_setup::BootSetup,
+    open_requests: futures::channel::mpsc::UnboundedReceiver<Vec<String>>,
 ) -> Result<()> {
     // android_main can run multiple times for one process when the activity
     // is recreated; paths' OnceLocks survive across invocations. The second
@@ -1352,10 +1361,22 @@ fn boot(
         return Ok(());
     }
 
-    let restore_task = cx.spawn({
+    let restore_task = cx
+        .spawn({
+            let app_state = app_state.clone();
+            async move |cx| restore_or_create_workspace(app_state, cx).await.log_err()
+        })
+        .shared();
+
+    cx.spawn({
+        let restore_task = restore_task.clone();
         let app_state = app_state.clone();
-        async move |cx| restore_or_create_workspace(app_state, cx).await.log_err()
-    });
+        async move |cx| {
+            restore_task.await;
+            open_requested_files(open_requests, app_state, cx).await;
+        }
+    })
+    .detach();
 
     cx.spawn({
         let db = WorkspaceDb::global(cx);
@@ -1381,6 +1402,38 @@ fn boot(
     .detach_and_log_err(cx);
 
     Ok(())
+}
+
+/// Opens each file as `zed <file>` does on the desktop: in the window whose
+/// project holds it, else in the active window without adding a project
+/// folder.
+async fn open_requested_files(
+    mut open_requests: futures::channel::mpsc::UnboundedReceiver<Vec<String>>,
+    app_state: Arc<AppState>,
+    cx: &mut AsyncApp,
+) {
+    while let Some(urls) = open_requests.next().await {
+        let paths: Vec<PathBuf> = urls
+            .iter()
+            .filter_map(
+                |url| match url::Url::parse(url).map(|url| url.to_file_path()) {
+                    Ok(Ok(path)) => Some(path),
+                    _ => {
+                        error!("zed_android: can't open {url}: not a file URL");
+                        None
+                    }
+                },
+            )
+            .collect();
+        if paths.is_empty() {
+            continue;
+        }
+        let task = cx
+            .update(|cx| workspace::open_paths(&paths, app_state.clone(), Default::default(), cx));
+        if let Err(error) = task.await {
+            error!("zed_android: opening {paths:?} failed: {error:#}");
+        }
+    }
 }
 
 fn open_with_picker(cx: &mut App) {

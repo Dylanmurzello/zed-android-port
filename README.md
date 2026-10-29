@@ -54,7 +54,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Dylan's Ubuntu runtime and engine (his 0.4.0), merged into Zed's current release, with:
   - language servers, debug adapters, Node and ACP agents that Zed downloads picking their Linux builds, the agent registry's included;
   - the SSH client installed on first launch, next to git and the CA certificates;
-  - one home folder for the terminal, the Files app and your projects (`~/projects`), which **Reset Runtime** leaves alone;
+  - one home folder for the editor, the terminal, the Files app and your projects (`~/projects`), which **Reset Runtime** leaves alone;
   - the runtime's DNS servers following Android's when the network changes;
   - a language server that Android stops restarted, up to three times in ten minutes.
 - The debugger, with CodeLLDB.
@@ -64,6 +64,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 
 - Updates work like desktop Zed's: an **Update Available** button in the title bar, hourly checks (`"auto_update": false` turns them off), download progress, and Android's install session API. An update must be signed with the release certificate.
 - Credentials are stored in the Android Keystore. Plaintext ones from older versions are moved there.
+- **Open with** in the Files app opens text and source files in Zdroid, where they are.
 - Cloning into an existing folder or deleting folders from the Files app no longer loses data. Typed text isn't logged, and Android backups are off, since the home folder holds SSH keys and credentials.
 - APKs are built and signed in GitHub Actions with a provenance attestation: `gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port`.
 

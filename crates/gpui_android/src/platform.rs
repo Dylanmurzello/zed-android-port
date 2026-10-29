@@ -1524,6 +1524,22 @@ impl AndroidPlatform {
         }
     }
 
+    /// Files other apps opened with Zdroid (`open_files`). They stay queued
+    /// until the app has registered `on_open_urls`.
+    fn deliver_open_urls(&self) {
+        if self.common.borrow().callbacks.open_urls.is_none() {
+            return;
+        }
+        let Some(urls) = crate::open_files::take_pending_urls() else {
+            return;
+        };
+        let callback = self.common.borrow_mut().callbacks.open_urls.take();
+        if let Some(mut callback) = callback {
+            callback(urls);
+            self.common.borrow_mut().callbacks.open_urls = Some(callback);
+        }
+    }
+
     fn notify_memory_warning(&self) {
         let callback = self.common.borrow_mut().callbacks.memory_warning.take();
         if let Some(mut callback) = callback {
@@ -1748,6 +1764,8 @@ impl Platform for AndroidPlatform {
             // Drain JNI-side extra-window lifecycle / touch events.
             self.drain_extra_window_events();
             self.reap_closed_extra_windows();
+
+            self.deliver_open_urls();
 
             self.apply_window_insets();
 

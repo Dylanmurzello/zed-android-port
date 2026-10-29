@@ -97,6 +97,40 @@
         </activity>
 
         <!--
+          "Open with" and "Edit with" from other apps, such as the Files app:
+          a trampoline that hands the file to MainActivity
+          (OpenFileActivity.kt). The types are the ones Android and file
+          managers give text, source and data files. application/octet-stream
+          is what Android reports for a file with no registered type, such as
+          .gitignore, .ipynb, an SSH .pub key or a file without an extension
+          (seen in One UI's media store).
+        -->
+        <activity
+            android:name=".OpenFileActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <action android:name="android.intent.action.EDIT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/x-sh"/>
+                <data android:mimeType="application/yaml"/>
+                <data android:mimeType="application/x-yaml"/>
+                <data android:mimeType="application/toml"/>
+                <data android:mimeType="application/sql"/>
+                <data android:mimeType="application/octet-stream"/>
+            </intent-filter>
+        </activity>
+
+        <!--
           Each cx.open_window beyond the primary spawns one of these.
           documentLaunchMode="always" implies FLAG_ACTIVITY_NEW_DOCUMENT |
           FLAG_ACTIVITY_MULTIPLE_TASK, so each open is a fresh task with its

@@ -17,6 +17,7 @@ mod insets;
 mod jni_env;
 mod keyboard;
 mod multi_window;
+mod open_files;
 mod platform;
 pub mod pointer_authentication;
 pub mod process_hygiene;
@@ -121,6 +122,15 @@ where
     A: gpui::AssetSource,
     F: 'static + FnOnce(&mut gpui::App),
 {
+    application(android_app, assets).run(on_finish_launching);
+}
+
+/// The `gpui::Application` [`run`] drives, for an app that registers
+/// callbacks such as `on_open_urls` before running it.
+pub fn application<A>(android_app: android_activity::AndroidApp, assets: A) -> gpui::Application
+where
+    A: gpui::AssetSource,
+{
     // Stash a clone for the updater module so action handlers / auto-
     // check tasks (which run inside the gpui App context with no
     // direct access to the AndroidApp passed into this function) can
@@ -128,6 +138,5 @@ where
     // Activity recreations.
     updater::register_android_app(android_app.clone());
     let platform: Rc<dyn gpui::Platform> = Rc::new(AndroidPlatform::new(android_app, false));
-    let app = gpui::Application::with_platform(platform).with_assets(assets);
-    app.run(on_finish_launching);
+    gpui::Application::with_platform(platform).with_assets(assets)
 }

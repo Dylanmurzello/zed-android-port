@@ -467,6 +467,13 @@ class MainActivity : GameActivity(), ImeHost {
         installSplashOverlay()
         ZdRuntimeService.startIfBackgroundMode(this)
         watchDnsServers()
+        // Reopening from Recents brings back the intent that started the
+        // task, which may be an earlier "Open with".
+        val relaunched = savedInstanceState != null ||
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (!relaunched) {
+            OpenedFiles.handle(this, intent)
+        }
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -981,6 +988,12 @@ class MainActivity : GameActivity(), ImeHost {
             applyCursorVisibility()
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /// A file another app opened while Zdroid runs (`OpenFileActivity`).
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        OpenedFiles.handle(this, intent)
     }
 
     override fun onResume() {

@@ -232,4 +232,9 @@ object NativeBridge {
     /// `gpui_android::dns_bridge`, which rewrites the runtime's
     /// `/etc/resolv.conf`.
     external fun nativeDnsServersChanged(servers: String)
+
+    /// Called by `OpenedFiles` with a `file://` URL for a file another app
+    /// opened with Zdroid. Implemented in `gpui_android::open_files`, which
+    /// queues it until the editor opens it.
+    external fun nativeOpenUrl(url: String)
 }
