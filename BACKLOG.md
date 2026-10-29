@@ -180,6 +180,14 @@ The `android-activity` crate (which we use) wraps a subset of GameActivity APIs.
 
 **What's needed:** render the restricted-mode control in the Android title bar (or a workspace notification with Trust / Keep restricted) and route it to `TrustedWorktrees::trust`.
 
+### npm 9 background lifecycle scripts die under the engine (2026-10-28, release blocker for 0.4.0)
+
+**Repro:** in the integrated terminal, `npm install -g @anthropic-ai/claude-code` (Ubuntu's npm 9.2.0, node 22.22.1). npm prints `Exit handler never called! This is an error with npm itself`, exit 1, and the package's `postinstall` (`node install.cjs`, which downloads the native binary) never runs. The same command in an `ubuntu:26.04` arm64 container with the same node and npm installs in 11 s. `npm install -g --foreground-scripts @anthropic-ai/claude-code` works on the tablet, and so does running `node install.cjs` by hand, with or without piped stdio.
+
+**Facts from the traces** (strace inside the guest, files pulled through `run-as`): the npm process never forks, vforks or clones a child process and never execs `sh`; its own log stops at `verbose unfinished npm timer build:run:postinstall` then `info ok`; the main thread's last work is two threadpool completions read from the loop's eventfd, after which node runs its exit path. So the JS side gives up before `child_process.spawn`, in background mode only. A retry with the half-installed package in place fails earlier: `reify:retireShallow` gets `ENOTEMPTY` from `rename` of the existing package dir to `.claude-code-<random>`.
+
+**What's needed:** a clean-state reproduction with `NODE_DEBUG=child_process,fs` and the engine census (`files/etc/zd-engine-log`), then the differential suite against the Docker oracle for the syscall sequence of `@npmcli/run-script` in background mode (`stdio: pipe`); suspects are the fake-root identity answers npm consults before deciding how to run a script, and `renameat2` on a non-empty directory. Until fixed the README's `npm install -g` line needs `--foreground-scripts`.
+
 ### gpui's fallback prompt on Android is unstyled (2026-10-28)
 
 **What:** `AndroidPlatform::prompt` returns `None`, so `window.prompt` draws gpui's generic in-window fallback: narrow, the detail text clipped. Reset runtime's confirmation is the first user of it.
