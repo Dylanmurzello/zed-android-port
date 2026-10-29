@@ -50,9 +50,6 @@ percent-encoding.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
-[target.'cfg(target_os = "android")'.dependencies]
-zdroid_hooks.workspace = true
-
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 rand.workspace = true

@@ -354,7 +354,7 @@ impl MasterProcess {
             // read_to_end on stdout) blocks forever even though the
             // master socket is up and ready. Desktop Zed gets away
             // without this because the inherited stdio differs; on
-            // Android we route through zd-exec which keeps the pipe
+            // Android we route through the engine loader which keeps the pipe
             // alive. -f forces the parent to exit, EOF propagates,
             // wait_connected resolves, Zed proceeds to platform
             // detection.

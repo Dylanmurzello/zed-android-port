@@ -69,7 +69,7 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
 
     if let Ok(meta) = fs::metadata(&target)
         && meta.len() as usize == expected_len
-        && crate::zd_exec_install::asset_matches_file(&mut asset, &target)?
+        && asset_matches_file(&mut asset, &target)?
     {
         log::debug!(
             "askpass_install: {} up to date ({} bytes); skipping",
@@ -106,4 +106,23 @@ pub fn ensure_installed(android_app: &AndroidApp, data_path: &Path) -> Result<Pa
         target.display()
     );
     Ok(target)
+}
+
+/// Compares an APK asset stream with an installed file in fixed-size
+/// chunks, so neither binary has to be held in memory twice.
+fn asset_matches_file(asset: &mut impl Read, target: &Path) -> Result<bool> {
+    let mut installed = fs::File::open(target)?;
+    let mut asset_buffer = [0_u8; 64 * 1024];
+    let mut installed_buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = asset.read(&mut asset_buffer)?;
+        if read == 0 {
+            return Ok(true);
+        }
+        if installed.read_exact(&mut installed_buffer[..read]).is_err()
+            || asset_buffer[..read] != installed_buffer[..read]
+        {
+            return Ok(false);
+        }
+    }
 }

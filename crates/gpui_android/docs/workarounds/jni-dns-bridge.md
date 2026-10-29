@@ -1,8 +1,11 @@
-# JNI DNS bridge → `/sdcard/.zed/r`
+# JNI DNS bridge
 
 **Status:** Active
-**Phase / Commit:** L4f (`66c979444b`)
-**Files:** `crates/gpui_android/src/dns_bridge.rs`, `MainActivity.kt::getActiveDnsServers()`
+**Phase / Commit:** L4f (`66c979444b`); writer removed with the bootstrap adapter
+**Files:** `crates/gpui_android/src/dns_bridge.rs::android_dns_servers`, `MainActivity.kt::getActiveDnsServers()`
+
+> The `/sdcard/.zed/r` writer described below is gone. The JNI query stays
+> and seeds the guest rootfs `/etc/resolv.conf` (rootfs engine).
 
 ## Problem
 

@@ -219,4 +219,11 @@ object NativeBridge {
     /// Posted when the user returns from Zdroid's "Install unknown apps"
     /// settings page, which [MainActivity.requestInstallPermission] opens.
     external fun nativeOnInstallPermissionResult(granted: Boolean)
+
+    /// Called from `MainActivity.onDestroy` before the process is
+    /// killed: ends every child process the editor started (language
+    /// servers, shells, debug adapters). The kernel would otherwise
+    /// reparent them to init, where an idle language server lives on.
+    /// Implemented in `gpui_android::runtime_service`.
+    external fun nativeBeforeProcessExit()
 }

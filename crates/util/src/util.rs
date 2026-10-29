@@ -52,6 +52,17 @@ pub use self::shell::{
     get_default_system_shell, get_default_system_shell_preferring_bash, get_system_shell,
 };
 
+/// The operating system Zed's subprocesses run on, for picking prebuilt
+/// downloads. On Android they run in the runtime's Linux userland through
+/// the engine loader (`runtime-os-asset-selection.md`).
+pub fn runtime_os() -> &'static str {
+    if cfg!(target_os = "android") {
+        "linux"
+    } else {
+        std::env::consts::OS
+    }
+}
+
 pub fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         None => s,

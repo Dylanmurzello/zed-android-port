@@ -1,8 +1,11 @@
 # Remote development on Android — env, channel, and CDN gotchas
 
 **Status:** Active (working end-to-end against a Linux-x86_64 Vultr remote
-from Tab S9 Ultra; Zed protocol, file tree, terminal, file ops all flow)
-**Phase / Commit:** L10b
+from Tab S9 Ultra; Zed protocol, file tree, terminal, file ops all flow.
+Re-verified 2026-10-28 on the rootfs engine against a macOS arm64 host with
+password auth through the static askpass helper: the server processes on the
+host carried no `ZD_*`, `LD_PRELOAD`, or the tablet's `HOME`/`TMPDIR`)
+**Phase / Commit:** L10b; rootfs engine chunk 2 for the engine gaps below
 **Files:**
 - `crates/gpui_android/examples/zed_android/src/lib.rs`
 - `crates/gpui_android/examples/zed_android/Cargo.toml`
@@ -80,11 +83,12 @@ function, so they reached the remote too. Glibc on the remote can't dlopen
 breaking remote `~/.ssh/`, `~/.bashrc`, command lookup and subprocess
 scratch space.
 
-Fix: the Android variables are added by `zdroid_hooks::insert_terminal_env`,
-which `TerminalBuilder::new` calls for the local pty only (for a remote
-terminal that's the local `ssh` process, which needs them). Earlier
-versions instead filtered a list of names in `build_command_posix`, which
-missed `PATH` and `SHELL` and also applied on desktop.
+Fix: the local pty inherits the app's environment, which carries the
+runtime's variables (for a remote terminal that's the local `ssh` process,
+which needs them), and nothing Android-specific is added to the environment
+sent to the remote. Earlier versions filtered a list of names in
+`build_command_posix`, which missed `PATH` and `SHELL` and also applied on
+desktop.
 
 ### F. `failed to fetch release: "invalid channel: dev"`
 
@@ -159,10 +163,9 @@ whatever ReleaseChannel inferred, so the app data dir stays put.
 
 ## What the upstream Zed code change does
 
-`crates/terminal/src/terminal.rs` gains an Android-only call to
-`zdroid_hooks::insert_terminal_env` in `TerminalBuilder::new`, right
-after upstream's `insert_zed_terminal_env`. Upstream's function, which
-also builds the environment sent to SSH remotes, is unchanged.
+`crates/terminal/src/terminal.rs` and `build_command_posix` are unchanged:
+the runtime's variables reach the local pty through the app's environment,
+which alacritty passes on.
 
 ## Verifying the fix on device
 
@@ -212,3 +215,27 @@ line (the Android variables reached `insert_zed_terminal_env` again) or from the
   permanent fix for symptom (E)
 - [zdroid-bootstrap README](https://github.com/ilkersigirci/zdroid-bootstrap#whats-in-it) — the
   bootstrap-rebuild process L10a feeds into
+
+## Rootfs engine: what ssh needed from the loader
+
+Three sandbox refusals sat between the password prompt and a working
+ControlMaster, each fixed in the engine rather than in ssh (2026-10-28):
+
+- ssh publishes its mux socket by binding a temporary name and hard-linking
+  it to `ControlPath`; the sandbox refuses hard links and a socket cannot be
+  copied, so the loader turns a refused `linkat` on a socket into a
+  `renameat2(RENAME_NOREPLACE)`, the same atomic publish with the same
+  `EEXIST` on a race (`crates/zd_loader/src/link.rs`).
+- The master waits with `ppoll` and calls the legacy `accept`, which bionic
+  never issues and the app seccomp policy therefore omits; the untagged SIGSYS
+  used to come back as ENOSYS and the master spun on the readable listener.
+  The compat table answers it with `accept4(fd, addr, len, 0)`
+  (`crates/zd_engine_core/src/compat.rs`).
+- The master checks the mux client's `getpeereid` against its own `getuid()`;
+  under fake root `getuid()` is 0 while `SO_PEERCRED` reported the real app
+  uid, so every client was dropped with "master hello exchange failed". The
+  handler maps the peer credentials the way it maps stat owners
+  (`crates/zd_loader/src/handler.rs::peer_credentials`).
+
+The password prompt itself depended on a waker identity bug in async-task that
+froze the main loop; see `async-task-waker-identity.md`.

@@ -11,6 +11,7 @@ doctest = false
 [dependencies]
 log = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
+zd_engine_core.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 which.workspace = true

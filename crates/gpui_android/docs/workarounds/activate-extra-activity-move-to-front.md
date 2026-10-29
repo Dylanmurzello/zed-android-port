@@ -78,10 +78,10 @@ pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) 
 }
 ```
 
-Both `taskId` (API 29+, on `TaskInfo`) and `id` (API < 29, on
-`RecentTaskInfo`) field names are tried — at `targetSdk=28` either may
-work depending on the framework version actually loaded. Try modern
-first, fall back to legacy.
+Both `taskId` (API 29+, on `TaskInfo`) and `id` (deprecated since API
+29, on `RecentTaskInfo`) field names are tried, since either may be the
+populated one depending on the framework version actually loaded. Try
+modern first, fall back to legacy.
 
 ```rust
 // crates/gpui_android/src/window.rs

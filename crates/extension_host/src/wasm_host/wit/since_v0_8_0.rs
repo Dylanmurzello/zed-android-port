@@ -872,14 +872,9 @@ impl platform::Host for WasmState {
         &mut self,
     ) -> wasmtime::Result<(platform::Os, platform::Architecture)> {
         Ok((
-            match env::consts::OS {
+            match util::runtime_os() {
                 "macos" => platform::Os::Mac,
-                // Android is a Linux kernel, and extensions only know
-                // Linux, Mac and Windows: they download their
-                // linux-aarch64 builds, which the runtime can start (the
-                // Bootstrap runtime runs musl builds with its bundled
-                // loader).
-                "linux" | "android" => platform::Os::Linux,
+                "linux" => platform::Os::Linux,
                 "windows" => platform::Os::Windows,
                 _ => return Err(wasmtime::Error::msg("unsupported os")),
             },

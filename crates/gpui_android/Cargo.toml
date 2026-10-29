@@ -27,6 +27,8 @@ serde_json.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 util.workspace = true
 uuid.workspace = true
+zd_engine_core.workspace = true
+zdroid_runtime = { path = "../zdroid_runtime" }
 
 # The importer has no Android APIs, so exercise file safety on the host too.
 [[test]]

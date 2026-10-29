@@ -1380,7 +1380,7 @@ async fn get_copilot_lsp(fs: Arc<dyn Fs>, node_runtime: NodeRuntime) -> anyhow::
 }
 
 fn copilot_lsp_native_binary_path() -> anyhow::Result<PathBuf> {
-    let platform = match env::consts::OS {
+    let platform = match util::runtime_os() {
         "linux" => "linux",
         "macos" => "darwin",
         "windows" => "win32",

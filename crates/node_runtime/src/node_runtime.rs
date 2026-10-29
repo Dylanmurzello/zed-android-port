@@ -619,7 +619,7 @@ impl ManagedNodeRuntime {
     async fn install_if_needed(http: &Arc<dyn HttpClient>) -> Result<Self> {
         log::info!("Node runtime install_if_needed");
 
-        let os = match consts::OS {
+        let os = match util::runtime_os() {
             "macos" => "darwin",
             "linux" => "linux",
             "windows" => "win",
@@ -683,7 +683,7 @@ impl ManagedNodeRuntime {
                 .await
                 .context("error creating node containing dir")?;
 
-            let archive_type = match consts::OS {
+            let archive_type = match util::runtime_os() {
                 "macos" | "linux" => ArchiveType::TarGz,
                 "windows" => ArchiveType::Zip,
                 other => bail!("Running on unsupported os: {other}"),
@@ -1314,11 +1314,6 @@ pub fn npm_command_env(node_binary: &Path) -> HashMap<String, String> {
             command_env.insert(NODE_CA_CERTS_ENV_VAR.to_string(), node_ca_certs);
         }
     }
-
-    // Android's Bootstrap runtime needs rewritten shebangs and the musl
-    // builds of npm's native packages.
-    #[cfg(target_os = "android")]
-    zdroid_hooks::insert_npm_env(&mut command_env);
 
     #[cfg(windows)]
     {

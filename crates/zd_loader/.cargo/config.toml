@@ -1,0 +1,30 @@
+# Static, non-PIE, libc-free image linked at a fixed base. The seccomp
+# filter the loader installs allows syscalls by instruction pointer
+# inside [LOADER_IMAGE_BASE, LOADER_IMAGE_BASE + LOADER_WINDOW_SIZE), so
+# the base here must match zd_engine_core::LOADER_IMAGE_BASE.
+# cargo-ndk supplies the NDK clang as the linker.
+#
+# An environment RUSTFLAGS replaces these target rustflags entirely (cargo
+# precedence), so build this crate with RUSTFLAGS unset; the gradle task
+# strips it. With the app's +fp16 RUSTFLAGS leaking in, the link pulls
+# crt1.o and fails on a duplicate `_start`.
+[build]
+target = "aarch64-linux-android"
+
+[target.aarch64-linux-android]
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "target-feature=+crt-static,-outline-atomics",
+    "-C", "force-frame-pointers=yes",
+    "-C", "link-arg=-nostdlib",
+    "-C", "link-arg=-nostartfiles",
+    "-C", "link-arg=-static",
+    "-C", "link-arg=-no-pie",
+    "-C", "link-arg=-Wl,-e,_start",
+    "-C", "link-arg=-Wl,--image-base=0x5400000000",
+    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C", "link-arg=-Wl,-z,noexecstack",
+    "-C", "link-arg=-Wl,-z,norelro",
+    "-C", "link-arg=-Wl,--gc-sections",
+    "-C", "link-arg=-Wl,--build-id=sha1",
+]

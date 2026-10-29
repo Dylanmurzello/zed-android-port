@@ -206,6 +206,8 @@ pub struct SettingsContent {
     /// platforms — the settings UI gates the section on
     /// `cfg(target_os = "android")`.
     pub android_input: Option<AndroidInputSettingsContent>,
+    /// Android-only background behavior. Ignored on other platforms.
+    pub android_runtime: Option<AndroidRuntimeSettingsContent>,
     pub tab_switcher: Option<TabSwitcherSettingsContent>,
     pub status_bar: Option<StatusBarSettingsContent>,
 
@@ -409,7 +411,7 @@ impl SettingsContent {
 fallible_options::flattened_deserialize!(SettingsContent {
     sections: { project, theme, extension, workspace, editor, remote },
     options: {
-        call_hierarchy, command_palette, file_finder, git_panel, tabs, tab_bar, android_input, tab_switcher, status_bar, preview_tabs, agent,
+        call_hierarchy, command_palette, file_finder, git_panel, tabs, tab_bar, android_input, android_runtime, tab_switcher, status_bar, preview_tabs, agent,
         agent_servers, audio, auto_update, base_keymap, collaboration_panel, debugger, diagnostics,
         git,
         global_lsp_settings, image_viewer, markdown_preview, repl, helix_mode, hide_mouse,

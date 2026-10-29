@@ -316,9 +316,9 @@ async fn load_directory_shell_environment(
     load_direnv: DirenvSettings,
     tx: mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<HashMap<String, String>> {
-    // Android: no login shell. `bash -l` runs Termux's profile scripts, which
-    // launch `/system/bin/app_process64`; that fails and aborts the app. The
-    // environment android_main sets up is the one to use.
+    // Android: no login shell. The app's environment already holds the
+    // runtime's (the engine variables, the loader links on PATH); a login
+    // shell runs in the guest and reports the guest's view instead.
     #[cfg(target_os = "android")]
     if !matches!(load_direnv, DirenvSettings::Disabled) {
         return Ok(std::env::vars().collect());

@@ -13,8 +13,10 @@ import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.Process
 import android.provider.DocumentsContract
 import android.provider.Settings
@@ -459,7 +461,7 @@ class MainActivity : GameActivity(), ImeHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installSplashOverlay()
-        KeepAliveService.startIfEnabled(this)
+        ZdRuntimeService.startIfBackgroundMode(this)
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -1019,10 +1021,13 @@ class MainActivity : GameActivity(), ImeHost {
 
     /** Backs the Zdroid menu's background-mode toggle. */
     @Suppress("unused") // called from Rust via JNI
-    fun isBackgroundModeEnabled(): Boolean = KeepAliveService.isEnabled(this)
+    fun isBackgroundModeEnabled(): Boolean = ZdRuntimeService.isBackgroundModeEnabled(this)
 
     @Suppress("unused") // called from Rust via JNI
-    fun setBackgroundModeEnabled(enabled: Boolean) = KeepAliveService.setEnabled(this, enabled)
+    fun setBackgroundModeEnabled(enabled: Boolean) {
+        ZdRuntimeService.setBackgroundModeEnabled(this, enabled)
+        if (enabled) requestNotificationPermissionOnce()
+    }
 
     /** Backs gpui's credential API; see `gpui_android/src/credentials.rs`. */
     @Suppress("unused") // called from Rust via JNI
@@ -1123,6 +1128,23 @@ class MainActivity : GameActivity(), ImeHost {
     /// clean error.
     @Suppress("unused") // called from Rust via JNI
     fun requestStoragePermissions(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: raw /sdcard paths need "All files access", a
+            // per-app toggle in system settings rather than a dialog. Open
+            // it once per install; the Android Runtime settings page opens
+            // it again on request.
+            if (Environment.isExternalStorageManager()) {
+                Log.i(TAG, "requestStoragePermissions: all files access granted")
+                return 1
+            }
+            val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) {
+                Log.i(TAG, "requestStoragePermissions: all files access not granted; asked before")
+                return 2
+            }
+            prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
+            return if (requestAllFilesAccess()) 0 else 2
+        }
         val needed = listOf(
             Manifest.permission.READ_EXTERNAL_STORAGE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE,
@@ -1138,6 +1160,34 @@ class MainActivity : GameActivity(), ImeHost {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_STORAGE_PERMS)
         }
         return 0
+    }
+
+    /// Open the system "All files access" toggle for this package on
+    /// Android 11+, or the storage permission dialog on older releases.
+    /// Returns true when a screen opened or access already holds.
+    @Suppress("unused")
+    fun requestAllFilesAccess(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return requestStoragePermissions() != 2
+        }
+        if (Environment.isExternalStorageManager()) return true
+        val direct = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "all files access screen unavailable; opening the list", t)
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                true
+            } catch (inner: Throwable) {
+                Log.w(TAG, "all files access settings unavailable", inner)
+                false
+            }
+        }
     }
 
     /// Returns Android's currently-active DNS server IPs as a comma-joined
@@ -1169,6 +1219,13 @@ class MainActivity : GameActivity(), ImeHost {
             ""
         }
     }
+
+    /// Directory the installer extracted this APK's native libraries to.
+    /// The rootfs engine's loader (libzdload.so) lives here and is exec'd
+    /// by path: it is the only app-owned location SELinux lets a process
+    /// execute from regardless of targetSdk.
+    @Suppress("unused") // called from Rust via JNI
+    fun nativeLibraryDir(): String = applicationInfo.nativeLibraryDir ?: ""
 
     /// Whether Android lets Zdroid install APKs ("Install unknown apps").
     @Suppress("unused") // called from Rust via JNI
@@ -1297,6 +1354,76 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
+    /// Rust reconciles the runtime foreground service against the
+    /// process tree (`gpui_android::runtime_service`) and pushes the
+    /// result here on transitions. Starting is idempotent and re-reads
+    /// `keepAwake`, so a settings change while active is one more start.
+    /// Returns false when Android refused the start, so Rust retries.
+    @Suppress("unused") // called from Rust via JNI
+    fun setRuntimeServiceActive(active: Boolean, keepAwake: Boolean): Boolean {
+        val applied = ZdRuntimeService.setChildrenActive(this, active, keepAwake)
+        if (active) requestNotificationPermissionOnce()
+        return applied
+    }
+
+    private var notificationPermissionRequested: Boolean = false
+
+    /// Android 13+ posts no notification, the foreground service's
+    /// included, until POST_NOTIFICATIONS is granted. Asked once, the
+    /// first time the service starts; the service runs either way, a
+    /// denial only hides its notification. (The targetSdk 28 builds got
+    /// no dialog on One UI 8 and this request came back denied there,
+    /// measured 2026-10-28; from targetSdk 33 it is a real prompt.)
+    private fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (notificationPermissionRequested) return
+        notificationPermissionRequested = true
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        runOnUiThread {
+            try {
+                ActivityCompat.requestPermissions(this, arrayOf(permission), REQ_POST_NOTIFICATIONS)
+            } catch (t: Throwable) {
+                Log.w(TAG_RUNTIME, "POST_NOTIFICATIONS request failed", t)
+            }
+        }
+    }
+
+    @Suppress("unused")
+    fun isIgnoringBatteryOptimizations(): Boolean {
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return power.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    /// Open the system dialog that exempts this package from battery
+    /// optimization (Doze and app standby stop background children
+    /// otherwise). Returns true when the dialog opened or the exemption
+    /// already holds; falls back to the exemption list screen on builds
+    /// that refuse the direct request.
+    @Suppress("unused")
+    fun requestIgnoreBatteryOptimizations(): Boolean {
+        if (isIgnoringBatteryOptimizations()) return true
+        val direct = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:$packageName"),
+        )
+        return try {
+            startActivity(direct)
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "battery exemption dialog unavailable; opening the list", t)
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                true
+            } catch (inner: Throwable) {
+                Log.w(TAG_RUNTIME, "battery optimization settings unavailable", inner)
+                false
+            }
+        }
+    }
+
     /// Force a clean process exit when the Activity is destroyed.
     ///
     /// gpui_android has multiple static-state init paths (event channels,
@@ -1329,6 +1456,15 @@ class MainActivity : GameActivity(), ImeHost {
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)
         cursorOverlay?.release()
         cursorOverlay = null
+        // A swiped-away task reaches here with the Rust side still alive:
+        // end the children it spawned before the process goes, then drop
+        // the runtime service so no orphan notification lingers.
+        try {
+            NativeBridge.nativeBeforeProcessExit()
+        } catch (t: Throwable) {
+            Log.w(TAG_RUNTIME, "nativeBeforeProcessExit failed", t)
+        }
+        stopService(Intent(this, ZdRuntimeService::class.java))
         super.onDestroy()
         Process.killProcess(Process.myPid())
     }
@@ -1340,6 +1476,11 @@ class MainActivity : GameActivity(), ImeHost {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_POST_NOTIFICATIONS) {
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            Log.i(TAG_RUNTIME, "POST_NOTIFICATIONS granted=$granted")
+            return
+        }
         if (requestCode != REQ_STORAGE_PERMS) {
             return
         }
@@ -1385,10 +1526,14 @@ class MainActivity : GameActivity(), ImeHost {
         private const val TAG = "zed_android_saf"
         private const val TAG_CAPTURE = "zed_android_capture"
         private const val TAG_UPDATE = "zed_android_update"
+        private const val TAG_RUNTIME = "zed_android_runtime"
         private const val REQ_OPEN_TREE = 0xA1
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3
         private const val REQ_INSTALL_PERMISSION = 0xA4
+        private const val REQ_POST_NOTIFICATIONS = 0xA5
+        private const val PREFS = "zdroid"
+        private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
         /// Software cursor side length in dp. Scaled by display
         /// density at instantiation time to give the sprite a
         /// consistent visual size across devices.

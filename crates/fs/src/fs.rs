@@ -1070,7 +1070,14 @@ impl Fs for RealFs {
                 #[cfg(target_os = "windows")]
                 let result = Self::canonicalize(&path);
 
-                #[cfg(not(target_os = "windows"))]
+                // The kernel spells the app files dir differently from the
+                // editor's state (android-files-dir-spelling.md).
+                #[cfg(target_os = "android")]
+                let result = std::fs::canonicalize(&path).map(|canonical| {
+                    zdroid_hooks::respell_kernel_path(&canonical).unwrap_or(canonical)
+                });
+
+                #[cfg(not(any(target_os = "windows", target_os = "android")))]
                 let result = std::fs::canonicalize(&path);
 
                 result.with_context(|| format!("canonicalizing {path:?}"))

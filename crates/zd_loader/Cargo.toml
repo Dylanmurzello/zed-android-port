@@ -1,0 +1,32 @@
+# Standalone workspace: the loader is a static, libc-free aarch64 binary
+# with its own target and linker flags (see .cargo/config.toml), which a
+# member of the editor workspace cannot carry. Gradle builds it with
+# `cargo ndk -t arm64-v8a -P 26 build --release` from this directory and
+# stages it into the APK as lib/arm64-v8a/libzdload.so.
+[workspace]
+
+[package]
+name = "zd_loader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Static loader and seccomp trap handler for the Zdroid rootfs engine"
+
+[[bin]]
+name = "zd_loader"
+path = "src/main.rs"
+
+[dependencies]
+zd_engine_core = { path = "../zd_engine_core", default-features = false }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+opt-level = 2
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = "limited"
+strip = false

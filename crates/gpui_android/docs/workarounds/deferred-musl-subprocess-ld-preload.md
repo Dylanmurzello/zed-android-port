@@ -1,6 +1,6 @@
 # LD_PRELOAD strip propagates to musl-static binary's children
 
-**Status:** Deferred. Workaround for users today is "invoke `node` (or the target interpreter) directly, bypassing the shebang." Long-term fix is wrapper-shell-with-LD_PRELOAD-restoration; not in v0.1.x scope.
+**Status:** Superseded by the rootfs engine (`rootfs-engine-integration.md`, landing with the engine). The LD_PRELOAD shim and the musl wrappers were removed with the bootstrap adapter; the engine resolves shebangs at exec for every binary. Kept for history.
 
 ## What breaks
 
