@@ -1,3 +1,74 @@
+# Zdroid fork
+
+This repository is a fork of [Dylanmurzello/zed-android-port](https://github.com/Dylanmurzello/zed-android-port), Dylan Murzello's Android port of Zed. It merges each stable [Zed](https://github.com/zed-industries/zed) release, brings more of desktop Zed to Android, and publishes its own signed APKs. This section covers what the fork changes; Dylan's README follows below the line.
+
+### Install
+
+Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilkersigirci/zed-android-port/releases/latest). After that, Zdroid updates itself from the title bar.
+
+> [!IMPORTANT]
+> - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the Bootstrap runtime and its home folder.
+> - Release builds are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
+
+Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
+
+### What the fork adds
+
+**Zed, kept current**
+
+- Each Zed stable release is merged in, instead of staying on the Zed version the port started from.
+- Desktop Zed's startup code: `keymap.json` and base keymaps, zoom shortcuts, user themes, the unsaved-changes prompt on quit, and settings error notifications.
+- The last workspace reopens on launch, SSH remote projects included, following `restore_on_startup`.
+- Desktop Zed's editor toolbars and status bar: breadcrumbs, the activity indicator with language server progress and errors, Git stage, unstage and commit buttons in diff views, Open on GitHub and permalinks, image viewer zoom, and diagnostics controls. Git blame can go in the status bar.
+- Call hierarchy and the LSP command selector.
+- **zed: open log** shows Zdroid's log in the editor, without `adb logcat`. Dialogs use Zed's own style and follow your theme.
+
+**AI**
+
+- The Agent Panel runs ACP agents such as Claude Code, Codex and Antigravity, on SSH remotes and, after [installing their CLIs](#setting-up-your-shell-environment-bootstrap), locally under Bootstrap. Keep and Reject buttons review their edits.
+- Zed's own agent and inline assistant work with your API keys: hosted providers such as Anthropic, OpenAI, Google and OpenRouter, and OpenAI-compatible endpoints ([details](#ai)).
+- The screen stays on while an agent works.
+
+**Touch, keyboard and pointer**
+
+- Zed's touch gestures: momentum scrolling, double-tap to select a word, and two-finger swipes that scroll. A finger also drags pane splitters and dock edges. Tabs always show their close button.
+- The on-screen keyboard behaves like other Android apps': it shows when you tap a text field or open a search box, not when you open a file, and the window's content stays above it. Its toggle is in the status bar.
+- Long press in the terminal opens its context menu, with **Open in Browser** for a selected link.
+- Ctrl+click, Shift+click and Alt+click work with a mouse or trackpad, Ctrl+tap opens links, and horizontal wheel scrolling works.
+- Samsung DeX: clicks and hover land under the pointer in freeform windows. The Book Cover trackpad follows your finger in landscape.
+
+**Windows**
+
+- Ctrl+W and Ctrl+Shift+W in Settings and other pop-up windows close that window, not all of Zdroid. Closed windows leave Recents.
+- Opening Settings no longer freezes for 2 seconds, windows no longer stay blank after the screen turns off, and pop-up windows no longer look washed out while a keyboard or mouse is in use.
+
+**Battery and size**
+
+- **Zdroid → Keep Running in Background** (optional) keeps terminals, SSH sessions and agents alive, with an ongoing notification that has a Stop action.
+- Zdroid draws frames only when something changes and does less work in the background, so it uses much less battery while idle.
+- Zed's release size settings, link-time optimization and packed relocations cut about 110 MB from the APK.
+
+**Runtime and SSH**
+
+- Bootstrap installs from Zdroid's fork, [`ilkersigirci/zdroid-bootstrap`](https://github.com/ilkersigirci/zdroid-bootstrap), or another repository you enter. The download is checked against the SHA-256 GitHub records, a dropped connection doesn't hang the install, and **Reinstall** moves to a newer release while keeping your home folder. `pkg upgrade` no longer breaks apt.
+- SSH remotes download the remote server that matches Zdroid's Zed version, and remote terminals use the remote's own shell.
+- The External Termux placeholder, which never ran anything, is gone.
+
+**Updates, data and security**
+
+- Updates work like desktop Zed's: an **Update Available** button in the title bar, hourly checks (`"auto_update": false` turns them off), download progress, and Android's install session API. An update must be signed with the release certificate.
+- Credentials are stored in the Android Keystore. Plaintext ones from older versions are moved there.
+- Cloning into an existing folder or deleting folders from the Files app no longer loses data. Typed text isn't logged, and Android backups are off, since the home folder holds SSH keys and credentials.
+- APKs are built and signed in GitHub Actions with a provenance attestation: `gh attestation verify Zdroid-X.Y.Z.apk --repo ilkersigirci/zed-android-port`.
+
+### Contributing
+
+Pull requests go to the `zdroid` branch; `main` mirrors Dylan's repository. [FORK.md](FORK.md) covers syncing Zed and Dylan's repository, and releasing.
+
+---
+
+<p align="center"><sub>Dylan's README for the port follows, updated where Zdroid works differently.</sub></p>
+
 <p align="center">
   <img src="crates/gpui_android/examples/zed_android/docs/screenshots/zdroid-logo.png" width="120" alt="Zdroid logo" />
 </p>
