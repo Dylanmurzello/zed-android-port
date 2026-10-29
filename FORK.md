@@ -101,6 +101,13 @@ Fork-specific changes to keep while resolving:
 
 - `ZDROID_RELEASE_REPO` in `crates/gpui_android/src/updater.rs`. Without it, the in-app updater follows Dylan's releases, and those are signed with a different key.
 - `versionCode`/`versionName` in `crates/gpui_android/examples/zed_android/android/app/build.gradle.kts`. Take whichever is higher.
+- Dylan edits Zed's crates in place for Android; this fork keeps that code out of them. Port such an edit instead of taking it:
+  - spawning, the files dir spellings and the per-spawn PATH (his `gpui_util`, `util::command`, `util::env`) go to `crates/zdroid_hooks`;
+  - the language server restarts (his `lsp_store.rs`) to the app's `src/lsp_watchdog.rs`;
+  - Android settings (his `workspace_settings.rs`, `default.json`, `page_data.rs`) to the app, as `android_input` and `android_runtime` are, and to `crates/settings_ui/src/page_data/android.rs`;
+  - his app code to the app's copies of Zed's startup code (`src/zed.rs`, `src/lib.rs`).
+- Dylan's engine crates, `crates/zd_engine_core` and `crates/zd_loader`, are unformatted, and their `rustfmt.toml` keeps CI's format check off them. Take his versions as they are.
+- `async-task` isn't vendored: the revision Zed pins has his fix.
 
 ## Contributing to Dylan's repo
 
