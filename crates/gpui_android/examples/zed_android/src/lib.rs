@@ -614,8 +614,6 @@ fn android_main(app: AndroidApp) {
         Err(err) => log::warn!("zed_android: engine loader path unavailable: {err:#}"),
     }
 
-    runtime_setup::sweep_previous_runtimes(&data_path);
-
     // First launch: extract the bundled Ubuntu image now, while the splash
     // is up. The outcome reaches the workspace as a notification (a failure
     // with Retry, or the essentials step starting).
@@ -1060,46 +1058,6 @@ fn boot(
             "zed_android: default terminal.shell -> {}",
             shell_path.display()
         );
-
-        // Releases before 0.6.1 wrote their runtime's shell into settings.json,
-        // where it outranks the default and still reaches remotes. Those
-        // runtimes are gone, so the shell no longer exists.
-        let old_runtime_shell = |shell: &settings::Shell| {
-            let program = match shell {
-                settings::Shell::Program(program) => program,
-                settings::Shell::WithArguments { program, .. } => program,
-                settings::Shell::System => return false,
-            };
-            let program = std::path::Path::new(program);
-            program.starts_with(data_path.join("usr")) || program == data_path.join("bin/zd-exec")
-        };
-        let user_has_old_runtime_shell = cx
-            .global::<SettingsStore>()
-            .raw_user_settings()
-            .and_then(|user_settings| user_settings.content.terminal.as_ref())
-            .and_then(|terminal| terminal.project.shell.as_ref())
-            .is_some_and(|shell| old_runtime_shell(shell));
-        if user_has_old_runtime_shell {
-            let data_path = data_path.to_path_buf();
-            cx.global::<SettingsStore>().update_settings_file(
-                app_state.fs.clone(),
-                move |content, _cx| {
-                    if let Some(terminal) = content.terminal.as_mut()
-                        && let Some(
-                            settings::Shell::Program(program)
-                            | settings::Shell::WithArguments { program, .. },
-                        ) = terminal.project.shell.as_ref()
-                    {
-                        let program = std::path::Path::new(program);
-                        if program.starts_with(data_path.join("usr"))
-                            || program == data_path.join("bin/zd-exec")
-                        {
-                            terminal.project.shell = None;
-                        }
-                    }
-                },
-            );
-        }
     } else {
         log::warn!(
             "zed_android: loader link {} missing; leaving terminal.shell as-is",
@@ -1273,6 +1231,7 @@ fn boot(
     project::agent_server_store::AllAgentServersSettings::register(cx);
     onboarding::init(cx);
     menu_bar::register_actions(cx);
+    let previous_runtime = matches!(boot_setup, runtime_setup::BootSetup::PreviousRuntime);
     runtime_setup::register(boot_setup, cx);
     engine_self_test::register(cx);
     runtime_background::register(cx);
@@ -1385,6 +1344,13 @@ fn boot(
             session.last_session_id().map(|id| id.to_owned()),
         )
     };
+
+    // An earlier release's data: no session is restored, and the only way
+    // on is clearing it.
+    if previous_runtime {
+        runtime_setup::open_clean_start(app_state.clone(), cx);
+        return Ok(());
+    }
 
     let restore_task = cx.spawn({
         let app_state = app_state.clone();

@@ -3,6 +3,8 @@ package com.zdroid
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.app.ActivityManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
@@ -1161,6 +1163,35 @@ class MainActivity : GameActivity(), ImeHost {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_STORAGE_PERMS)
         }
         return 0
+    }
+
+    /// Android's own Clear storage for this app: deletes all of its data and
+    /// ends the process. Backs the clean start that an install from before
+    /// 0.10 needs.
+    @Suppress("unused") // called from Rust via JNI
+    fun clearAppData(): Boolean {
+        val activityManager = getSystemService(ActivityManager::class.java) ?: return false
+        return activityManager.clearApplicationUserData()
+    }
+
+    /// Opens the home folder, `ZedDocumentsProvider`'s root, in Android's
+    /// Files app, where folders can be copied to shared storage.
+    @Suppress("unused") // called from Rust via JNI
+    fun openHomeInFiles(): Boolean {
+        val root = DocumentsContract.buildRootUri(
+            "com.zdroid.documents",
+            File(filesDir, "home").absolutePath,
+        )
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(root, DocumentsContract.Root.MIME_TYPE_ITEM)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return try {
+            startActivity(intent)
+            true
+        } catch (error: ActivityNotFoundException) {
+            Log.w(TAG, "no app opens the documents provider's root", error)
+            false
+        }
     }
 
     /// Open the system "All files access" toggle for this package on

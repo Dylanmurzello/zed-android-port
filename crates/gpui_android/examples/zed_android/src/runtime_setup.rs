@@ -16,8 +16,8 @@ use fs::Fs;
 use futures::StreamExt as _;
 use gpui::{App, AppContext as _, Context, DismissEvent, PromptLevel, Window, actions};
 use util::ResultExt as _;
-use workspace::Workspace;
 use workspace::notifications::{NotificationId, simple_message_notification::MessageNotification};
+use workspace::{AppState, Workspace};
 use zdroid_runtime::progress::LogProgressSink;
 use zdroid_runtime::{ProgressSink, Runtime, install};
 
@@ -32,45 +32,15 @@ actions!(
     ]
 );
 
-/// Files earlier releases left under the data dir that nothing can use
-/// anymore: the bootstrap prefix (`usr`, up to 240 MB of a userland only
-/// the removed adapter could run), the old `bin/zd-exec` bridge binary and
-/// the adapter selection file. User content (`home`, the editor's own
-/// state under it) is never touched.
-pub fn sweep_previous_runtimes(data_path: &Path) {
-    for relative in ["bin/zd-exec", "etc/zd-runtime.toml"] {
-        let path = data_path.join(relative);
-        match std::fs::remove_file(&path) {
-            Ok(()) => log::info!("runtime_setup: removed {}", path.display()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => log::warn!("runtime_setup: cannot remove {}: {error}", path.display()),
-        }
-    }
-    let prefix = data_path.join("usr");
-    if !prefix.is_dir() {
-        return;
-    }
-    // Renamed first so a launch cut short mid-deletion leaves a name no
-    // future code looks for; deleting a package tree takes seconds and
-    // the editor need not wait for it.
-    let doomed = data_path.join("usr.removing");
-    let target = match std::fs::rename(&prefix, &doomed) {
-        Ok(()) => doomed,
-        Err(error) => {
-            log::warn!("runtime_setup: cannot rename {}: {error}", prefix.display());
-            prefix
-        }
-    };
-    std::thread::Builder::new()
-        .name("sweep-prefix".into())
-        .spawn(move || match std::fs::remove_dir_all(&target) {
-            Ok(()) => log::info!(
-                "runtime_setup: removed the old bootstrap prefix {}",
-                target.display()
-            ),
-            Err(error) => log::warn!("runtime_setup: cannot remove {}: {error}", target.display()),
-        })
-        .log_err();
+/// Whether the files dir holds an install from before 0.10: its Bootstrap
+/// prefix or its spawn bridge. Those runtimes' programs, and what Zed
+/// installed with them (language servers and agents built for Termux's
+/// Node), don't run in the Ubuntu runtime, so such an install has to start
+/// over with cleared data (`open_clean_start`).
+fn has_previous_runtime(data_path: &Path) -> bool {
+    ["usr", "bin/zd-exec"]
+        .iter()
+        .any(|relative| std::fs::symlink_metadata(data_path.join(relative)).is_ok())
 }
 
 /// What the boot-time setup did.
@@ -79,11 +49,19 @@ pub enum BootSetup {
     AlreadyInstalled,
     Installed,
     Failed(String),
+    /// An earlier release's runtime is still there; nothing was set up.
+    PreviousRuntime,
 }
 
 /// Extract the bundled image when no rootfs is installed. Runs before
 /// the editor shows; the splash covers the seconds it takes.
 pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
+    if has_previous_runtime(runtime.data_path()) {
+        log::warn!(
+            "runtime_setup: an earlier release's runtime is installed; waiting for a clean start"
+        );
+        return BootSetup::PreviousRuntime;
+    }
     if runtime.is_installed() {
         return BootSetup::AlreadyInstalled;
     }
@@ -128,6 +106,7 @@ pub fn register(boot: BootSetup, cx: &mut App) {
                     start_job(workspace, Job::Essentials, cx);
                 }
                 BootSetup::Failed(reason) => show_failure(workspace, reason, cx),
+                BootSetup::PreviousRuntime => {}
             }
         },
     )
@@ -150,8 +129,8 @@ fn reset_runtime(
         "Reset the Ubuntu runtime?",
         Some(
             "Everything installed inside it with apt is removed and the base image is \
-             extracted again. Your home folder (/root), projects and editor settings are \
-             kept. Running terminals and language servers are stopped.",
+             extracted again. Your home folder, with its projects, and the editor settings \
+             are kept. Running terminals and language servers are stopped.",
         ),
         &["Reset", "Cancel"],
         cx,
@@ -198,6 +177,60 @@ fn show_failure(workspace: &mut Workspace, reason: &str, cx: &mut Context<Worksp
                 })
         })
     });
+}
+
+/// An install from before 0.10 doesn't open: an empty window asks to clear
+/// Zdroid's data, and every other answer quits.
+pub fn open_clean_start(app_state: Arc<AppState>, cx: &mut App) {
+    workspace::open_new(
+        Default::default(),
+        app_state,
+        cx,
+        |_workspace, window, cx| prompt_clean_start(window, cx),
+    )
+    .detach();
+}
+
+fn prompt_clean_start(window: &mut Window, cx: &mut Context<Workspace>) {
+    let answer = window.prompt(
+        PromptLevel::Critical,
+        "Zdroid needs a fresh start",
+        Some(
+            "Zdroid 0.10 replaces the Bootstrap and Kali chroot runtimes with an Ubuntu \
+             runtime and can't use what earlier versions left. Clearing Zdroid's data \
+             deletes the home folder (projects, SSH keys, logins), the settings and the \
+             API keys, and Zdroid starts fresh. To keep something, choose Open Files, \
+             copy it from Zdroid to Downloads, then open Zdroid again.",
+        ),
+        &["Clear Data", "Open Files", "Quit"],
+        cx,
+    );
+    cx.spawn(async move |_, cx| {
+        let answer = answer.await.ok();
+        cx.update(|cx| {
+            match answer {
+                Some(0) => match gpui_android::storage::clear_app_data() {
+                    Ok(true) => return,
+                    Ok(false) => {
+                        log::error!("runtime_setup: Android refused to clear the app's data")
+                    }
+                    Err(error) => {
+                        log::error!("runtime_setup: clearing the app's data failed: {error:#}")
+                    }
+                },
+                Some(1) => match gpui_android::storage::open_home_in_files() {
+                    Ok(true) => {}
+                    Ok(false) => log::warn!("runtime_setup: no app opens the Files root"),
+                    Err(error) => {
+                        log::warn!("runtime_setup: opening the home folder failed: {error:#}")
+                    }
+                },
+                _ => {}
+            }
+            cx.quit();
+        });
+    })
+    .detach();
 }
 
 #[derive(Clone, Copy, Debug)]

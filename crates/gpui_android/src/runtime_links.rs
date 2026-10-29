@@ -45,9 +45,6 @@ pub fn bundled_rootfs_image(android_app: &AndroidApp) -> Result<ndk::asset::Asse
 ///   - Non-symlink entries (file, dir) are left alone; we don't touch
 ///     what we didn't create.
 ///   - Names in `binaries` that don't yet exist are created.
-///
-/// Entries written by earlier releases pointed at `../bin/zd-exec`; they
-/// are ours to sweep too.
 pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String], target: &Path) -> Result<()> {
     let runtime_dir = data_path.join("zd-runtime");
     fs::create_dir_all(&runtime_dir)
@@ -57,7 +54,7 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String], target: &P
             && link_target
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name == zd_engine_core::LOADER_LINK_NAME || name == "zd-exec")
+                .is_some_and(|name| name == zd_engine_core::LOADER_LINK_NAME)
     };
 
     let wanted: std::collections::HashSet<&str> = binaries.iter().map(String::as_str).collect();

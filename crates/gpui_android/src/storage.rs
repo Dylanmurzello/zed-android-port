@@ -75,6 +75,31 @@ pub fn request_all_files_access() -> Result<bool> {
     })
 }
 
+/// `ActivityManager.clearApplicationUserData`, Android's own Clear storage:
+/// deletes all of the app's data and ends the process. Returns `false` when
+/// Android refused.
+pub fn clear_app_data() -> Result<bool> {
+    let android_app = crate::updater::android_app()?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "clearAppData", "()Z", &[])
+            .context("MainActivity.clearAppData")?
+            .z()?)
+    })
+}
+
+/// Opens the home folder, the documents provider's root, in Android's Files
+/// app. Returns `false` when no app handles it.
+pub fn open_home_in_files() -> Result<bool> {
+    let android_app = crate::updater::android_app()?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "openHomeInFiles", "()Z", &[])
+            .context("MainActivity.openHomeInFiles")?
+            .z()?)
+    })
+}
+
 /// `storage/` symlinks into shared storage, in the app's home folder.
 ///
 /// Like Termux's `termux-setup-storage`: makes the common /storage/emulated/0
