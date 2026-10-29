@@ -112,8 +112,10 @@ impl Runtime {
         })
     }
 
-    /// Where the user's projects live; the recent-projects UI groups
-    /// paths under it as "Workspace".
+    /// The user's home folder: the guest's `$HOME`, the Files app's
+    /// Zdroid root, and where projects live (`projects/`). It's outside the
+    /// rootfs, so a reset leaves it alone, and at a path the editor and the
+    /// tools spell the same.
     pub fn workspace_root(&self) -> PathBuf {
         self.data_path.join("home")
     }
@@ -166,12 +168,13 @@ impl Runtime {
 
     /// Variables applied to the guest environment only.
     pub fn guest_env_spec(&self) -> String {
+        let home = self.workspace_root();
         [
-            "HOME=/root",
+            &format!("HOME={}", home.display()),
             "USER=root",
             "LOGNAME=root",
             "SHELL=/bin/bash",
-            &format!("PATH={DEFAULT_GUEST_PATH}"),
+            &format!("PATH={}", self.guest_path()),
             "LANG=C.UTF-8",
             // The host's `<data>/tmp` is the guest's `/tmp` (bound), so the
             // guest spelling keeps temp paths short and native-looking.
@@ -233,20 +236,35 @@ impl Runtime {
         }
     }
 
+    /// The engine's default guest PATH with the home's tool directories
+    /// (rustup's, pip's and npm's per-user installs) in place of `/root`'s.
+    fn guest_path(&self) -> String {
+        let home = self.workspace_root();
+        let mut entries = vec![
+            home.join(".cargo/bin").display().to_string(),
+            home.join(".local/bin").display().to_string(),
+        ];
+        entries.extend(
+            DEFAULT_GUEST_PATH
+                .split(':')
+                .filter(|entry| !entry.starts_with("/root/"))
+                .map(str::to_string),
+        );
+        entries.join(":")
+    }
+
     /// The host directories holding the guest's programs, the ones on the
     /// guest's PATH.
     pub fn binary_dirs(&self) -> Vec<PathBuf> {
         let rootfs = self.rootfs_dir();
-        [
-            "usr/bin",
-            "usr/local/bin",
-            "usr/sbin",
-            "root/.cargo/bin",
-            "root/.local/bin",
+        let home = self.workspace_root();
+        vec![
+            rootfs.join("usr/bin"),
+            rootfs.join("usr/local/bin"),
+            rootfs.join("usr/sbin"),
+            home.join(".cargo/bin"),
+            home.join(".local/bin"),
         ]
-        .into_iter()
-        .map(|dir| rootfs.join(dir))
-        .collect()
     }
 
     /// Names of the programs the guest's standard directories hold; the
@@ -397,5 +415,27 @@ mod tests {
         assert_eq!(entries[3], format!("/data/data/com.zdroid/files:{host}"));
         assert!(entries.contains(&format!("{}:{host}", given.to_string_lossy()).as_str()));
         assert!(!spec.contains(&format!(":{}/", given.to_string_lossy())) || given == canonical);
+    }
+
+    #[test]
+    fn the_guest_home_is_the_app_home_folder() {
+        let runtime = Runtime::new(std::path::Path::new("/data/user/0/com.zdroid/files"));
+        let spec = runtime.guest_env_spec();
+        assert!(
+            spec.contains("HOME=/data/user/0/com.zdroid/files/home;"),
+            "{spec}"
+        );
+        let path = spec
+            .split(';')
+            .find_map(|item| item.strip_prefix("PATH="))
+            .unwrap();
+        assert!(
+            path.starts_with(
+                "/data/user/0/com.zdroid/files/home/.cargo/bin:/data/user/0/com.zdroid/files/home/.local/bin:"
+            ),
+            "{path}"
+        );
+        assert!(!path.contains("/root"), "{path}");
+        assert!(path.ends_with(":/usr/bin:/sbin:/bin"), "{path}");
     }
 }
