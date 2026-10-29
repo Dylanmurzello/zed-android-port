@@ -61,8 +61,8 @@ doesn't forward rustc's `target-cpu`, so without this the tree-sitter
 grammars, SQLite and the other C code stay at Armv8.0.
 
 The config applies to everything built in the app's directory, including
-the askpass helper. `zd-exec` builds in the root workspace and stays at the
-baseline.
+the askpass helper. The engine loader builds in its own workspace,
+`crates/zd_loader`, with its own flags, and stays at the baseline.
 
 ## Devices that can run it
 

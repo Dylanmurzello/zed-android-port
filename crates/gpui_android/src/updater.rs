@@ -4,11 +4,10 @@
 //! the signed APK to the app's cache dir and installs it through a
 //! PackageInstaller session (`MainActivity.installUpdate`).
 //!
-//! Why ureq instead of reqwest: matches the existing
-//! `bootstrap_install.rs` pattern (same crate transitively), avoids
-//! pulling Tokio into a cold-start path that runs at most once per
-//! session, and the synchronous shape is fine because we drive it from
-//! a `cx.background_spawn` task that's already off the gpui thread.
+//! Why ureq instead of reqwest: avoids pulling Tokio into a cold-start
+//! path that runs at most once per session, and the synchronous shape is
+//! fine because we drive it from a `cx.background_spawn` task that's
+//! already off the gpui thread.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -109,8 +108,7 @@ pub enum UpdateCheck {
 /// Resolve the latest release tag via the static redirect at
 /// `https://github.com/<repo>/releases/latest`. Returns the tag (with
 /// the leading `v` stripped if present). One HTTP request, no
-/// `api.github.com` quota burn — same approach as
-/// `bootstrap_install::resolve_latest_tag`.
+/// `api.github.com` quota burn.
 pub fn fetch_latest_tag() -> Result<String> {
     let url = format!("https://github.com/{RELEASE_REPO}/releases/latest");
     let agent = ureq::builder().redirects(0).build();

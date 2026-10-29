@@ -32,7 +32,7 @@ impl LspInstaller for CLspAdapter {
         let release =
             latest_github_release("clangd/clangd", true, pre_release, delegate.http_client())
                 .await?;
-        let os_suffix = match consts::OS {
+        let os_suffix = match util::runtime_os() {
             "macos" => "mac",
             "linux" => "linux",
             "windows" => "windows",
@@ -161,7 +161,7 @@ impl LspInstaller for CLspAdapter {
 
 fn ensure_arch_compatibility() -> Result<()> {
     let arch = consts::ARCH;
-    if consts::OS == "linux" && !["x86_64", "x86"].contains(&arch) {
+    if util::runtime_os() == "linux" && !["x86_64", "x86"].contains(&arch) {
         anyhow::bail!(
             "Clangd does not provide prebuilt binaries for {arch} to fetch from GitHub. Consider installing the binary manually."
         )

@@ -35,6 +35,8 @@ const WASI_SDK_PLATFORM: Option<&str> = cfg_select! {
     all(target_os = "macos", target_arch = "aarch64") => Some("arm64-macos"),
     all(target_os = "linux", target_arch = "x86_64") => Some("x86_64-linux"),
     all(target_os = "linux", target_arch = "aarch64") => Some("arm64-linux"),
+    // Android runs the Linux build in its runtime.
+    all(target_os = "android", target_arch = "aarch64") => Some("arm64-linux"),
     all(target_os = "freebsd", target_arch = "x86_64") => Some("x86_64-linux"),
     all(target_os = "freebsd", target_arch = "aarch64") => Some("arm64-linux"),
     all(target_os = "windows", target_arch = "x86_64") => Some("x86_64-windows"),

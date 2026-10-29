@@ -8,11 +8,10 @@ ChromeOS), where there's enough screen real estate to run a real
 code editor with multi-pane layouts, two side-by-side worktrees,
 the agent panel, etc. Phone-sized devices (5"–7", 1080×2340 class)
 work — the build runs, the renderer paints, files open, builds
-compile inside Termux — but the UX is rough enough that we
+compile in the runtime — but the UX is rough enough that we
 explicitly de-prioritize it:
 
-- **Soft keyboard takes ~half the screen** — once the IME bridge
-  lands (`deferred-soft-keyboard.md` / Phase 8.8), the editor pane
+- **Soft keyboard takes ~half the screen** — the editor pane
   shrinks dramatically when typing, leaving 4–5 visible code lines
   on a tall phone. This is a Linux-on-Android problem too, not just
   ours; production phones meant for code editing don't really
@@ -142,8 +141,6 @@ hits this:
 
 ## See also
 
-- [deferred-soft-keyboard.md](deferred-soft-keyboard.md) — the
-  IME bridge work that would unblock typing on phone
 - [miui-aggressive-task-killing.md](miui-aggressive-task-killing.md)
   — MIUI battery-saver kill behavior
 - [activity-options-launch-bounds.md](activity-options-launch-bounds.md)

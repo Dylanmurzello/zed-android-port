@@ -342,6 +342,26 @@ impl AndroidCommon {
         // Latin / extended Latin.
         let cosmic = gpui_wgpu::CosmicTextSystem::new_without_system_fonts("Lilex");
         cosmic.load_fonts_dir("/system/fonts");
+        // The folders fontconfig reads on desktop Linux, where desktop Zed
+        // finds the user's fonts: the home folder's, and the runtime's for
+        // fonts installed with apt. The terminal is drawn here, so a font
+        // installed in the runtime only reaches it this way.
+        let runtime = zdroid_runtime::Runtime::new(&zdroid_runtime::data_path());
+        let rootfs = runtime.rootfs_dir();
+        let started = std::time::Instant::now();
+        for dir in [
+            runtime.workspace_root().join(".local/share/fonts"),
+            rootfs.join("usr/share/fonts"),
+            rootfs.join("usr/local/share/fonts"),
+        ] {
+            if dir.is_dir() {
+                cosmic.load_fonts_dir(&dir);
+            }
+        }
+        log::info!(
+            "fonts: loaded the home folder's and the runtime's fonts in {:?}",
+            started.elapsed()
+        );
         let text_system: Arc<dyn PlatformTextSystem> = Arc::new(cosmic);
 
         Self {
@@ -1524,6 +1544,22 @@ impl AndroidPlatform {
         }
     }
 
+    /// Files other apps opened with Zdroid (`open_files`). They stay queued
+    /// until the app has registered `on_open_urls`.
+    fn deliver_open_urls(&self) {
+        if self.common.borrow().callbacks.open_urls.is_none() {
+            return;
+        }
+        let Some(urls) = crate::open_files::take_pending_urls() else {
+            return;
+        };
+        let callback = self.common.borrow_mut().callbacks.open_urls.take();
+        if let Some(mut callback) = callback {
+            callback(urls);
+            self.common.borrow_mut().callbacks.open_urls = Some(callback);
+        }
+    }
+
     fn notify_memory_warning(&self) {
         let callback = self.common.borrow_mut().callbacks.memory_warning.take();
         if let Some(mut callback) = callback {
@@ -1690,6 +1726,7 @@ impl Platform for AndroidPlatform {
         FRAME_CALLBACK_POSTED.store(false, Ordering::Release);
         // gpui reads the gesture tuning as each window opens.
         self.android_gestures();
+        crate::runtime_service::start(&self.android_app);
         log::info!("AndroidPlatform::run: invoking on_finish_launching");
         on_finish_launching();
         log::info!("AndroidPlatform::run: entering event loop");
@@ -1725,8 +1762,14 @@ impl Platform for AndroidPlatform {
             // Drain main-thread runnables enqueued from background threads. The
             // AndroidAppWaker wakes poll_events above when there's work; we drain
             // each tick regardless to catch anything between waker and poll.
+            // Only the runnables already queued run in this pass. One that
+            // re-enqueues itself from inside `run()` (a future whose own waker
+            // fires during its poll) would otherwise keep the iterator going
+            // and starve the input and paint steps below: the window freezes
+            // at full CPU instead of merely running hot.
             let receiver = self.common.borrow().main_receiver.clone();
-            for runnable in receiver.try_iter() {
+            let batch: Vec<_> = receiver.try_iter().collect();
+            for runnable in batch {
                 if let Ok(runnable) = runnable {
                     runnable.run();
                 }
@@ -1741,6 +1784,8 @@ impl Platform for AndroidPlatform {
             // Drain JNI-side extra-window lifecycle / touch events.
             self.drain_extra_window_events();
             self.reap_closed_extra_windows();
+
+            self.deliver_open_urls();
 
             self.apply_window_insets();
 
@@ -1837,6 +1882,7 @@ impl Platform for AndroidPlatform {
             // Exit the process so `MainActivity.onDestroy` runs (it does
             // its own `Process.killProcess` fallback + cursor / splash
             // teardown) and the OS returns the user to the launcher.
+            crate::runtime_service::shutdown(&self.android_app);
             std::process::exit(0);
         }
     }

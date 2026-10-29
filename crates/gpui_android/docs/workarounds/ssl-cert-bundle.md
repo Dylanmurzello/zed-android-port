@@ -1,16 +1,12 @@
-# SSL_CERT_FILE / CURL_CA_BUNDLE env
+# CA certificates for the editor and its tools
 
 **Status:** Active.
 
-Android has none of the CA bundle paths Linux programs look for. The
-Bootstrap adapter sets `SSL_CERT_FILE` and `CURL_CA_BUNDLE` to the
-bootstrap's `$PREFIX/etc/tls/cert.pem` in the app's environment
-(`env_for_zed_process`), so every program it starts gets them: the
-terminal, language servers, and agents such as Codex, whose requests all
-failed with "workspace routing discovery failed" before 0.9.19, when only
-the terminal had them. The chroot's programs use its `/etc/ssl/certs`.
+Android has none of the CA bundle paths Linux programs look for. The tools
+Zed runs live in the Ubuntu runtime, whose `ca-certificates` package (see
+below) provides them. The editor process doesn't read a bundle file.
 
-Zed's own HTTPS doesn't use them: `http_client_tls::tls_config()` builds a
+Zed's own HTTPS: `http_client_tls::tls_config()` builds a
 rustls `ClientConfig` against the Mozilla root bundle shipped by the
 `webpki-roots` crate.
 
@@ -29,3 +25,9 @@ not the Android system store, so CA additions / removals require a
 crate bump rather than an OS update. For Zed's use cases (extension
 registry, telemetry, LSP-binary downloads from GitHub releases) this is
 the right trade.
+
+Subprocess CA story: the Ubuntu rootfs owns it. `ca-certificates` is
+installed by the essentials step after the first launch (or from
+Settings → Android), and every tool reads `/etc/ssl/certs` the
+Debian way. The editor process keeps its own trust: the `webpki-roots`
+bundle above.

@@ -3,7 +3,20 @@
 
 use std::sync::Arc;
 
+use gpui::App;
+
 use crate::{ActionLink, SettingField, SettingItem, SettingsPage, SettingsPageItem, USER};
+
+/// Dispatches an action the app registers on workspaces. The Settings window
+/// has no workspace, so the action goes to the active one.
+fn dispatch_app_action(name: &'static str, cx: &mut App) {
+    workspace::with_active_or_new_workspace(cx, move |_workspace, window, cx| {
+        match cx.build_action(name, None) {
+            Ok(action) => window.dispatch_action(action, cx),
+            Err(error) => log::warn!("settings_ui: {name} isn't registered: {error}"),
+        }
+    });
+}
 
 pub(super) fn android_page() -> SettingsPage {
     SettingsPage {
@@ -11,26 +24,80 @@ pub(super) fn android_page() -> SettingsPage {
         items: Box::new([
             SettingsPageItem::SectionHeader("Runtime"),
             SettingsPageItem::ActionLink(ActionLink {
-                title: "Pick runtime".into(),
+                title: "Reset Runtime".into(),
                 description: Some(
-                    "Choose the userland Zdroid runs commands in: Bootstrap, a \
-                     Termux-derived userland, or Kali chroot. The terminal, \
-                     language servers, formatters and other tools run there."
+                    "Extract the bundled Ubuntu image again. Removes what you installed with \
+                     apt; your home folder, projects and settings stay."
                         .into(),
                 ),
-                button_text: "Open picker".into(),
-                // The app registers `zdroid_runtime::PickRuntime` on workspaces,
-                // and its handler opens the picker as a window of its own.
+                button_text: "Reset".into(),
                 on_click: Arc::new(|_settings_window, _window, cx| {
-                    workspace::with_active_or_new_workspace(cx, |_workspace, window, cx| match cx
-                        .build_action("zdroid_runtime::PickRuntime", None)
-                    {
-                        Ok(action) => window.dispatch_action(action, cx),
-                        Err(error) => log::warn!(
-                            "settings_ui: zdroid_runtime::PickRuntime isn't registered: {error}"
-                        ),
-                    });
+                    dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
                 }),
+                files: USER,
+            }),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Install Essentials".into(),
+                description: Some(
+                    "Install git, the SSH client and the CA certificates with apt, which the \
+                     base image lacks. This runs on first launch; use it if that failed \
+                     without a network, or after a reset."
+                        .into(),
+                ),
+                button_text: "Install".into(),
+                on_click: Arc::new(|_settings_window, _window, cx| {
+                    dispatch_app_action("zdroid_runtime::InstallEssentials", cx);
+                }),
+                files: USER,
+            }),
+            SettingsPageItem::SectionHeader("Storage and Background"),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Allow Access to /sdcard".into(),
+                description: Some(
+                    "Open Android's All files access toggle, which projects outside the app's \
+                     own folder need. Zdroid asks once on first launch."
+                        .into(),
+                ),
+                button_text: "Open".into(),
+                on_click: Arc::new(|_settings_window, _window, cx| {
+                    dispatch_app_action("zdroid_runtime::AllowAllFilesAccess", cx);
+                }),
+                files: USER,
+            }),
+            SettingsPageItem::ActionLink(ActionLink {
+                title: "Allow Background Activity".into(),
+                description: Some(
+                    "Ask Android to exempt Zdroid from battery optimization, so language \
+                     servers and terminals keep running in the background."
+                        .into(),
+                ),
+                button_text: "Request".into(),
+                on_click: Arc::new(|_settings_window, _window, cx| {
+                    dispatch_app_action("zdroid_runtime::AllowBackgroundActivity", cx);
+                }),
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Keep Awake",
+                description: "Hold a wake lock while language servers or terminals run, so builds and indexing continue with the screen off. Costs battery.",
+                field: Box::new(SettingField {
+                    organization_override: None,
+                    json_path: Some("android_runtime.keep_awake"),
+                    pick: |settings_content| {
+                        settings_content
+                            .android_runtime
+                            .as_ref()?
+                            .keep_awake
+                            .as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content
+                            .android_runtime
+                            .get_or_insert_default()
+                            .keep_awake = value;
+                    },
+                }),
+                metadata: None,
                 files: USER,
             }),
             SettingsPageItem::SectionHeader("On-Screen Keyboard"),

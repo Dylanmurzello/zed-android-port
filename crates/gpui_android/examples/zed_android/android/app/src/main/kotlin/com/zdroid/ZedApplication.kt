@@ -16,17 +16,18 @@ import java.io.File
 /// app opens DocumentsUI and Zed isn't running, Android forks our process,
 /// runs `Application.onCreate`, then `ContentProvider.onCreate`, then
 /// services queries — without ever instantiating `MainActivity` or
-/// running `android_main`. The bootstrap extractor and env setup live in
-/// `android_main`, so without this `mkdirs` the SAF picker would surface
-/// "Zed" with an empty root the first time another app queries it.
+/// running `android_main`. The runtime setup and the home folder's
+/// directories live in `android_main`, so without this `mkdirs` the SAF
+/// picker would surface "Zdroid" with an empty root the first time another
+/// app queries it.
 class ZedApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         System.loadLibrary("zed_android")
         // Pre-create ~ AND ~/projects so:
-        //   1. ZedDocumentsProvider's SAF root is non-empty before the
-        //      bootstrap extractor runs (cold provider queries succeed
-        //      with at least one visible subfolder).
+        //   1. ZedDocumentsProvider's SAF root is non-empty before
+        //      android_main runs (cold provider queries succeed with at
+        //      least one visible subfolder).
         //   2. The noexec-banner Copy-to-projects dialog has a real
         //      destination dir from the moment the user can interact —
         //      no race with `storage::setup_user_symlinks` which mkdirs

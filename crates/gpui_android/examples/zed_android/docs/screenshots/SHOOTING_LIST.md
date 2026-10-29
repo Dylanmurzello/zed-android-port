@@ -20,12 +20,12 @@ above the fold on GitHub. People decide whether to scroll based on this.
    adb shell am start -n com.zdroid/.MainActivity`). Let the welcome /
    workspace appear. ~3s.
 2. **Open a real project** with non-trivial structure — the Zed source
-   itself, or `termux-packages`, or any meaty Rust/Go/TS repo. File tree
+   itself, or any meaty Rust/Go/TS repo. File tree
    visible on the right. ~2s.
 3. **Open a `.rs` file.** Cursor in editor. Wait ~1s for syntax
    highlighting + rust-analyzer to attach (the bottom-right LSP indicator
    should show "rust-analyzer • Connected"). ~3s.
-4. **Use cmd-shift-F → search "termux".** Show results streaming in. ~5s.
+4. **Use cmd-shift-F → search "android".** Show results streaming in. ~5s.
 5. **Open a 2nd file via cmd-P / file finder** in another pane. Show
    multi-pane editing with two files visible. ~3s.
 6. **Open the integrated terminal** (toggle at the bottom). Type
@@ -70,14 +70,15 @@ README. Drop to 75-85% PNG quality so the file lands under 1 MB.
 
 ## `terminal.png`
 
-The "Termux is INSIDE the editor and works" beat.
+The "a real Linux userland is INSIDE the editor and works" beat.
 
 **Compose:**
 - Editor pane on top half, integrated terminal on the bottom half.
 - Terminal showing a multi-line scrollback proof-of-realness:
   ```
+  $ apt install -y golang-go nodejs npm
   $ go version
-  go version go1.26.2 android/arm64
+  go version go1.26.2 linux/arm64
   $ npm install -g @anthropic-ai/claude-code
   added 1 package in 4.2s
   $ claude --version

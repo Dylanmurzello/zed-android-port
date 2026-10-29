@@ -1,7 +1,8 @@
-//! Opt-in background mode backed by `KeepAliveService.kt`: an ongoing
-//! notification keeps the app process at foreground-service priority, so
-//! terminal, SSH and agent sessions survive while Zdroid is in the
-//! background. The Kotlin side persists the choice across launches.
+//! Opt-in background mode: keeps `ZdRuntimeService.kt`, the runtime's
+//! foreground service, running even while the editor has no child
+//! processes, so work without one, such as Zed's own agent, survives while
+//! Zdroid is in the background. The Kotlin side persists the choice across
+//! launches.
 
 use anyhow::Result;
 use jni::objects::JValue;

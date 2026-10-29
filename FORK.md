@@ -101,6 +101,17 @@ Fork-specific changes to keep while resolving:
 
 - `ZDROID_RELEASE_REPO` in `crates/gpui_android/src/updater.rs`. Without it, the in-app updater follows Dylan's releases, and those are signed with a different key.
 - `versionCode`/`versionName` in `crates/gpui_android/examples/zed_android/android/app/build.gradle.kts`. Take whichever is higher.
+- Dylan edits Zed's crates in place for Android; this fork keeps that code out of them. Port such an edit instead of taking it:
+  - spawning, the files dir spellings and the per-spawn PATH (his `gpui_util`, `util::command`, `util::env`) go to `crates/zdroid_hooks`;
+  - the language server restarts (his `lsp_store.rs`) to the app's `src/lsp_watchdog.rs`;
+  - Android settings (his `workspace_settings.rs`, `default.json`, `page_data.rs`) to the app, as `android_input` and `android_runtime` are, and to `crates/settings_ui/src/page_data/android.rs`;
+  - his app code to the app's copies of Zed's startup code (`src/zed.rs`, `src/lib.rs`).
+- The guest's home is the app's home folder (`files/home`), not his `/root`: `guest_env_spec`, `guest_path` and `binary_dirs` in `crates/zdroid_runtime/src/runtime.rs`, and `seed`/`seed_home` in `install.rs`. The editor's `HOME` is the same folder, not his files dir (`baseline_env` in `env.rs`).
+- Installs from before 0.10 aren't migrated: `runtime_setup::open_clean_start` asks to clear the data instead of his `sweep_previous_runtimes`.
+- Dylan's engine crates, `crates/zd_engine_core` and `crates/zd_loader`, are unformatted, and their `rustfmt.toml` keeps CI's format check off them. Take his versions as they are, except for two fixes the fork made and sent to him, which his next version may carry in his own form:
+  - a guest's `execve` passes its signal mask to the new image as `ZD_SIGMASK`, which `main.rs` applies before the jump (exec'd programs started with every signal blocked);
+  - the refusal log reads the call's own `x0`, kept before dispatch (it dereferenced the `-errno` result).
+- `async-task` isn't vendored: the revision Zed pins has his fix.
 
 ## Contributing to Dylan's repo
 
@@ -184,7 +195,7 @@ The same workflow checks formatting (`cargo fmt --all`, which covers the fork's 
 2. Install it over the current release. Same package and key means it installs as an update and keeps your data.
 3. Keep `versionCode` in mind. Android refuses to install a lower `versionCode` over a higher one without uninstalling, which deletes the app's data. Bump the version in the pull request itself, so the test build and the release made from it share a `versionCode` and the release installs cleanly over the test build.
 
-Test builds can't use a separate package name such as `com.zdroid.dev` to install side by side: the Bootstrap userland has `/data/data/com.zdroid` compiled into its binaries, so terminal, git and `pkg` would break.
+Test builds can't use a separate package name such as `com.zdroid.dev` to install side by side: the release's document provider (`com.zdroid.documents`) would clash, and the runtime binds `com.zdroid`'s data paths into its guest.
 
 To verify a downloaded APK:
 

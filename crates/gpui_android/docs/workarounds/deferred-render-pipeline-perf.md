@@ -5,8 +5,8 @@
 The current rendering path is correct and GPU-accelerated end to end:
 wgpu → blade-graphics → Vulkan on Adreno (same renderer/shaders as
 desktop Zed), AChoreographer-driven vsync via direct NDK FFI (no
-JNI hop per frame), `untrusted_app_27` SELinux context with full
-GPU access. Frames are drawn at the panel's primary refresh rate
+JNI hop per frame), and full GPU access from the app's SELinux
+domain. Frames are drawn at the panel's primary refresh rate
 without CPU compositing.
 
 ## Landed in this pass (2026-05-13)

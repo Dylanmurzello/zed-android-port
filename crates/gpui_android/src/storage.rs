@@ -1,23 +1,18 @@
-//! Runtime READ/WRITE_EXTERNAL_STORAGE prompt for Android.
+//! Shared storage access for Android.
 //!
-//! At `targetSdk = 28` we land in legacy-storage mode, but
-//! `READ_EXTERNAL_STORAGE` and `WRITE_EXTERNAL_STORAGE` are still dangerous
-//! permissions that Android won't grant at install time — they need a
-//! runtime dialog. SAF folder picking dodges this for tree access, but the
-//! moment `RealFs` reads `/storage/emulated/0/projects/foo.rs` directly
-//! (which is what happens after the SAF picker hands us back a
-//! `/storage/...` path), the syscall fails with `EACCES` until the user has
-//! granted those perms.
+//! Projects under the app files dir need no permission. Raw `/sdcard`
+//! paths (a folder picked from external storage, the `~/storage` links)
+//! do: on Android 8 to 10 the runtime-prompted `READ/WRITE_EXTERNAL_STORAGE`
+//! grants, on Android 11+ "All files access" (`MANAGE_EXTERNAL_STORAGE`), a
+//! per-app toggle in system settings rather than a dialog. SAF folder
+//! picking dodges this for tree access, but the moment `RealFs` reads
+//! `/storage/emulated/0/projects/foo.rs` directly, the syscall fails with
+//! `EACCES` until the user has granted it.
 //!
-//! This module is the JNI bridge to MainActivity's `requestStoragePermissions()`,
-//! which fires the dialog on first launch. Fire-and-forget by design — if
-//! the user denies, file ops EACCES with a clean error and they can grant
-//! later via Settings → Apps → zed_android → Permissions.
-//!
-//! The MANAGE_EXTERNAL_STORAGE escape hatch we used at `targetSdk=35` is
-//! deliberately not part of this flow. That permission is API 30+ only and
-//! requires a Settings deep-link rather than a runtime dialog; at
-//! `targetSdk=28` it has no effect anyway.
+//! This module is the JNI bridge to `MainActivity.requestStoragePermissions`
+//! (asked once at boot) and `requestAllFilesAccess` (the settings page
+//! action). Fire-and-forget by design: a denial leaves file ops on
+//! `/sdcard` failing with a clean error until granted.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -28,8 +23,9 @@ use anyhow::{Context, Result};
 static REQUESTED: OnceLock<()> = OnceLock::new();
 
 /// Fire the `requestStoragePermissions()` JNI call once per process. Logs
-/// the result code (1 = already granted, 0 = dialog posted). Re-entry from
-/// activity recreation is a no-op via `OnceLock`.
+/// the result code (1 = granted, 0 = dialog or settings screen opened,
+/// 2 = not granted and nothing shown). Re-entry from activity recreation
+/// is a no-op via `OnceLock`.
 pub fn request_once(android_app: &AndroidApp) {
     if REQUESTED.get().is_some() {
         return;
@@ -39,10 +35,10 @@ pub fn request_once(android_app: &AndroidApp) {
             log::info!(
                 "storage: requestStoragePermissions returned {} ({})",
                 code,
-                if code == 1 {
-                    "already granted"
-                } else {
-                    "dialog posted"
+                match code {
+                    1 => "granted",
+                    0 => "dialog or settings screen opened",
+                    _ => "not granted, asked before",
                 }
             );
             let _ = REQUESTED.set(());
@@ -66,20 +62,59 @@ fn request_inner(android_app: &AndroidApp) -> Result<i32> {
     })
 }
 
-/// Termux-style `~/storage/` curated symlinks into shared storage.
+/// Open the system "All files access" toggle (Android 11+) or the storage
+/// permission dialog on older releases. Returns `true` when a screen opened
+/// or access already holds.
+pub fn request_all_files_access() -> Result<bool> {
+    let android_app = crate::updater::android_app()?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "requestAllFilesAccess", "()Z", &[])
+            .context("MainActivity.requestAllFilesAccess")?
+            .z()?)
+    })
+}
+
+/// `ActivityManager.clearApplicationUserData`, Android's own Clear storage:
+/// deletes all of the app's data and ends the process. Returns `false` when
+/// Android refused.
+pub fn clear_app_data() -> Result<bool> {
+    let android_app = crate::updater::android_app()?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "clearAppData", "()Z", &[])
+            .context("MainActivity.clearAppData")?
+            .z()?)
+    })
+}
+
+/// Opens the home folder, the documents provider's root, in Android's Files
+/// app. Returns `false` when no app handles it.
+pub fn open_home_in_files() -> Result<bool> {
+    let android_app = crate::updater::android_app()?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "openHomeInFiles", "()Z", &[])
+            .context("MainActivity.openHomeInFiles")?
+            .z()?)
+    })
+}
+
+/// `storage/` symlinks into shared storage, in the app's home folder.
 ///
-/// Mirrors what `termux-setup-storage` does in stock Termux: makes the common
-/// /storage/emulated/0 subdirs available under $HOME/storage/<name> so users
-/// can `cd ~/storage/downloads`, edit a file, save it back. /storage/emulated/0
-/// is FUSE-mounted noexec, so this is browse / read / write only — never the
-/// place to compile or run from. Workspaces live in $HOME/projects (created
-/// alongside the symlinks) where exec is allowed.
+/// Like Termux's `termux-setup-storage`: makes the common /storage/emulated/0
+/// subdirs available under `<home>/storage/<name>`, which the runtime's
+/// `~/storage` links to, so users can `cd ~/storage/downloads`, edit a file,
+/// save it back. /storage/emulated/0 is FUSE-mounted noexec, so this is
+/// browse / read / write only — never the place to compile or run from.
+/// Workspaces live in `<home>/projects` (created alongside the symlinks)
+/// where exec is allowed.
 ///
 /// Idempotent: rechecks every symlink target on each call. Ignores entries that
 /// already point at the right place. Re-creates any that don't (covers the
 /// case where /storage layout changed between launches, e.g. SD card swap).
-pub fn setup_user_symlinks(termux_home: &Path) {
-    let storage_dir = termux_home.join("storage");
+pub fn setup_user_symlinks(home: &Path) {
+    let storage_dir = home.join("storage");
     if let Err(err) = std::fs::create_dir_all(&storage_dir) {
         log::warn!("storage: create {}: {err:#}", storage_dir.display());
         return;
@@ -121,29 +156,28 @@ pub fn setup_user_symlinks(termux_home: &Path) {
     }
 }
 
-static WORKSPACE_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
-/// Registers the active runtime's workspace root at startup. Switching
-/// runtimes restarts the app, so a second registration, when the Activity
-/// is recreated, is ignored.
-pub fn register_workspace_root(root: Option<PathBuf>) {
+/// Registers the app's home folder, where projects live, at startup. A second
+/// registration, when the Activity is recreated, is ignored.
+pub fn register_workspace_root(root: PathBuf) {
     if WORKSPACE_ROOT.set(root).is_err() {
         log::debug!("storage: workspace root already registered; ignoring the new value");
     }
 }
 
 fn workspace_root() -> Option<&'static PathBuf> {
-    WORKSPACE_ROOT.get().and_then(Option::as_ref)
+    WORKSPACE_ROOT.get()
 }
 
-/// Local projects live under the active runtime's workspace root.
+/// Local projects live under the app's home folder.
 pub fn projects_dir() -> Option<PathBuf> {
     workspace_root().map(|root| root.join("projects"))
 }
 
 /// Path of the JSON file storing per-folder "suppress noexec warning"
 /// entries. Lives under `<workspace_root>/.cache/zed-android/`. Returns
-/// `None` only if no adapter registered a workspace_root yet.
+/// `None` before the workspace root is registered at startup.
 fn noexec_suppressed_file() -> Option<PathBuf> {
     let root = workspace_root()?;
     let dir = root.join(".cache").join("zed-android");
@@ -176,7 +210,7 @@ pub fn is_noexec_suppressed(path: &Path) -> bool {
 pub fn add_noexec_suppressed(path: &Path) {
     let Some(file) = noexec_suppressed_file() else {
         log::warn!(
-            "noexec_suppressed: TERMUX__HOME unset; cannot persist suppression for {}",
+            "noexec_suppressed: no workspace root registered; cannot persist suppression for {}",
             path.display()
         );
         return;

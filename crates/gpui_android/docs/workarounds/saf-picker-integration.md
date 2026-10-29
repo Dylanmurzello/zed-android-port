@@ -1,8 +1,20 @@
 # Storage Access Framework picker integration
 
-**Status:** Active
+**Status:** Active when `use_system_path_prompts` is `true`. Since 0.10.0
+Zdroid defaults it to `false` (`lib.rs`), so Open, Open Files, Add Folder to
+Project and Save As use Zed's own path prompts.
 **Phase / Commit:** `0caf3f20b9` — Wire Android Storage Access Framework to gpui's path prompts
 **Files:** `crates/gpui_android/src/saf.rs`, `crates/gpui_android/examples/zed_android/android/app/src/main/kotlin/.../MainActivity.kt`
+
+## Why it's opt-in
+
+Android's picker is for choosing documents another app owns. Zdroid's home
+folder appears in it only as one more provider, in the side menu, and Zed can
+only use what this bridge turns back into a path it could open anyway: a folder
+on primary shared storage, which needs All files access, or one in Zdroid's own
+home. Zed's built-in prompt starts in the home folder (`DirectoryLister::
+default_query`, the editor's `HOME`) and reaches `/sdcard` by path or through
+`~/storage/shared`, as desktop Zed's does with the same setting.
 
 ## Problem
 
@@ -23,14 +35,9 @@ Several Android quirks bite this flow:
    using the legacy `startActivityForResult` + `onActivityResult` path.
 2. **`content://` URIs aren't filesystem paths.** RealFs, worktrees, project
    panel — every part of zed downstream of the picker assumes a POSIX path.
-3. **Second `cx.open_window` panics with `ERROR_NATIVE_WINDOW_IN_USE_KHR`** —
-   `workspace::open_paths` opens a new window per project on desktop;
-   Android only has one window. The platform's `open_window` returning Err
-   on the second call is what keeps the editor alive.
-
 ## Solution
 
-Three pieces:
+Two pieces:
 
 1. **JNI bridge** (`saf.rs`) holds a `Mutex<Option<Pending>>` slot. When
    gpui calls `prompt_for_paths`, we stash the oneshot sender and call
@@ -39,12 +46,8 @@ Three pieces:
    ActivityResultLauncher). Picked URI returned via
    `Java_dev_zed_zed_android_MainActivity_onPickerResult` JNI callback,
    which decodes to a POSIX path under `/storage/emulated/0` and resolves
-   the stashed oneshot.
-3. **`open_window` returns Err on second call** so `workspace::open_paths`
-   sees a "no slot available" failure instead of panicking. The
-   example's `Open` action handler catches this and re-routes to
-   `MultiWorkspace::open_project` which adds the path as a worktree on the
-   existing window.
+   the stashed oneshot. Zed's own `prompt_for_open_path_and_open` then opens
+   it, as on the desktop.
 
 ## Why this works
 
@@ -54,8 +57,6 @@ Three pieces:
   exposes through normal filesystem syscalls.
 - Legacy `startActivityForResult` works regardless of lifecycle state
   because it's a direct intent dispatch, not a state-machine-gated callback.
-- Single-window assumption matches Android's task model — opening
-  additional projects becomes worktree additions, not new windows.
 
 ## Failure mode if regressed
 

@@ -22,10 +22,11 @@ Identity + Zdroid-specific docs that we have actually authored. Conflicts on the
 - `.github/FUNDING.yml` (we repointed from zed-industries to Dylanmurzello)
 - `.gitattributes` (we extended)
 
-Plus the two crates that don't exist upstream (entirely ours):
+Plus the crates that don't exist upstream (entirely ours):
 
 - `crates/gpui_android/**`
 - `crates/zdroid_runtime/**`
+- `crates/zd_engine_core/**`, `crates/zd_loader/**` (the rootfs engine, MIT)
 
 **NOT in this list** (verified upstream-unchanged, so future upstream improvements should flow through):
 
@@ -48,6 +49,20 @@ These use normal 3-way merge. Expect occasional conflicts when upstream refactor
 ### Startup code the app copies (silent-staleness class)
 
 The Android app can't link `crates/zed` (a binary), so it copies the startup code it needs into `crates/gpui_android/examples/zed_android/src/zed.rs`, `src/zed/migrate.rs` and `src/lib.rs`. The merge never touches those copies: port what the release changed in `crates/zed/src/main.rs`, `zed.rs` and `zed/migrate.rs` by hand (see "Syncing a Zed release" in FORK.md).
+
+### Asset-selection sites (runtime OS)
+
+Every upstream site that picks a download asset, an archive type or an extension platform by operating system calls `util::runtime_os()` instead of `std::env::consts::OS` (it answers `linux` on Android because the tool runs inside the rootfs). Upstream keeps adding such sites (new language servers, debug adapters, node, copilot). After each merge:
+
+```sh
+grep -rn 'consts::OS' crates --include='*.rs'
+```
+
+Anything left that feeds an asset name, archive type or platform table must call the helper; compile-time `#[cfg(target_os = "linux")]` platform blocks and `cfg!` checks (rust-analyzer, ty, ruff, pyrefly, wasi-sdk, the ACP registry's platform key) need `any(target_os = "linux", target_os = "android")`. Telemetry, user agents and CLI tools keep `consts::OS`. Writeup: `crates/gpui_android/docs/workarounds/runtime-os-asset-selection.md`.
+
+### Canonicalize hubs (files dir spelling)
+
+On Android the kernel spells the app files dir `/data/data/<pkg>/files` while the editor keys its state by `/data/user/0/<pkg>/files`. Two upstream functions carry a `#[cfg(target_os = "android")]` arm for that: `RealFs::canonicalize` in `crates/fs/src/fs.rs` (re-spells the kernel prefix through `zdroid_hooks::respell_kernel_path`) and `paths::set_custom_data_dir` (does not canonicalize). After each merge, confirm both arms survived the refactor and grep for new direct `std::fs::canonicalize` calls on paths that can reach a worktree root or `paths::data_dir()`; they bypass the hub. Writeup: `crates/gpui_android/docs/workarounds/android-files-dir-spelling.md`.
 
 When you resolve a conflict in one of these, ALSO check if a workaround doc under `crates/gpui_android/docs/workarounds/` covers the affected file: the doc explains why the patch is there, which makes the resolution obvious.
 
@@ -107,7 +122,7 @@ git checkout main && git merge --no-ff upstream-sync-YYYYMMDD
 ```
 
 Full `cargo ndk build` + `ANDROID_NDK_HOME=<ndk> gradle assembleRelease`
-(gradle's buildZdExec/buildAskpassHelper tasks shell out to cargo-ndk and
+(gradle's buildZdLoader/buildAskpassHelper tasks shell out to cargo-ndk and
 need the env var too), install on a device, and run a real smoke pass
 (render, terminal spawn, a git operation, an HTTPS fetch) before the next
 public release.
@@ -117,7 +132,7 @@ public release.
 Worst case: upstream renames or restructures a crate we modify. Two options:
 
 1. Re-port our patch to the new structure (preferred).
-2. Drop the patch if upstream's refactor obsoletes our need for it. Rare, but it happens. See e.g. how the files the app used to write into the bootstrap at startup moved into the [zdroid-bootstrap](https://github.com/ilkersigirci/zdroid-bootstrap) zip itself.
+2. Drop the patch if upstream's refactor obsoletes our need for it. Rare, but it happens.
 
 Either way: update the corresponding workaround doc under `crates/gpui_android/docs/workarounds/`.
 

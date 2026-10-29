@@ -9,6 +9,7 @@ use agent_settings::{UserAgentsMdState, init_user_agents_md};
 use agent_ui::AgentDiffToolbar;
 use anyhow::Context as _;
 use breadcrumbs::Breadcrumbs;
+use debugger_ui::debugger_panel::DebugPanel;
 use editor::{Editor, MultiBuffer};
 use extension_host::ExtensionStore;
 use fs::Fs;
@@ -427,13 +428,14 @@ fn show_software_emulation_warning_if_needed(
     }
 }
 
-// Left out: the collab and debug panels, whose crates the app doesn't build.
+// Left out: the collab panel, whose crate the app doesn't build.
 fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<anyhow::Result<()>> {
     cx.spawn_in(window, async move |workspace_handle, cx| {
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
+        let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
             panel_task: impl Future<Output = anyhow::Result<Entity<impl workspace::Panel>>> + 'static,
@@ -455,6 +457,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle.clone(), cx.clone()).map(|r| r.log_err()),
         );
 
@@ -562,9 +565,8 @@ async fn initialize_agent_panel(
 // the URL prompt, the CLI and zed:// links), window actions Android ignores
 // (minimize, zoom, full screen), the frame overlay, which needs gpui's
 // `profiler` feature (it records every foreground event, so the app leaves it
-// off), `workspace::Open` and `OpenFiles`, which the app sends to its own
-// picker (lib.rs), `NewWindow` and `NewFile`, which `editor::init` handles,
-// and `ShowWorkspaceError` (debug builds only).
+// off), `NewWindow` and `NewFile`, which `editor::init` handles, and
+// `ShowWorkspaceError` (debug builds only).
 fn register_actions(
     app_state: Arc<AppState>,
     workspace: &mut Workspace,
@@ -646,6 +648,49 @@ fn register_actions(
                     );
                 }
             }
+        })
+        .register_action(|workspace, action: &workspace::Open, window, cx| {
+            telemetry::event!("Project Opened");
+            workspace::prompt_for_open_path_and_open(
+                workspace,
+                workspace.app_state().clone(),
+                PathPromptOptions {
+                    files: true,
+                    directories: true,
+                    multiple: true,
+                    prompt: None,
+                },
+                action.create_new_window.unwrap_or_else(|| {
+                    matches!(
+                        WorkspaceSettings::get_global(cx).default_open_behavior,
+                        DefaultOpenBehavior::NewWindow
+                    )
+                }),
+                window,
+                cx,
+            );
+        })
+        .register_action(|workspace, _: &workspace::OpenFiles, window, cx| {
+            let directories = cx.can_select_mixed_files_and_dirs();
+            workspace::prompt_for_open_path_and_open(
+                workspace,
+                workspace.app_state().clone(),
+                PathPromptOptions {
+                    files: true,
+                    directories,
+                    multiple: true,
+                    prompt: None,
+                },
+                // Desktop always opens these in a new window. Android opens
+                // content in the current window and leaves a new one to the
+                // user, so this follows `default_open_behavior` as Open does.
+                matches!(
+                    WorkspaceSettings::get_global(cx).default_open_behavior,
+                    DefaultOpenBehavior::NewWindow
+                ),
+                window,
+                cx,
+            );
         })
         .register_action(|workspace, action: &zed_actions::OpenRemote, window, cx| {
             if !action.from_existing_connection {
@@ -884,7 +929,7 @@ fn register_actions(
 }
 
 // Left out: the toolbar items of crates the app doesn't build: the quick
-// action bar (its REPL menu needs `repl`), and the debugger and telemetry logs.
+// action bar (its REPL menu needs `repl`) and the telemetry log.
 fn initialize_pane(
     workspace: &Workspace,
     pane: &Entity<Pane>,
@@ -916,6 +961,8 @@ fn initialize_pane(
             toolbar.add_item(project_search_bar, window, cx);
             let lsp_log_item = cx.new(|_| LspLogToolbarItemView::new());
             toolbar.add_item(lsp_log_item, window, cx);
+            let dap_log_item = cx.new(|_| debugger_tools::DapLogToolbarItemView::new());
+            toolbar.add_item(dap_log_item, window, cx);
             let acp_tools_item = cx.new(|_| acp_tools::AcpToolsToolbarItemView::new());
             toolbar.add_item(acp_tools_item, window, cx);
             let syntax_tree_item = cx.new(|_| language_tools::SyntaxTreeToolbarItemView::new());

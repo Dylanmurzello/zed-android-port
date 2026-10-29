@@ -17,18 +17,29 @@ mod insets;
 mod jni_env;
 mod keyboard;
 mod multi_window;
+mod open_files;
 mod platform;
+pub mod pointer_authentication;
+pub mod process_hygiene;
 pub mod project_import;
+pub mod runtime_links;
+pub mod runtime_service;
 mod saf;
 pub mod selinux_canary;
 pub(crate) mod splash;
 pub mod storage;
+pub mod system_properties;
 mod touch;
 pub mod updater;
 mod window;
-pub mod zd_exec_install;
 
 pub use platform::AndroidPlatform;
+
+/// The `AndroidApp` handle `run` registered, for code that runs inside
+/// the gpui `App` without access to the one `android_main` received.
+pub fn android_app() -> anyhow::Result<&'static android_activity::AndroidApp> {
+    updater::android_app()
+}
 
 /// Push the user's `android_input.on_screen_keyboard` setting into
 /// the runtime atomic the IME reconcile loop reads when deciding
@@ -111,6 +122,15 @@ where
     A: gpui::AssetSource,
     F: 'static + FnOnce(&mut gpui::App),
 {
+    application(android_app, assets).run(on_finish_launching);
+}
+
+/// The `gpui::Application` [`run`] drives, for an app that registers
+/// callbacks such as `on_open_urls` before running it.
+pub fn application<A>(android_app: android_activity::AndroidApp, assets: A) -> gpui::Application
+where
+    A: gpui::AssetSource,
+{
     // Stash a clone for the updater module so action handlers / auto-
     // check tasks (which run inside the gpui App context with no
     // direct access to the AndroidApp passed into this function) can
@@ -118,6 +138,5 @@ where
     // Activity recreations.
     updater::register_android_app(android_app.clone());
     let platform: Rc<dyn gpui::Platform> = Rc::new(AndroidPlatform::new(android_app, false));
-    let app = gpui::Application::with_platform(platform).with_assets(assets);
-    app.run(on_finish_launching);
+    gpui::Application::with_platform(platform).with_assets(assets)
 }

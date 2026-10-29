@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 # Standalone — not part of the parent zed_android workspace. Built
 # independently via `cargo ndk` so the resulting ELF is a regular
-# musl/bionic-linked Android-native binary, NOT a Zygote-launched
+# statically linked bionic binary, NOT a Zygote-launched
 # Dalvik instance like the gpui-app's `app_process64` is. This is the
 # whole point of the helper existing: SSH_ASKPASS invokes our binary
 # from a non-Activity context, and `app_process64` aborts there with

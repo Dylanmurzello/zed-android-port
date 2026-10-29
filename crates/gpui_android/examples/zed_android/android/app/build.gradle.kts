@@ -1,3 +1,5 @@
+import java.net.URL
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -18,98 +20,96 @@ val signingProps = Properties().apply {
 }
 val hasReleaseSigning = signingPropsFile.exists()
 
-// zd-exec bundling.
+// Ubuntu base image bundling.
 //
-// `zd-exec` is the Rust spawn wrapper (in crates/zdroid_runtime/src/
-// bin/zd-exec.rs) the editor invokes as `terminal.shell` for chroot
-// mode, and as the symlink target for `$PREFIX/zd-runtime/<name>`
-// in chroot+other modes. It MUST be in the APK so fresh installs
-// have it. Without bundling, end users hit
-// `failed to spawn $PREFIX/bin/zd-exec — no such file or directory`
-// the first time they open the integrated terminal in chroot mode.
-//
-// Build flow:
-//   1. `buildZdExec` runs `cargo ndk … build --release -p
-//      zdroid_runtime --bin zd-exec` from the workspace root, with
-//      $ANDROID_NDK_HOME pointed at the same NDK the lib build uses.
-//   2. The resulting ELF at
-//      `target/aarch64-linux-android/release/zd-exec` is copied to
-//      `app/src/main/assets/zd-exec`.
-//   3. `preBuild` depends on it, so gradle picks the asset up during
-//      `mergeAssets` before APK packaging.
-//
-// Rust-side counterpart: `gpui_android::zd_exec_install::ensure_installed`
-// reads this asset at boot and extracts to `$PREFIX/bin/zd-exec` with
-// 0755 perms when missing or out of date.
+// The rootfs the engine runs is extracted on first launch from an APK
+// asset, so the app is complete without a network. `fetchRootfsImage`
+// downloads the tarball named in crates/zdroid_runtime/rootfs-image.properties
+// into build/rootfs/ and verifies its SHA-256 (the Rust side compiles the
+// same file in and writes name and digest to the rootfs sentinel);
+// `stageRootfsAsset` copies it to assets/rootfs/image.tgz, which is
+// gitignored. The asset is stored uncompressed in the APK (`noCompress
+// tgz` below): it is gzip already, and AAssetManager serves a stored
+// asset by mmap.
 val workspaceRoot = file("../../../../../..").canonicalFile
-val zdExecBin = file("${workspaceRoot}/target/aarch64-linux-android/release/zd-exec")
-val zdExecAsset = file("src/main/assets/zd-exec")
+val rootfsImageProps = Properties().apply {
+    file("${workspaceRoot}/crates/zdroid_runtime/rootfs-image.properties").inputStream().use { load(it) }
+}
+val rootfsImageName: String = rootfsImageProps.getProperty("name")
+val rootfsImageUrl: String = rootfsImageProps.getProperty("url")
+val rootfsImageSha256: String = rootfsImageProps.getProperty("sha256").lowercase()
+val rootfsImageDownload = file("build/rootfs/${rootfsImageName}")
+// Staged under a fixed name without a `.gz` suffix: aapt gunzips `.gz`
+// assets at packaging time and drops the suffix, which would turn the
+// 33 MB image into a 120 MB tar.
+val rootfsImageAsset = file("src/main/assets/rootfs/image.tgz")
 
-tasks.register<Exec>("buildZdExec") {
-    description = "Build zd-exec via cargo-ndk and stage into assets/."
-    group = "build setup"
-
-    workingDir(workspaceRoot)
-    commandLine(
-        "cargo",
-        "ndk",
-        "-t",
-        "arm64-v8a",
-        "-P",
-        "26",
-        "build",
-        "--release",
-        "--locked",
-        "--target-dir",
-        file("${workspaceRoot}/target").absolutePath,
-        "-p",
-        "zdroid_runtime",
-        "--bin",
-        "zd-exec",
-        // Zed's release profile keeps limited debug info, which made up
-        // about 15 MB of this 18.7 MB helper. The app copies it out of the
-        // APK and compares it with the installed copy on every launch.
-        "--config",
-        "profile.release.strip=\"debuginfo\"",
-    )
-
-    // Honor whatever the developer's `cargo ndk` lib build uses.
-    // ANDROID_NDK_HOME has to be the same NDK or the prebuilts mismatch.
-    providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
-        environment("ANDROID_NDK_HOME", ndk)
+fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(1 shl 16)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
     }
-
-    // Cargo tracks transitive sources, lockfiles and build flags; a Gradle
-    // source-only check can reuse a helper from a different dependency graph.
-    outputs.upToDateWhen { false }
-    outputs.file(zdExecBin)
+    return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-tasks.register<Copy>("stageZdExecAsset") {
-    description = "Copy the freshly-built zd-exec into assets/ for APK packaging."
+tasks.register("fetchRootfsImage") {
+    description = "Download the Ubuntu base image named in rootfs-image.properties and verify its SHA-256."
     group = "build setup"
 
-    dependsOn("buildZdExec")
-    from(zdExecBin)
-    into(zdExecAsset.parentFile)
-    rename { zdExecAsset.name }
-    // Don't bother re-running on every gradle invocation when the
-    // source binary hasn't changed.
-    inputs.file(zdExecBin)
-    outputs.file(zdExecAsset)
+    inputs.property("sha256", rootfsImageSha256)
+    inputs.property("url", rootfsImageUrl)
+    outputs.file(rootfsImageDownload)
+    doLast {
+        if (rootfsImageDownload.isFile && sha256Of(rootfsImageDownload) == rootfsImageSha256) {
+            return@doLast
+        }
+        rootfsImageDownload.parentFile.mkdirs()
+        val partial = File(rootfsImageDownload.path + ".part")
+        logger.lifecycle("fetchRootfsImage: downloading $rootfsImageUrl")
+        URL(rootfsImageUrl).openStream().use { input ->
+            partial.outputStream().use { output -> input.copyTo(output) }
+        }
+        val actual = sha256Of(partial)
+        if (actual != rootfsImageSha256) {
+            partial.delete()
+            throw GradleException(
+                "fetchRootfsImage: SHA-256 mismatch for $rootfsImageName: expected $rootfsImageSha256, got $actual"
+            )
+        }
+        if (!partial.renameTo(rootfsImageDownload)) {
+            throw GradleException("fetchRootfsImage: cannot move ${partial.path} into place")
+        }
+    }
+}
+
+tasks.register<Copy>("stageRootfsAsset") {
+    description = "Copy the verified Ubuntu base image into assets/rootfs/ for APK packaging."
+    group = "build setup"
+
+    dependsOn("fetchRootfsImage")
+    from(rootfsImageDownload)
+    into(rootfsImageAsset.parentFile)
+    rename { rootfsImageAsset.name }
+    inputs.file(rootfsImageDownload)
+    outputs.file(rootfsImageAsset)
 }
 
 tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn("stageZdExecAsset")
+    dependsOn("stageRootfsAsset")
 }
 
 // zed-askpass-helper bundling.
 //
 // `zed-askpass-helper` is the SSH_ASKPASS relay binary that ssh
-// (running inside the Kali chroot) exec's to prompt the user for a
+// (running in the Ubuntu runtime) exec's to prompt the user for a
 // password via Zed's in-process modal. The helper MUST be statically
-// linked: ssh inside the chroot can't resolve bionic's dynamic linker
-// (`/system/bin/linker64` lives outside the chroot fs), so a
+// linked: the engine loader maps programs into the rootfs, where bionic's
+// dynamic linker (`/system/bin/linker64`) doesn't exist, so a
 // dynamically-linked build fails exec with the shell's misleading
 // "not found".
 //
@@ -167,6 +167,88 @@ tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn("stageAskpassHelperAsset")
 }
 
+// Rootfs engine loader.
+//
+// `libzdload.so` is a static, libc-free aarch64 executable (crates/
+// zd_loader, its own workspace) that the kernel execs for every guest
+// process. It is packaged as a native library so the installer extracts
+// it to ApplicationInfo.nativeLibraryDir, the one app-owned location an
+// untrusted app may exec from at any targetSdk. `verifyZdLoader` fails
+// the build if a flag change produces a PIE, a dynamic interpreter, or a
+// different image base, because the engine's seccomp filter only allows
+// syscalls from the fixed window the loader is linked into.
+val zdLoaderDir = file("${workspaceRoot}/crates/zd_loader")
+val zdLoaderBin = file("${zdLoaderDir}/target/aarch64-linux-android/release/zd_loader")
+val zdLoaderJniLib = file("src/main/jniLibs/arm64-v8a/libzdload.so")
+val ndkHomeForVerify = providers.environmentVariable("ANDROID_NDK_HOME")
+
+tasks.register<Exec>("buildZdLoader") {
+    description = "Build the static rootfs-engine loader via cargo-ndk."
+    group = "build setup"
+
+    workingDir(zdLoaderDir)
+    commandLine(
+        "cargo",
+        "ndk",
+        "-t",
+        "arm64-v8a",
+        "-P",
+        "26",
+        "build",
+        "--release",
+        "--locked",
+        "--target-dir",
+        file("${zdLoaderDir}/target").absolutePath,
+    )
+
+    providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
+        environment("ANDROID_NDK_HOME", ndk)
+    }
+    // The app build exports RUSTFLAGS (+fp16 for gemm-f16). Cargo lets an
+    // environment RUSTFLAGS replace the target rustflags in a crate's
+    // .cargo/config.toml, which for the loader means losing the static,
+    // fixed-base, no-crt link: crt1.o then defines a second `_start` and
+    // lld fails with a duplicate symbol. Strip the inherited flags so the
+    // loader's own config governs.
+    environment.remove("RUSTFLAGS")
+    environment.remove("CARGO_ENCODED_RUSTFLAGS")
+
+    // Cargo tracks transitive sources, lockfiles and build flags; a Gradle
+    // source-only check can reuse a loader from a different dependency graph.
+    outputs.upToDateWhen { false }
+    outputs.file(zdLoaderBin)
+}
+
+tasks.register<Exec>("verifyZdLoader") {
+    description = "Check the loader ELF is static, non-PIE, 16 KiB aligned and linked at the engine's fixed base."
+    group = "verification"
+
+    dependsOn("buildZdLoader")
+    doFirst {
+        if (!ndkHomeForVerify.isPresent) {
+            throw GradleException("verifyZdLoader needs ANDROID_NDK_HOME (the same NDK as the lib build)")
+        }
+    }
+    commandLine("sh", "${zdLoaderDir}/verify.sh", ndkHomeForVerify.getOrElse(""), zdLoaderBin.path)
+    inputs.file(zdLoaderBin)
+}
+
+tasks.register<Copy>("stageZdLoaderJniLib") {
+    description = "Copy the verified loader into jniLibs as libzdload.so."
+    group = "build setup"
+
+    dependsOn("verifyZdLoader")
+    from(zdLoaderBin)
+    into(zdLoaderJniLib.parentFile)
+    rename { zdLoaderJniLib.name }
+    inputs.file(zdLoaderBin)
+    outputs.file(zdLoaderJniLib)
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("stageZdLoaderJniLib")
+}
+
 android {
     namespace = "com.zdroid"
     compileSdk = 35
@@ -184,16 +266,18 @@ android {
         // table from API 23, but cpal/livekit transitive crates require
         // libaaudio which is API 26.
         minSdk = 26
-        // targetSdk = 28 is the linchpin of the bundled Termux runtime:
-        // SELinux puts us in the `untrusted_app_27` domain where
-        // `execute_no_trans` on `app_data_file` is permitted, so we can
-        // execve $PREFIX/bin/* directly. Pinning > 28 lands in
-        // `untrusted_app_all` / numbered higher domains where exec is
-        // denied — the entire L2 plan stops working. Skipping Play Store
-        // eligibility is the explicit trade.
-        targetSdk = 28
-        versionCode = 64
-        versionName = "0.9.23"
+        // targetSdk 35. The old pin at 28 kept the app in a SELinux domain
+        // that may exec app-private files; the rootfs engine made that
+        // moot (the kernel only execs the loader in the native library
+        // dir, and the Ubuntu binaries are mapped, not exec'd). What the
+        // level buys: no "built for an older version" install warning, a
+        // real notification permission prompt (33+), and the foreground
+        // service type declared here is enforced (34+). What it costs:
+        // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE)
+        // on Android 11+; see AndroidManifest.xml.
+        targetSdk = 35
+        versionCode = 65
+        versionName = "0.10.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -205,6 +289,25 @@ android {
         }
     }
 
+    // The loader must exist as a real file on disk: the kernel execs it
+    // by path from ApplicationInfo.nativeLibraryDir. AGP 8 keeps native
+    // libs uncompressed inside the APK by default (extractNativeLibs =
+    // false), so opt back into extraction; this DSL is what writes the
+    // manifest attribute. keepDebugSymbols keeps the strip task off the
+    // hand-linked static ELF.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libzdload.so"
+        }
+    }
+
+    // The bundled rootfs image is gzip already; storing it lets the
+    // installer stream it straight out of the APK.
+    androidResources {
+        noCompress += listOf("tgz")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -212,16 +315,6 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-    }
-
-    // `targetSdk = 28` is intentional (see the comment in defaultConfig). It
-    // pins us in the SELinux `untrusted_app_27` domain so the bundled Termux
-    // runtime can `execve` $PREFIX/bin/*. AGP's `lintVitalRelease` task
-    // flags this as `ExpiredTargetSdkVersion` and refuses to assemble the
-    // release APK. We're not Play-Store eligible by design — disable that
-    // single rule rather than bumping the SDK and breaking exec.
-    lint {
-        disable += "ExpiredTargetSdkVersion"
     }
 
     signingConfigs {

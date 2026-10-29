@@ -244,6 +244,7 @@ members = [
     "crates/worktree_benchmarks",
     "crates/x_ai",
     "crates/x_ai_subscribed",
+    "crates/zd_engine_core",
     "crates/zdroid_hooks",
     "crates/zdroid_runtime",
     "crates/zed",
@@ -517,6 +518,7 @@ workspace = { path = "crates/workspace" }
 worktree = { path = "crates/worktree" }
 x_ai = { path = "crates/x_ai" }
 x_ai_subscribed = { path = "crates/x_ai_subscribed" }
+zd_engine_core = { path = "crates/zd_engine_core" }
 zdroid_hooks = { path = "crates/zdroid_hooks" }
 zed_actions = { path = "crates/zed_actions" }
 zed_credentials_provider = { path = "crates/zed_credentials_provider" }
@@ -634,6 +636,7 @@ env_logger = "0.11"
 etagere = "0.2"
 exec = "0.3.1"
 fancy-regex = "0.19"
+flate2 = "1.1"
 flume = { version = "0.12", default-features = false, features = ["async"] }
 font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "94b0f28166665e8fd2f53ff6d268a14955c82269", package = "zed-font-kit", version = "0.14.1-zed", default-features = false }
 foreign-types = "0.5"
@@ -914,6 +917,7 @@ syn = { version = "2.0", default-features = false, features = ["proc-macro"] }
 sys-locale = "0.3.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 taffy = { version = "=0.13.0", default-features = false }
+tar = "0.4"
 tempfile = "3.20.0"
 tendril = "0.5"
 thiserror = "2.0.12"

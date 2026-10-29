@@ -219,4 +219,22 @@ object NativeBridge {
     /// Posted when the user returns from Zdroid's "Install unknown apps"
     /// settings page, which [MainActivity.requestInstallPermission] opens.
     external fun nativeOnInstallPermissionResult(granted: Boolean)
+
+    /// Called from `MainActivity.onDestroy` before the process is
+    /// killed: ends every child process the editor started (language
+    /// servers, shells, debug adapters). The kernel would otherwise
+    /// reparent them to init, where an idle language server lives on.
+    /// Implemented in `gpui_android::runtime_service`.
+    external fun nativeBeforeProcessExit()
+
+    /// Called by `MainActivity` when the default network's DNS servers
+    /// change, with them comma-separated. Implemented in
+    /// `gpui_android::dns_bridge`, which rewrites the runtime's
+    /// `/etc/resolv.conf`.
+    external fun nativeDnsServersChanged(servers: String)
+
+    /// Called by `OpenedFiles` with a `file://` URL for a file another app
+    /// opened with Zdroid. Implemented in `gpui_android::open_files`, which
+    /// queues it until the editor opens it.
+    external fun nativeOpenUrl(url: String)
 }

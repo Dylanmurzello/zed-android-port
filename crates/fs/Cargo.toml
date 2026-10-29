@@ -44,6 +44,9 @@ text.workspace = true
 util.workspace = true
 notify = "9.0.0-rc.4"
 
+[target.'cfg(target_os = "android")'.dependencies]
+zdroid_hooks.workspace = true
+
 [target.'cfg(not(target_os = "android"))'.dependencies]
 trash = { git = "https://github.com/zed-industries/trash-rs", rev = "41c6c800d884a89351f3b8856d12894cccee261d" }
 

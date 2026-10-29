@@ -117,6 +117,3 @@ right-click synthesis, drag-to-scroll, fling momentum — but for now
 
 - [activate-extra-activity-move-to-front.md](activate-extra-activity-move-to-front.md)
   — how secondary windows get focused for `cx.windows()` dedup
-- [touch-input-polish.md](touch-input-polish.md) — primary-translator
-  scroll wheel handling we mirrored here (if that doc exists; otherwise
-  this is the first writeup of the equivalent work for extras)
