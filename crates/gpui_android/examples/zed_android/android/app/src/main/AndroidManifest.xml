@@ -38,13 +38,17 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!--
-      allowBackup is off because the home directory holds credentials, such
+      Backups are off because the home directory holds credentials, such
       as ~/.ssh keys and git tokens, which `adb backup` and cloud or
       device-to-device backups would otherwise copy off the device.
+      allowBackup covers Android 11 and earlier; from Android 12,
+      dataExtractionRules does, since allowBackup no longer stops
+      device-to-device transfers for apps targeting it.
     -->
     <application
         android:name=".ZedApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Zdroid"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
