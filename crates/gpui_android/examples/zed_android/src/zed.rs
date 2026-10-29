@@ -681,10 +681,13 @@ fn register_actions(
                     multiple: true,
                     prompt: None,
                 },
-                // Desktop opens these in a new window. On Android that's a
-                // separate task in Recents, so they open here, as files
-                // opened from other apps do.
-                false,
+                // Desktop always opens these in a new window. Android opens
+                // content in the current window and leaves a new one to the
+                // user, so this follows `default_open_behavior` as Open does.
+                matches!(
+                    WorkspaceSettings::get_global(cx).default_open_behavior,
+                    DefaultOpenBehavior::NewWindow
+                ),
                 window,
                 cx,
             );
