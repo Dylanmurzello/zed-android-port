@@ -3,8 +3,6 @@
 
 pub mod askpass_install;
 pub mod background_mode;
-pub mod process_hygiene;
-pub mod runtime_service;
 mod captured_pointer;
 mod clipboard;
 mod credentials;
@@ -20,17 +18,19 @@ mod jni_env;
 mod keyboard;
 mod multi_window;
 mod platform;
+pub mod pointer_authentication;
+pub mod process_hygiene;
 pub mod project_import;
+pub mod runtime_links;
+pub mod runtime_service;
 mod saf;
 pub mod selinux_canary;
 pub(crate) mod splash;
 pub mod storage;
-pub mod pointer_authentication;
 pub mod system_properties;
 mod touch;
 pub mod updater;
 mod window;
-pub mod runtime_links;
 
 pub use platform::AndroidPlatform;
 

@@ -8,8 +8,8 @@ mod app_updater;
 mod engine_self_test;
 mod header;
 mod logging;
-mod menu_bar;
 mod lsp_watchdog;
+mod menu_bar;
 mod noexec_modal;
 mod runtime_background;
 mod runtime_setup;
@@ -639,7 +639,10 @@ fn android_main(app: AndroidApp) {
     // `Command::new("rust-analyzer")` then lands in the rootfs. apt or
     // cargo installing a tool shows up through the watcher in `boot`.
     let binaries = runtime.list_binaries();
-    log::info!("zed_android: zd-runtime: {} binaries in the rootfs", binaries.len());
+    log::info!(
+        "zed_android: zd-runtime: {} binaries in the rootfs",
+        binaries.len()
+    );
     if let Err(err) = gpui_android::runtime_links::ensure_runtime_symlinks(
         &data_path,
         &binaries,
@@ -1085,9 +1088,10 @@ fn boot(
                 app_state.fs.clone(),
                 move |content, _cx| {
                     if let Some(terminal) = content.terminal.as_mut()
-                        && let Some(settings::Shell::Program(program)
-                        | settings::Shell::WithArguments { program, .. }) =
-                            terminal.project.shell.as_ref()
+                        && let Some(
+                            settings::Shell::Program(program)
+                            | settings::Shell::WithArguments { program, .. },
+                        ) = terminal.project.shell.as_ref()
                     {
                         let program = std::path::Path::new(program);
                         if program.starts_with(data_path.join("usr"))

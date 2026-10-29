@@ -25,16 +25,26 @@ actions!(
 );
 
 pub fn register(cx: &mut App) {
-    cx.observe_new(|workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
-        workspace.register_action(run);
-    })
+    cx.observe_new(
+        |workspace: &mut Workspace, _window, _cx: &mut Context<Workspace>| {
+            workspace.register_action(run);
+        },
+    )
     .detach();
 }
 
-fn run(_workspace: &mut Workspace, _: &EngineSelfTest, _window: &mut gpui::Window, cx: &mut Context<Workspace>) {
+fn run(
+    _workspace: &mut Workspace,
+    _: &EngineSelfTest,
+    _window: &mut gpui::Window,
+    cx: &mut Context<Workspace>,
+) {
     let data_path = zdroid_runtime::data_path();
     let log_path = paths::logs_dir().join("engine-self-test.log");
-    log::info!("engine_self_test: starting; report at {}", log_path.display());
+    log::info!(
+        "engine_self_test: starting; report at {}",
+        log_path.display()
+    );
     let task = cx.background_spawn(async move { run_steps(&data_path, &log_path) });
     cx.spawn(async move |workspace, cx| {
         let report = task.await;
@@ -126,14 +136,22 @@ fn run_steps(data_path: &Path, log_path: &Path) -> Report {
     };
 
     let loader = runtime.loader_path();
-    match std::fs::read_link(&loader).and_then(|target| std::fs::metadata(&target).map(|meta| (target, meta))) {
+    match std::fs::read_link(&loader)
+        .and_then(|target| std::fs::metadata(&target).map(|meta| (target, meta)))
+    {
         Ok((target, meta)) => {
             use std::os::unix::fs::PermissionsExt;
             let executable = meta.permissions().mode() & 0o111 != 0;
             report.record(
                 "loader",
                 meta.is_file() && executable,
-                format!("{} -> {} size={} mode={:o}", loader.display(), target.display(), meta.len(), meta.permissions().mode() & 0o777),
+                format!(
+                    "{} -> {} size={} mode={:o}",
+                    loader.display(),
+                    target.display(),
+                    meta.len(),
+                    meta.permissions().mode() & 0o777
+                ),
             );
         }
         Err(error) => report.record("loader", false, format!("{}: {error}", loader.display())),
@@ -141,7 +159,11 @@ fn run_steps(data_path: &Path, log_path: &Path) -> Report {
 
     match std::fs::read_to_string(runtime.version_file()) {
         Ok(version) => report.record("rootfs", true, version.replace('\n', " ")),
-        Err(error) => report.record("rootfs", false, format!("{}: {error}", runtime.version_file().display())),
+        Err(error) => report.record(
+            "rootfs",
+            false,
+            format!("{}: {error}", runtime.version_file().display()),
+        ),
     }
 
     if report.passed == 2 {
@@ -191,7 +213,9 @@ fn run_true_timing(runtime: &Runtime, report: &mut Report) {
                 ),
             );
         }
-        (Err(error), _) => report.record("true", false, format!("baseline /system/bin/true: {error}")),
+        (Err(error), _) => {
+            report.record("true", false, format!("baseline /system/bin/true: {error}"))
+        }
         (_, Err(error)) => report.record("true", false, error),
     }
 }
@@ -213,12 +237,19 @@ fn run_loader_selftest(runtime: &Runtime, report: &mut Report) {
             for line in stdout.lines() {
                 report.lines.push(format!("  ls: {line}"));
             }
-            let listed = ["bin", "etc", "usr", "var"].iter().all(|name| stdout.contains(name));
+            let listed = ["bin", "etc", "usr", "var"]
+                .iter()
+                .all(|name| stdout.contains(name));
             let ok = output.status.success() && stderr.contains("result=PASS") && listed;
             report.record(
                 "selftest",
                 ok,
-                format!("exit={:?} {}ms stdout_lines={} ", output.status.code(), elapsed.as_millis(), stdout.lines().count()),
+                format!(
+                    "exit={:?} {}ms stdout_lines={} ",
+                    output.status.code(),
+                    elapsed.as_millis(),
+                    stdout.lines().count()
+                ),
             );
         }
         Err(error) => report.record("selftest", false, format!("spawn: {error}")),
@@ -227,8 +258,14 @@ fn run_loader_selftest(runtime: &Runtime, report: &mut Report) {
 
 fn run_shell_builtins(runtime: &Runtime, data_path: &Path, report: &mut Report) {
     let cwd: PathBuf = data_path.join("home");
-    let script = "echo HOME=$HOME; echo USER=$USER; pwd; read host < /etc/hostname; echo hostname=$host";
-    let run = runtime.run_captured("/bin/sh", &["-c", script], Some(&cwd), Duration::from_secs(10));
+    let script =
+        "echo HOME=$HOME; echo USER=$USER; pwd; read host < /etc/hostname; echo hostname=$host";
+    let run = runtime.run_captured(
+        "/bin/sh",
+        &["-c", script],
+        Some(&cwd),
+        Duration::from_secs(10),
+    );
     match run {
         Ok(run) => {
             let stdout = run.stdout_text();
@@ -238,8 +275,19 @@ fn run_shell_builtins(runtime: &Runtime, data_path: &Path, report: &mut Report) 
             for line in run.stderr_text().lines() {
                 report.lines.push(format!("  sh stderr: {line}"));
             }
-            let ok = run.succeeded() && stdout.contains("HOME=/root") && stdout.contains("hostname=zdroid");
-            report.record("sh", ok, format!("exit={:?} timed_out={} {}ms", run.code, run.timed_out, run.elapsed.as_millis()));
+            let ok = run.succeeded()
+                && stdout.contains("HOME=/root")
+                && stdout.contains("hostname=zdroid");
+            report.record(
+                "sh",
+                ok,
+                format!(
+                    "exit={:?} timed_out={} {}ms",
+                    run.code,
+                    run.timed_out,
+                    run.elapsed.as_millis()
+                ),
+            );
         }
         Err(error) => report.record("sh", false, format!("{error:#}")),
     }
