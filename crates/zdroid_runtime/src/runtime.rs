@@ -24,6 +24,10 @@ pub const LOG_TOGGLE_FILE: &str = "etc/zd-engine-log";
 /// same into `etc/hostname`.
 pub const HOSTNAME: &str = "zdroid";
 
+/// The shell the guest gets when root's login shell isn't installed; also
+/// the loader's own default (`zd_loader`'s `DEFAULT_SHELL`).
+const DEFAULT_SHELL: &str = "/bin/bash";
+
 /// What the integrated terminal execs: a program plus the arguments
 /// that turn it into the user's shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,7 +177,7 @@ impl Runtime {
             &format!("HOME={}", home.display()),
             "USER=root",
             "LOGNAME=root",
-            "SHELL=/bin/bash",
+            &format!("SHELL={}", self.login_shell()),
             &format!("PATH={}", self.guest_path()),
             "LANG=C.UTF-8",
             // The host's `<data>/tmp` is the guest's `/tmp` (bound), so the
@@ -228,12 +232,41 @@ impl Runtime {
         ops
     }
 
-    /// The loader under its own name with a leading flag runs the
-    /// default shell with that flag: `/bin/bash -l`.
+    /// The loader running root's login shell as a login shell, such as
+    /// `/usr/bin/zsh -l`.
     pub fn terminal_shell(&self) -> TerminalShell {
         TerminalShell {
             program: self.loader_path(),
-            args: vec!["-l".to_string()],
+            args: vec![self.login_shell(), "-l".to_string()],
+        }
+    }
+
+    /// Root's shell in the rootfs's `/etc/passwd`, which `chsh` and
+    /// `usermod -s` change, while it's installed. Bash otherwise, so the
+    /// terminal still opens after the shell's package is removed or the
+    /// runtime is reset.
+    pub fn login_shell(&self) -> String {
+        let rootfs = self.rootfs_dir();
+        let configured = std::fs::read_to_string(rootfs.join("etc/passwd"))
+            .ok()
+            .and_then(|passwd| {
+                passwd.lines().find_map(|line| {
+                    let fields: Vec<&str> = line.split(':').collect();
+                    (fields.len() == 7 && fields[0] == "root").then(|| fields[6].to_string())
+                })
+            });
+        match configured {
+            Some(shell)
+                if shell.starts_with('/')
+                    && rootfs.join(shell.trim_start_matches('/')).is_file() =>
+            {
+                shell
+            }
+            Some(shell) if shell != DEFAULT_SHELL => {
+                log::warn!("runtime: root's shell {shell} isn't installed; using {DEFAULT_SHELL}");
+                DEFAULT_SHELL.to_string()
+            }
+            _ => DEFAULT_SHELL.to_string(),
         }
     }
 
@@ -438,6 +471,33 @@ mod tests {
         );
         assert!(!path.contains("/root"), "{path}");
         assert!(path.ends_with(":/usr/bin:/sbin:/bin"), "{path}");
+    }
+
+    #[test]
+    fn the_terminal_runs_roots_login_shell_while_it_is_installed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runtime = Runtime::new(temp.path());
+        let etc = runtime.rootfs_dir().join("etc");
+        std::fs::create_dir_all(&etc).expect("create etc");
+        std::fs::write(
+            etc.join("passwd"),
+            "root:x:0:0:root:/data/user/0/com.zdroid/files/home:/usr/bin/zsh\n\
+             daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n",
+        )
+        .expect("write passwd");
+
+        assert_eq!(runtime.login_shell(), "/bin/bash");
+        assert_eq!(runtime.terminal_shell().args, ["/bin/bash", "-l"]);
+
+        let bin = runtime.rootfs_dir().join("usr/bin");
+        std::fs::create_dir_all(&bin).expect("create usr/bin");
+        std::fs::write(bin.join("zsh"), "").expect("write zsh");
+        assert_eq!(runtime.terminal_shell().args, ["/usr/bin/zsh", "-l"]);
+        assert!(
+            runtime.guest_env_spec().contains(";SHELL=/usr/bin/zsh;"),
+            "{}",
+            runtime.guest_env_spec()
+        );
     }
 
     #[test]

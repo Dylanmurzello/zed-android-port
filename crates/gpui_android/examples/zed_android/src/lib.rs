@@ -1043,10 +1043,11 @@ fn boot(
     .detach();
 
     // `terminal.shell` is re-derived every launch: the loader under its
-    // stable link with the flag that makes it a login shell. alacritty's
-    // `pw_shell` lookup on Android returns /system/bin/sh, so this explicit
-    // shell is what makes a useful terminal at all; a user who wants
-    // another shell inside the rootfs sets it there (`chsh`).
+    // stable link, running root's login shell from the rootfs's
+    // /etc/passwd as a login shell, so `chsh` picks the terminal's shell
+    // from the next launch. alacritty's `pw_shell` lookup on Android
+    // returns /system/bin/sh, so this explicit shell is what makes a useful
+    // terminal at all.
     //
     // It goes into Zed's default settings, not the user's settings.json.
     // Zed sends user settings to remote servers, and since Zed 1.25 a
@@ -1058,6 +1059,7 @@ fn boot(
     let terminal_shell = Runtime::new(data_path).terminal_shell();
     let shell_path = terminal_shell.program;
     if shell_path.is_file() {
+        let shell_args = terminal_shell.args.join(" ");
         let shell = settings::Shell::WithArguments {
             program: shell_path.to_string_lossy().to_string(),
             args: terminal_shell.args,
@@ -1073,7 +1075,7 @@ fn boot(
             });
         });
         info!(
-            "zed_android: default terminal.shell -> {}",
+            "zed_android: default terminal.shell -> {} {shell_args}",
             shell_path.display()
         );
     } else {

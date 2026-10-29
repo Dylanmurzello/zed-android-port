@@ -35,7 +35,7 @@ every exec.
   `ZD_CLOSE_FDS=1`, `ZD_GUEST_ENV`, and `ZD_LOG` when the dev toggle file
   `<data>/files/etc/zd-engine-log` exists. `SHELL` is the loader link.
 - **Guest view (`ZD_GUEST_ENV`).** `HOME=<data>/files/home;USER=root;
-  LOGNAME=root;SHELL=/bin/bash;PATH=<guest PATH>;LANG=C.UTF-8;TMPDIR=/tmp`,
+  LOGNAME=root;SHELL=<root's login shell>;PATH=<guest PATH>;LANG=C.UTF-8;TMPDIR=/tmp`,
   where the guest PATH is the engine's default with `~/.cargo/bin` and
   `~/.local/bin` of that home in place of `/root`'s. The home is the app's
   home folder, outside the rootfs (`rootfs-engine-integration.md`). The loader
@@ -62,7 +62,9 @@ every exec.
   the spelling Zed passed: `android-files-dir-spelling.md`.
 - **Terminal.** alacritty's pty spawn inherits the process environment,
   which already holds the engine block, so `terminal.rs` is unchanged.
-  The shell is `zdload -l`, which the loader runs as `/bin/bash -l`.
+  The shell is `zdload <shell> -l`, with root's shell from the rootfs's
+  `/etc/passwd` (`Runtime::login_shell`, so `chsh` changes it from the next
+  launch), or `/bin/bash` while that shell isn't installed.
 - **SSH remotes.** The environment Zed sends to a remote host is built
   from the remote's own and Zed's `ZED_*` variables, never the local
   process's, so none of the engine block reaches a host. Dylan's port,
