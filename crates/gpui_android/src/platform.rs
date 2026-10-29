@@ -187,6 +187,30 @@ pub(crate) fn request_frame_callback() {
 /// second after input that changes something arrives at 60 events a
 /// second or more, so the panel stays at its high refresh rate, and each
 /// of those presents asks for the next frame.
+/// Dispatches the next step of a window's trackpad glide
+/// (`captured_pointer`), and asks for another vsync while it runs. A hidden
+/// window's glide stops.
+fn advance_trackpad_glide(window_ptr: &crate::window::AndroidWindowStatePtr) {
+    let visible = window_ptr.is_visible();
+    let (step, gliding) = {
+        let mut state = window_ptr.state.borrow_mut();
+        let Some(fling) = state.captured.fling.as_mut() else {
+            return;
+        };
+        if !visible {
+            fling.stop();
+            return;
+        }
+        (fling.tick(), fling.is_gliding())
+    };
+    if let Some(event) = step {
+        window_ptr.handle_input(PlatformInput::Scroll(event));
+    }
+    if gliding {
+        request_frame_callback();
+    }
+}
+
 pub(crate) fn frame_presented() {
     LAST_PRESENT_AT.set(Some(Instant::now()));
 }
@@ -1071,6 +1095,7 @@ impl AndroidPlatform {
             Some(rx) => rx,
             None => return,
         };
+        let tuning = self.android_gestures().tuning();
         while let Ok(event) = rx.try_recv() {
             // Route the event to whichever window it came from.
             // `PRIMARY_WINDOW_ID` (0) → MainActivity's primary window;
@@ -1088,13 +1113,27 @@ impl AndroidPlatform {
                     .cloned()
             };
             let Some(window_ptr) = target else { continue };
-            let inputs = {
+            let (inputs, gliding) = {
                 let mut window_state = window_ptr.state.borrow_mut();
                 let scale_factor = window_state.scale_factor;
-                crate::captured_pointer::translate(&mut window_state.captured, event, scale_factor)
+                let inputs = crate::captured_pointer::translate(
+                    &mut window_state.captured,
+                    event,
+                    scale_factor,
+                    tuning,
+                );
+                let gliding = window_state
+                    .captured
+                    .fling
+                    .as_ref()
+                    .is_some_and(|fling| fling.is_gliding());
+                (inputs, gliding)
             };
             for input in inputs {
                 window_ptr.handle_input(input);
+            }
+            if gliding {
+                request_frame_callback();
             }
         }
         self.common.borrow_mut().captured_pointer_rx = Some(rx);
@@ -1823,6 +1862,11 @@ impl Platform for AndroidPlatform {
                         common.extra_windows.values().cloned().collect::<Vec<_>>(),
                     )
                 };
+                // A trackpad scroll's glide steps on the vsync, before the
+                // windows paint it.
+                for window_ptr in primary.iter().chain(&extras) {
+                    advance_trackpad_glide(window_ptr);
+                }
                 // While frames that present run back to back (scrolling,
                 // animations), ask for the next vsync before painting, as
                 // Android's own animations do: a paint that overruns the

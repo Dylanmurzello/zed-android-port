@@ -69,8 +69,9 @@ use std::time::{Duration, Instant};
 use android_activity::input::MetaState;
 use futures::channel::mpsc;
 use gpui::{
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels,
-    PlatformInput, Point, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point, px,
+    GestureTuning, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
+    Pixels, PlatformInput, Point, PointerFling, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
+    point, px,
 };
 use jni::objects::{JFloatArray, JObject};
 
@@ -352,6 +353,10 @@ pub(crate) struct CapturedPointerState {
     /// cursor (e.g. `ACTION_BUTTON_RELEASE` may arrive without a
     /// fresh relative delta).
     last_cursor: Point<Pixels>,
+    /// The two-finger scroll's glide after the fingers lift, which Android
+    /// leaves to the app. Created on the first scroll, with the platform's
+    /// gesture tuning; the run loop advances it once per frame.
+    pub(crate) fling: Option<PointerFling>,
 }
 
 /// Push a captured event from the JVM listener thread onto the channel.
@@ -377,6 +382,7 @@ pub(crate) fn translate(
     state: &mut CapturedPointerState,
     event: CapturedEvent,
     scale_factor: f32,
+    tuning: GestureTuning,
 ) -> Vec<PlatformInput> {
     let modifiers =
         crate::events::keyboard::modifiers_from_meta(MetaState(event.meta_state as u32));
@@ -397,6 +403,10 @@ pub(crate) fn translate(
 
     match event.action_masked {
         JAVA_ACTION_DOWN => {
+            // A finger on the pad stops a glide, as a touch stops a fling.
+            if let Some(fling) = &mut state.fling {
+                fling.stop();
+            }
             // First finger landed. Four roles in priority order:
             //
             // 1. Drag-lock resume: if the previous tap-tap-drag's
@@ -608,10 +618,8 @@ pub(crate) fn translate(
                 } else {
                     // Plain two-finger scroll (no hold-drag in
                     // flight). Centroid delta drives
-                    // ScrollDelta::Pixels. Sign matches
-                    // `events/trackpad.rs` (the non-captured path)
-                    // so behavior is consistent whether or not
-                    // capture is engaged.
+                    // ScrollDelta::Pixels, and `fling` follows it for
+                    // the glide after the fingers lift.
                     let n = event.pointer_count.max(1) as f32;
                     let sum_rx: f32 = event.rxs.iter().sum();
                     let sum_ry: f32 = event.rys.iter().sum();
@@ -625,12 +633,19 @@ pub(crate) fn translate(
                     }
                     if dx != 0.0 || dy != 0.0 {
                         state.last_motion_at = Some(Instant::now());
+                        let delta = crate::ime::invert_scroll_delta(ScrollDelta::Pixels(point(
+                            px(dx),
+                            px(dy),
+                        )));
+                        if let ScrollDelta::Pixels(pixels) = delta {
+                            state
+                                .fling
+                                .get_or_insert_with(|| PointerFling::new(tuning))
+                                .scrolled(pixels);
+                        }
                         out.push(PlatformInput::Scroll(ScrollEvent {
                             position: cursor,
-                            delta: crate::ime::invert_scroll_delta(ScrollDelta::Pixels(point(
-                                px(dx),
-                                px(dy),
-                            ))),
+                            delta,
                             modifiers,
                             touch_phase: TouchPhase::Moved,
                             source: ScrollSource::Pointer,
@@ -864,6 +879,14 @@ pub(crate) fn translate(
             // motion routes through the cursor path, not scroll.
             if event.pointer_count <= 2 && state.hold_drag_cursor.is_none() {
                 state.in_multi_touch = false;
+                // The two-finger scroll ends as the second finger lifts:
+                // the last one usually follows too late to still count as
+                // moving.
+                if let Some(fling) = &mut state.fling
+                    && !state.drag_active
+                {
+                    fling.release(cursor);
+                }
             }
         }
         JAVA_ACTION_BUTTON_PRESS => {
@@ -924,6 +947,9 @@ pub(crate) fn translate(
             }
         }
         JAVA_ACTION_CANCEL => {
+            if let Some(fling) = &mut state.fling {
+                fling.stop();
+            }
             if let Some(button) = state.button_held.take() {
                 let release_pos = state.hold_drag_cursor.take().unwrap_or(cursor);
                 out.push(PlatformInput::MouseUp(MouseUpEvent {

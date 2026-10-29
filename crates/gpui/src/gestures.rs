@@ -1182,6 +1182,118 @@ fn quadratic_velocity_at_newest(times: &[f64], values: &[f64]) -> Option<f64> {
     Some(linear_determinant / determinant)
 }
 
+/// Momentum for pointer scrolls the platform reports without a glide of its
+/// own, with the velocity estimate and fling curve of touch pans. Android:
+/// gpui_android recognizes two-finger scrolls on a captured trackpad itself,
+/// and Android leaves their glide to the app, as UIKit does for `gpui_ios`'s
+/// trackpad scrolls. Remove once gpui synthesizes pointer momentum.
+#[cfg(target_os = "android")]
+pub struct PointerFling {
+    tuning: GestureTuning,
+    velocity_tracker: VelocityTracker,
+    /// Sum of the gesture's scroll steps, the position the tracker follows.
+    offset: Point<Pixels>,
+    momentum: Option<Momentum>,
+}
+
+#[cfg(target_os = "android")]
+impl PointerFling {
+    /// A fling that coasts with `tuning`'s minimum velocity and physics.
+    pub fn new(tuning: GestureTuning) -> Self {
+        Self {
+            tuning,
+            velocity_tracker: VelocityTracker::default(),
+            offset: Point::default(),
+            momentum: None,
+        }
+    }
+
+    /// Records a scroll step of the ongoing gesture, as dispatched, and ends
+    /// a glide left from an earlier one.
+    pub fn scrolled(&mut self, delta: Point<Pixels>) {
+        self.momentum = None;
+        self.offset = self.offset + delta;
+        self.velocity_tracker.push(Instant::now(), self.offset);
+    }
+
+    /// The gesture ended: glides from `position` when the fingers were still
+    /// moving fast enough as they lifted, as a touch pan does.
+    pub fn release(&mut self, position: Point<Pixels>) {
+        let now = Instant::now();
+        let velocity_tracker = mem::take(&mut self.velocity_tracker);
+        self.offset = Point::default();
+        let stopped = velocity_tracker
+            .latest_sample_time()
+            .is_none_or(|latest| now.duration_since(latest) > VELOCITY_ASSUME_STOPPED_GAP);
+        if stopped {
+            return;
+        }
+        let velocity = velocity_tracker.velocity();
+        let speed = (velocity.x.powi(2) + velocity.y.powi(2)).sqrt();
+        if speed < self.tuning.min_fling_velocity {
+            return;
+        }
+        let direction = point(velocity.x / speed, velocity.y / speed);
+        let speed = speed.min(MAX_FLING_VELOCITY);
+        let duration = self.tuning.scroll_physics.fling_duration(speed);
+        if duration.is_zero() {
+            return;
+        }
+        self.momentum = Some(Momentum {
+            position,
+            direction,
+            speed,
+            started_at: now,
+            duration,
+            emitted_distance: 0.,
+        });
+    }
+
+    /// Ends the gesture and its glide, as a finger landing on the trackpad
+    /// does.
+    pub fn stop(&mut self) {
+        self.momentum = None;
+        self.velocity_tracker = VelocityTracker::default();
+        self.offset = Point::default();
+    }
+
+    /// Whether a glide is running, so the platform keeps asking for frames.
+    pub fn is_gliding(&self) -> bool {
+        self.momentum.is_some()
+    }
+
+    /// The glide's scroll step for this frame, or `None` when no glide runs.
+    /// The last step carries [`TouchPhase::Ended`].
+    pub fn tick(&mut self) -> Option<ScrollEvent> {
+        let momentum = self.momentum.as_mut()?;
+        let elapsed = Instant::now().duration_since(momentum.started_at);
+        let distance = self
+            .tuning
+            .scroll_physics
+            .fling_distance(momentum.speed, elapsed);
+        let step = (distance - momentum.emitted_distance).max(0.);
+        momentum.emitted_distance = momentum.emitted_distance.max(distance);
+        let delta = point(
+            px(momentum.direction.x * step),
+            px(momentum.direction.y * step),
+        );
+        let position = momentum.position;
+        let touch_phase = if elapsed >= momentum.duration {
+            self.momentum = None;
+            TouchPhase::Ended
+        } else {
+            TouchPhase::Moved
+        };
+        Some(ScrollEvent {
+            position,
+            delta: ScrollDelta::Pixels(delta),
+            modifiers: Modifiers::default(),
+            touch_phase,
+            source: ScrollSource::Pointer,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
