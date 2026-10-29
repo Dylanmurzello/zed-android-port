@@ -33,7 +33,9 @@ use crate::sys;
 const STACK_ENTRIES: usize = 128;
 const STACK_PROGRAM: usize = 1024 + 16;
 
-pub fn handle(number: u32, regs: &mut [u64; 31], working: Working) {
+/// `blocked` is the trapping thread's signal mask, which the new image
+/// starts the guest with.
+pub fn handle(number: u32, regs: &mut [u64; 31], blocked: u64, working: Working) {
     let (dirfd, path, argv, envp, flags) = if number == nr::EXECVE {
         (sys::AT_FDCWD, regs[0], regs[1], regs[2], 0usize)
     } else {
@@ -45,6 +47,7 @@ pub fn handle(number: u32, regs: &mut [u64; 31], working: Working) {
         argv as *const *const u8,
         envp as *const *const u8,
         flags,
+        blocked,
         working,
     );
 }
@@ -56,6 +59,7 @@ fn run(
     argv: *const *const u8,
     envp: *const *const u8,
     flags: usize,
+    blocked: u64,
     mut working: Working,
 ) -> u64 {
     let Some(translator) = config::translator() else {
@@ -66,7 +70,7 @@ fn run(
     };
     let config = config::get();
     let envc = count_pointers(envp);
-    let needed = envc + ENGINE_KEYS.len() + 5;
+    let needed = envc + ENGINE_KEYS.len() + 6;
     let mut on_stack = [core::ptr::null::<u8>(); STACK_ENTRIES];
     let mut program_on_stack = [0u8; STACK_PROGRAM];
     let mut mapped: Option<(usize, usize)> = None;
@@ -206,6 +210,22 @@ fn run(
         }
         writer.finish();
         slots[count] = exec_fd_entry.as_ptr();
+        count += 1;
+    }
+    let mut sigmask_entry = [0u8; 40];
+    {
+        let mut digits = [0u8; 20];
+        let mut writer = Writer::new(&mut sigmask_entry);
+        if writer.push(env::SIGMASK.as_bytes()).is_err()
+            || writer.push(b"=").is_err()
+            || writer.push(log::itoa(&mut digits, blocked)).is_err()
+        {
+            release(mapped);
+            close_exec_fd(exec_fd);
+            return sys::neg_errno(sys::ENAMETOOLONG);
+        }
+        writer.finish();
+        slots[count] = sigmask_entry.as_ptr();
         count += 1;
     }
     slots[count] = core::ptr::null();

@@ -734,7 +734,7 @@ fn dispatch_with(
         | nr::UTIMENSAT
         | nr::NAME_TO_HANDLE_AT
         | nr::STATX => path_syscall(translator, number, regs, 1, working.get()),
-        nr::EXECVE | nr::EXECVEAT => exec::handle(number, regs, working),
+        nr::EXECVE | nr::EXECVEAT => exec::handle(number, regs, *blocked, working),
         nr::SYMLINKAT => symlinkat(translator, regs, working.get()),
         nr::LINKAT | nr::RENAMEAT | nr::RENAMEAT2 => two_paths(translator, number, regs, working.get()),
         nr::GETCWD => getcwd(translator, regs, working.get()),
