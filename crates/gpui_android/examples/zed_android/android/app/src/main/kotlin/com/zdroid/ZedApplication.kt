@@ -18,7 +18,7 @@ import java.io.File
 /// services queries — without ever instantiating `MainActivity` or
 /// running `android_main`. The runtime setup and the home folder's
 /// directories live in `android_main`, so without this `mkdirs` the SAF
-/// picker would surface "Zed" with an empty root the first time another
+/// picker would surface "Zdroid" with an empty root the first time another
 /// app queries it.
 class ZedApplication : Application() {
     override fun onCreate() {

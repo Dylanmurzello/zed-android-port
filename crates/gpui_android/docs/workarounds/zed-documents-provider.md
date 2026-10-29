@@ -113,7 +113,7 @@ never runs. The runtime setup lives there and so do our env-setup
 `std::fs::create_dir_all(&home)` calls. So a cold provider query finds no
 `~` dir.
 
-If `queryRoots` returns empty here, the user sees "Zed" in the SAF
+If `queryRoots` returns empty here, the user sees "Zdroid" in the SAF
 sidebar with a blank inside on tap — and on some Android versions the
 system caches the empty root and stops surfacing the provider until
 next reboot. Bad UX.
@@ -141,8 +141,8 @@ declared as needing `MANAGE_DOCUMENTS` so only it can call us
 directly, but it's `exported=true` so the system can see us at all.
 Standard pattern.
 
-Verified end-to-end: Files-app's "Open from" picker shows "Zed" in the
-sidebar with subtitle "Zed home directory". Tapping it lists `~`
+Verified end-to-end: Files-app's "Open from" picker shows "Zdroid" in the
+sidebar with subtitle "Home folder". Tapping it lists `~`
 contents (visible: projects, storage, plus any non-hidden files). Standard SAF actions
 (navigate, "Use this folder", create folder) all wired.
 
