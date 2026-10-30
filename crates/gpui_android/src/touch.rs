@@ -127,6 +127,13 @@ fn dispatch(
     touch_event: &TouchEvent,
     scale_factor: f32,
 ) -> TranslatedMotion {
+    // A finger on the screen stops a trackpad scroll's glide, as touching a
+    // flinging view does.
+    if matches!(touch_event.action, TouchAction::Down)
+        && let Some(fling) = &mut state.captured.fling
+    {
+        fling.stop();
+    }
     if crate::ime::trackpad_mode_enabled() {
         let mut inputs = state.touch_feed.abandon();
         let android_app = state.android_app.clone();
