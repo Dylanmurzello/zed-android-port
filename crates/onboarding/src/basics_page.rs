@@ -5,7 +5,10 @@ use client::{Client, TelemetrySettings, UserStore, zed_urls};
 use cloud_api_types::Plan;
 use collections::HashMap;
 use fs::Fs;
-use gpui::{Action, Animation, AnimationExt, App, Entity, IntoElement, TaskExt, pulsating_between};
+use gpui::{
+    Action, Animation, AnimationExt, AnyElement, App, Entity, IntoElement, TaskExt,
+    pulsating_between,
+};
 use project::agent_server_store::AllAgentServersSettings;
 use project::project_settings::ProjectSettings;
 use project::{AgentRegistryStore, RegistryAgent};
@@ -15,16 +18,14 @@ use settings::{
 use theme::{Appearance, SystemAppearance, ThemeRegistry};
 use theme_settings::{ThemeAppearanceMode, ThemeName, ThemeSelection, ThemeSettings};
 use ui::{
-    AgentSetupButton, Divider, StatefulInteractiveElement, Switch, SwitchField, TintColor,
+    AgentSetupButton, Divider, StatefulInteractiveElement, SwitchField, TintColor,
     ToggleButtonGroup, ToggleButtonGroupSize, ToggleButtonSimple, ToggleButtonWithIcon, Tooltip,
     prelude::*,
 };
 use vim_mode_setting::VimModeSetting;
-#[cfg(target_os = "android")]
-use workspace::AndroidInputSettings;
 
 use crate::{
-    ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
+    AndroidBasicsSections, ImportCursorSettings, ImportVsCodeSettings, SettingsImportState,
     theme_preview::{ThemePreviewStyle, ThemePreviewTile},
 };
 
@@ -91,7 +92,7 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
                 .tab_index(tab_index)
                 .selected_index(theme_mode as usize)
                 .style(ui::ToggleButtonGroupStyle::Outlined)
-                .width(rems_from_px(3. * 64.)),
+                .width(rems_from_px(3.0_f32 * 64.0_f32)),
             ),
         )
         .child(
@@ -243,7 +244,6 @@ fn render_theme_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement
     }
 }
 
-#[cfg(not(target_os = "android"))]
 fn render_telemetry_section(tab_index: &mut isize, cx: &App) -> impl IntoElement {
     let fs = <dyn Fs>::global(cx);
 
@@ -673,143 +673,6 @@ fn render_zed_agent_button(user_store: &Entity<UserStore>, cx: &mut App) -> impl
         })
 }
 
-/// Onboarding-only Android input section. Three compact rows, one per
-/// toggle, each with an icon + short label + on/off `Switch`. We tried
-/// a `ToggleButtonGroup` of icon tiles first (visually consistent with
-/// Base Keymap), but that primitive's accent / transparent contrast
-/// reads as "which one is picked" rather than "each one is on or off",
-/// so users couldn't tell the state at a glance. The Switch's pill
-/// indicator is unambiguous and the per-row icon keeps the section
-/// from looking like a wall of text. No long descriptions — settings
-/// UI carries the full copy for users who want depth.
-#[cfg(target_os = "android")]
-fn render_android_input_section(tab_index: &mut isize, cx: &mut App) -> impl IntoElement {
-    let settings = AndroidInputSettings::get_global(cx);
-    let on_screen_keyboard_enabled = settings.on_screen_keyboard;
-    let programming_extras_row_enabled = settings.programming_extras_row;
-    let trackpad_mode_enabled = settings.trackpad_mode;
-
-    let on_screen_keyboard_tab = {
-        *tab_index += 1;
-        *tab_index - 1
-    };
-    let programming_extras_row_tab = {
-        *tab_index += 1;
-        *tab_index - 1
-    };
-    let trackpad_mode_tab = {
-        *tab_index += 1;
-        *tab_index - 1
-    };
-
-    let on_screen_keyboard_row = h_flex()
-        .gap_3()
-        .items_center()
-        .child(Icon::new(IconName::Keyboard).size(IconSize::Small).color(Color::Muted))
-        .child(Label::new("Soft Keyboard"))
-        .child(div().flex_grow(1.))
-        .child(
-            Switch::new(
-                "onboarding-android-on-screen-keyboard",
-                if on_screen_keyboard_enabled {
-                    ToggleState::Selected
-                } else {
-                    ToggleState::Unselected
-                },
-            )
-            .tab_index(on_screen_keyboard_tab)
-            .on_click(|&selection, _, cx| {
-                let value = match selection {
-                    ToggleState::Selected => true,
-                    ToggleState::Unselected => false,
-                    ToggleState::Indeterminate => return,
-                };
-                let fs = <dyn Fs>::global(cx);
-                update_settings_file(fs, cx, move |setting, _| {
-                    setting.android_input.get_or_insert_default().on_screen_keyboard = Some(value);
-                });
-            }),
-        );
-
-    let programming_extras_row_row = h_flex()
-        .gap_3()
-        .items_center()
-        .child(Icon::new(IconName::Code).size(IconSize::Small).color(Color::Muted))
-        .child(Label::new("Programming Keys Row"))
-        .child(div().flex_grow(1.))
-        .child(
-            Switch::new(
-                "onboarding-android-programming-extras-row",
-                if programming_extras_row_enabled {
-                    ToggleState::Selected
-                } else {
-                    ToggleState::Unselected
-                },
-            )
-            .tab_index(programming_extras_row_tab)
-            .on_click(|&selection, _, cx| {
-                let value = match selection {
-                    ToggleState::Selected => true,
-                    ToggleState::Unselected => false,
-                    ToggleState::Indeterminate => return,
-                };
-                let fs = <dyn Fs>::global(cx);
-                update_settings_file(fs, cx, move |setting, _| {
-                    setting
-                        .android_input
-                        .get_or_insert_default()
-                        .programming_extras_row = Some(value);
-                });
-            }),
-        );
-
-    let trackpad_mode_row = h_flex()
-        .gap_3()
-        .items_center()
-        .child(Icon::new(IconName::Crosshair).size(IconSize::Small).color(Color::Muted))
-        .child(Label::new("Virtual Trackpad"))
-        .child(div().flex_grow(1.))
-        .child(
-            Switch::new(
-                "onboarding-android-trackpad-mode",
-                if trackpad_mode_enabled {
-                    ToggleState::Selected
-                } else {
-                    ToggleState::Unselected
-                },
-            )
-            .tab_index(trackpad_mode_tab)
-            .on_click(|&selection, _, cx| {
-                let value = match selection {
-                    ToggleState::Selected => true,
-                    ToggleState::Unselected => false,
-                    ToggleState::Indeterminate => return,
-                };
-                let fs = <dyn Fs>::global(cx);
-                update_settings_file(fs, cx, move |setting, _| {
-                    setting.android_input.get_or_insert_default().trackpad_mode = Some(value);
-                });
-            }),
-        );
-
-    v_flex()
-        .gap_1()
-        .child(Label::new("Android Input"))
-        .child(
-            Label::new("Touch-device input features. Toggle off any you don't want.")
-                .color(Color::Muted)
-                .size(LabelSize::Small),
-        )
-        .child(
-            v_flex()
-                .mt_1p5()
-                .gap_2()
-                .child(on_screen_keyboard_row)
-                .child(programming_extras_row_row)
-                .child(trackpad_mode_row),
-        )
-}
-
 fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
     let registry_agents = AgentRegistryStore::try_global(cx)
         .map(|store| store.read(cx).agents().to_vec())
@@ -855,43 +718,34 @@ fn render_ai_section(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoE
 pub(crate) fn render_basics_page(user_store: &Entity<UserStore>, cx: &mut App) -> impl IntoElement {
     let mut tab_index = 0;
 
-    let page = v_flex()
+    v_flex()
         .id("basics-page")
         .gap_6()
         .child(render_theme_section(&mut tab_index, cx))
-        .child(render_base_keymap_section(&mut tab_index, cx));
-
-    // On Android we swap the Agent Setup section for a discoverability-
-    // focused row of input toggles (on-screen keyboard, programming
-    // keys row, virtual trackpad). The AI agent setup flow assumes a
-    // Zed account sign-in path that doesn't exist on the Android port
-    // yet, so showing those buttons just teaches users to tap things
-    // that don't work. The input toggles, by contrast, expose three
-    // features users would otherwise have to discover in the settings
-    // panel.
-    #[cfg(not(target_os = "android"))]
-    let page = page.child(render_ai_section(user_store, cx));
-    #[cfg(target_os = "android")]
-    let page = {
-        let _ = user_store;
-        page.child(render_android_input_section(&mut tab_index, cx))
-    };
-
-    let page = page
+        .child(render_base_keymap_section(&mut tab_index, cx))
+        .map(|page| {
+            if cfg!(target_os = "android") {
+                page.children(render_android_sections(&mut tab_index, cx))
+            } else {
+                page.child(render_ai_section(user_store, cx))
+            }
+        })
         .child(render_import_settings_section(&mut tab_index, cx))
         .child(render_vim_mode_switch(&mut tab_index, cx))
-        .child(render_worktree_auto_trust_switch(&mut tab_index, cx));
-
-    // Telemetry toggles are stubbed to mocks on Android (the
-    // `telemetry::event!` macros no-op), so the onboarding switches do
-    // nothing for our users — confusing UI to display options that no-
-    // op. The trailing divider is gated with the section so we don't
-    // leave an orphaned horizontal line.
-    #[cfg(not(target_os = "android"))]
-    let page = page
-        .child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
-        .child(render_telemetry_section(&mut tab_index, cx));
-
-    page
+        .child(render_worktree_auto_trust_switch(&mut tab_index, cx))
+        .when(!cfg!(target_os = "android"), |page| {
+            page.child(Divider::horizontal().color(ui::DividerColor::BorderVariant))
+                .child(render_telemetry_section(&mut tab_index, cx))
+        })
 }
 
+fn render_android_sections(tab_index: &mut isize, cx: &mut App) -> Vec<AnyElement> {
+    let sections = cx
+        .try_global::<AndroidBasicsSections>()
+        .map(|sections| sections.0.clone())
+        .unwrap_or_default();
+    sections
+        .into_iter()
+        .map(|render_section| render_section(tab_index, cx))
+        .collect()
+}

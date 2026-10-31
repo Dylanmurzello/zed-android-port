@@ -3,14 +3,21 @@ name = "gpui_util"
 version = "0.1.0"
 publish.workspace = true
 edition.workspace = true
+license = "Apache-2.0"
+
+[lib]
+doctest = false
 
 [dependencies]
-log.workspace = true
+log = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
 zd_engine_core.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 which.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+zdroid_hooks.workspace = true
 
 [lints]
 workspace = true

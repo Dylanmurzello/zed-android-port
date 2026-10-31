@@ -13,15 +13,15 @@
 //! every IME event onto an mpsc channel and the game thread drains it
 //! each iteration of the main loop (same pattern as `multi_window`
 //! and `captured_pointer`). Show/hide IME goes the other direction —
-//! Rust → Kotlin — via direct JNI calls on `MainActivity.showIme()` /
+//! Rust → Kotlin — via direct JNI calls on `MainActivity.requestIme()` /
 //! `hideIme()`.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Mirror of Kotlin's `imeShown` flag pushed via the
-/// `nativeSetSoftKeyboardVisible` JNI entry point. Read by
-/// `PlatformWindow::soft_keyboard_visible` so the pane keyboard
+/// `nativeSetSoftKeyboardVisible` JNI entry point. Read through
+/// `gpui_android::soft_keyboard_visible` so the status bar keyboard
 /// button can draw its lit-up `toggle_state`. Process-wide because
 /// the IME host is a single ImeHostView shared across all panes
 /// of the primary Activity.
@@ -29,6 +29,18 @@ pub(crate) static SOFT_KEYBOARD_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn soft_keyboard_visible() -> bool {
     SOFT_KEYBOARD_VISIBLE.load(Ordering::Acquire)
+}
+
+/// Whether a connected physical keyboard blocks the on-screen one, as
+/// `MainActivity` last reported through `nativeSetPhysicalKeyboardBlocksIme`:
+/// one is connected (`PhysicalKeyboard.kt` says what counts) and Android's
+/// "show on-screen keyboard while a physical keyboard is connected" setting
+/// is off. One UI's Samsung Keyboard doesn't show then, so the keyboard
+/// isn't requested and the status bar hides its keyboard button.
+pub(crate) static PHYSICAL_KEYBOARD_BLOCKS_IME: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn physical_keyboard_blocks_ime() -> bool {
+    PHYSICAL_KEYBOARD_BLOCKS_IME.load(Ordering::Acquire)
 }
 
 /// Mirrors the `android_input.on_screen_keyboard` user setting.
@@ -40,7 +52,7 @@ pub(crate) fn soft_keyboard_visible() -> bool {
 /// auto-show on text-input focus. Defaults to false so the early-
 /// boot window (before the SettingsStore observer fires) doesn't
 /// trip a stray auto-show; the observer overwrites with the user's
-/// real setting within ms. Onboarding card + Android Input settings
+/// real setting within ms. Onboarding card + Android settings
 /// page surface the toggle so opt-in is obvious.
 pub(crate) static ON_SCREEN_KEYBOARD_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -84,20 +96,30 @@ pub(crate) fn invert_scroll_enabled() -> bool {
     INVERT_SCROLL.load(Ordering::Acquire)
 }
 
-/// Decision (not the mode itself) for whether soft-keyboard input should
-/// be delivered as key events instead of committed as text. True when the
-/// focused editor is in a vim COMMAND mode (Normal / Visual* / Helix*),
-/// where letters must reach vim's keymap as keystrokes so `j` means "down"
-/// rather than inserting "j". False in Insert / Replace and when vim is
-/// off, where `commitText` inserts text normally. Written by the app-side
-/// vim observer in `zed_android::lib`; read by Kotlin's `commitText` via
-/// the `nativeImeRouteAsKeys` JNI query, which then converts the text to
-/// KeyEvents via Android's KeyCharacterMap. gpui_android stays dumb about
-/// what "vim" is — it only carries the boolean.
-pub(crate) static IME_ROUTE_AS_KEYS: AtomicBool = AtomicBool::new(false);
+/// IME window ids (0 for the main window) whose focused text field accepts
+/// typed text, as gpui reports through `text_input_state_changed`. A focused
+/// field that doesn't, such as an editor in vim's normal or visual mode,
+/// gets soft-keyboard text as key events instead, so `j` moves down rather
+/// than inserting "j". Kotlin's `commitText` asks through
+/// `nativeImeRouteAsKeys` and converts the text with Android's
+/// KeyCharacterMap.
+static TEXT_INPUT_FOCUSED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
-pub(crate) fn ime_route_as_keys() -> bool {
-    IME_ROUTE_AS_KEYS.load(Ordering::Acquire)
+pub(crate) fn set_text_input_focused(ime_window_id: u64, focused: bool) {
+    let mut windows = TEXT_INPUT_FOCUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    windows.retain(|window_id| *window_id != ime_window_id);
+    if focused {
+        windows.push(ime_window_id);
+    }
+}
+
+fn route_as_keys(ime_window_id: u64) -> bool {
+    !TEXT_INPUT_FOCUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&ime_window_id)
 }
 
 /// Negate a scroll delta when `invert_scroll` is set. No-op otherwise, so
@@ -112,12 +134,11 @@ pub(crate) fn invert_scroll_delta(delta: gpui::ScrollDelta) -> gpui::ScrollDelta
     }
 }
 
-use anyhow::Context as _;
 use android_activity::AndroidApp;
+use anyhow::Context as _;
 use futures::channel::mpsc;
 use jni::JNIEnv;
-use jni::JavaVM;
-use jni::objects::{JObject, JString};
+use jni::objects::{JObject, JString, JValue};
 
 use crate::window::AndroidWindowStatePtr;
 
@@ -182,10 +203,11 @@ pub(crate) fn restart_input_for_kind(
     extra_window_id: Option<u64>,
     kind: ImeTargetKind,
 ) {
-    log::info!("ime::restart_input_for_kind w={extra_window_id:?} kind={:?}", kind);
-    if let Err(err) =
-        call_activity_restart_ime(android_app, extra_window_id, kind.to_jni_int())
-    {
+    log::info!(
+        "ime::restart_input_for_kind w={extra_window_id:?} kind={:?}",
+        kind
+    );
+    if let Err(err) = call_activity_restart_ime(android_app, extra_window_id, kind.to_jni_int()) {
         log::warn!("ime::restart_input_for_kind failed: {err:#}");
     }
 }
@@ -195,29 +217,26 @@ fn call_activity_restart_ime(
     extra_window_id: Option<u64>,
     mode_id: i32,
 ) -> anyhow::Result<()> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
-    let args = [mode_id.into()];
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(activity_ref.as_obj(), "restartImeForTarget", "(I)V", &args)
-                .context("call ExtraWindowActivity.restartImeForTarget")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let args = [mode_id.into()];
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(activity_ref.as_obj(), "restartImeForTarget", "(I)V", &args)
+                    .context("call ExtraWindowActivity.restartImeForTarget")?;
+            }
+            None => {
+                env.call_method(activity, "restartImeForTarget", "(I)V", &args)
+                    .context("call MainActivity.restartImeForTarget")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, "restartImeForTarget", "(I)V", &args)
-                .context("call MainActivity.restartImeForTarget")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Input events the IME wants the gpui side to apply. Each variant
@@ -226,16 +245,25 @@ fn call_activity_restart_ime(
 pub(crate) enum ImeEvent {
     /// `commitText(text, newCursorPosition)`. Final text the IME wants
     /// inserted at the cursor (or replacing any active composition).
-    CommitText { text: String, new_cursor_position: i32 },
+    CommitText {
+        text: String,
+        new_cursor_position: i32,
+    },
     /// `setComposingText(text, newCursorPosition)`. In-progress
     /// composition (CJK, gesture typing, prediction).
-    SetComposingText { text: String, new_cursor_position: i32 },
+    SetComposingText {
+        text: String,
+        new_cursor_position: i32,
+    },
     /// `finishComposingText()`. End of composition without further
     /// edits.
     FinishComposingText,
     /// `deleteSurroundingText(before, after)`. Backspace / delete span
     /// around the cursor.
-    DeleteSurroundingText { before_length: i32, after_length: i32 },
+    DeleteSurroundingText {
+        before_length: i32,
+        after_length: i32,
+    },
     /// `sendKeyEvent(KeyEvent)`. Hardware-style key delivery from the
     /// IME (Enter, arrows, etc.). Routed through the existing
     /// `events::keyboard::translate_extra_key_event` translator.
@@ -268,7 +296,7 @@ pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<(u64, ImeEvent)> {
 }
 
 fn dispatch_event(window_id: u64, event: ImeEvent) {
-    log::info!("ime::dispatch_event w={window_id} {}", debug_event(&event));
+    log::debug!("ime::dispatch_event w={window_id} {}", debug_event(&event));
     let guard = EVENT_TX.lock().unwrap();
     let Some(tx) = guard.as_ref() else {
         log::warn!("ime: event arrived before init_event_channel");
@@ -277,22 +305,39 @@ fn dispatch_event(window_id: u64, event: ImeEvent) {
     if let Err(err) = tx.unbounded_send((window_id, event)) {
         log::warn!("ime: dispatch_event failed: {err:#}");
     }
+    crate::platform::wake_run_loop();
 }
 
 fn debug_event(event: &ImeEvent) -> String {
     match event {
-        ImeEvent::CommitText { text, new_cursor_position } => {
+        ImeEvent::CommitText {
+            text,
+            new_cursor_position,
+        } => {
             format!("CommitText text={text:?} cursor={new_cursor_position}")
         }
-        ImeEvent::SetComposingText { text, new_cursor_position } => {
+        ImeEvent::SetComposingText {
+            text,
+            new_cursor_position,
+        } => {
             format!("SetComposingText text={text:?} cursor={new_cursor_position}")
         }
         ImeEvent::FinishComposingText => "FinishComposingText".to_string(),
-        ImeEvent::DeleteSurroundingText { before_length, after_length } => {
+        ImeEvent::DeleteSurroundingText {
+            before_length,
+            after_length,
+        } => {
             format!("DeleteSurroundingText before={before_length} after={after_length}")
         }
-        ImeEvent::KeyEvent { action, keycode, meta_state, repeat_count } => {
-            format!("KeyEvent action={action} keycode={keycode} meta={meta_state:#x} repeat={repeat_count}")
+        ImeEvent::KeyEvent {
+            action,
+            keycode,
+            meta_state,
+            repeat_count,
+        } => {
+            format!(
+                "KeyEvent action={action} keycode={keycode} meta={meta_state:#x} repeat={repeat_count}"
+            )
         }
         ImeEvent::EditorAction { action_id } => format!("EditorAction id={action_id}"),
     }
@@ -309,7 +354,7 @@ pub(crate) fn drain_ime_events(
     lookup_extra: impl Fn(u64) -> Option<AndroidWindowStatePtr>,
     rx: &mut mpsc::UnboundedReceiver<(u64, ImeEvent)>,
 ) {
-    while let Ok(Some((window_id, event))) = rx.try_next() {
+    while let Ok((window_id, event)) = rx.try_recv() {
         let target = if window_id == 0 {
             primary_window.cloned()
         } else {
@@ -549,51 +594,48 @@ fn call_activity_update_text_state(
     comp_start: i32,
     comp_end: i32,
 ) -> anyhow::Result<()> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
-    let text_jstring = env.new_string(text).context("new_string for IME text")?;
-    let args = [
-        (&text_jstring).into(),
-        window_start.into(),
-        sel_start.into(),
-        sel_end.into(),
-        comp_start.into(),
-        comp_end.into(),
-    ];
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                return Ok(());
-            };
-            env.call_method(
-                activity_ref.as_obj(),
-                "updateImeTextState",
-                "(Ljava/lang/String;IIIII)V",
-                &args,
-            )
-            .context("call ExtraWindowActivity.updateImeTextState")?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let text_jstring = env.new_string(text).context("new_string for IME text")?;
+        let args = [
+            (&text_jstring).into(),
+            window_start.into(),
+            sel_start.into(),
+            sel_end.into(),
+            comp_start.into(),
+            comp_end.into(),
+        ];
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    return Ok(());
+                };
+                env.call_method(
+                    activity_ref.as_obj(),
+                    "updateImeTextState",
+                    "(Ljava/lang/String;IIIII)V",
+                    &args,
+                )
+                .context("call ExtraWindowActivity.updateImeTextState")?;
+            }
+            None => {
+                env.call_method(
+                    activity,
+                    "updateImeTextState",
+                    "(Ljava/lang/String;IIIII)V",
+                    &args,
+                )
+                .context("call MainActivity.updateImeTextState")?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(
-                &activity,
-                "updateImeTextState",
-                "(Ljava/lang/String;IIIII)V",
-                &args,
-            )
-            .context("call MainActivity.updateImeTextState")?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
-    log::info!("ime::apply_event {:?}", debug_event(&event));
+    log::debug!("ime::apply_event {:?}", debug_event(&event));
     let needs_mirror_push = match event {
         ImeEvent::CommitText { text, .. } => {
             commit_composition(window_ptr, Some(&text));
@@ -611,11 +653,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             // mirror-push echoes another updateSelection right back —
             // forming a feedback loop that floods the wire at ~16Hz
             // even when the user is idle.
-            let had_composition = window_ptr
-                .state
-                .borrow()
-                .ime_composition_text
-                .is_some();
+            let had_composition = window_ptr.state.borrow().ime_composition_text.is_some();
             commit_composition(window_ptr, None);
             had_composition
         }
@@ -666,7 +704,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             // regardless of how the IME delivers it; gpui routes the Enter
             // to the focused element (newline in the editor, run in the
             // terminal, confirm in a picker).
-            log::info!("ime::editor_action {action_id} -> Enter");
+            log::debug!("ime::editor_action {action_id} -> Enter");
             const ACTION_DOWN: i32 = 0;
             const ACTION_UP: i32 = 1;
             const KEYCODE_ENTER: u32 = 66;
@@ -686,20 +724,8 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
     }
 }
 
-/// Show the soft keyboard. Calls `MainActivity.showIme()` on the
-/// activity backing this app, which requests focus on `ImeHostView`
-/// and invokes `InputMethodManager.showSoftInput`. Idempotent —
-/// repeated calls when the IME is already up are no-ops on the OS
-/// side. Logs but does not panic on failure (Activity recreation
-/// in flight, etc.).
-pub(crate) fn show_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
-    log::info!("ime::show_keyboard w={extra_window_id:?}");
-    if let Err(err) = call_activity_void(android_app, extra_window_id, "showIme") {
-        log::warn!("ime::show_keyboard failed: {err:#}");
-    }
-}
-
-/// Hide the soft keyboard. Pairs with `show_keyboard`.
+/// Hide the soft keyboard when the window's text field loses focus, or
+/// a physical keyboard connects.
 pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
     log::info!("ime::hide_keyboard w={extra_window_id:?}");
     if let Err(err) = call_activity_void(android_app, extra_window_id, "hideIme") {
@@ -707,15 +733,19 @@ pub(crate) fn hide_keyboard(android_app: &AndroidApp, extra_window_id: Option<u6
     }
 }
 
-/// Toggle the soft keyboard. Called from the pane tab-bar
-/// keyboard-icon button (via `Window::toggle_soft_keyboard`).
-/// Inverts the current `imeShown` state on the target Activity — and,
-/// when showing, clears the user-dismissed flag so subsequent
-/// text-input focuses can auto-show again.
-pub(crate) fn toggle_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>) {
-    log::info!("ime::toggle_keyboard w={extra_window_id:?}");
-    if let Err(err) = call_activity_void(android_app, extra_window_id, "toggleIme") {
-        log::warn!("ime::toggle_keyboard failed: {err:#}");
+/// Show or hide the soft keyboard on an explicit request, gpui's
+/// `request_virtual_keyboard` / `dismiss_virtual_keyboard`: the Activity's
+/// `requestIme`.
+pub(crate) fn request_keyboard(android_app: &AndroidApp, extra_window_id: Option<u64>, show: bool) {
+    log::info!("ime::request_keyboard w={extra_window_id:?} show={show}");
+    if let Err(err) = call_activity(
+        android_app,
+        extra_window_id,
+        "requestIme",
+        "(Z)V",
+        &[JValue::Bool(show.into())],
+    ) {
+        log::warn!("ime::request_keyboard failed: {err:#}");
     }
 }
 
@@ -728,31 +758,38 @@ fn call_activity_void(
     extra_window_id: Option<u64>,
     method: &str,
 ) -> anyhow::Result<()> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    if vm_ptr.is_null() || activity_ptr.is_null() {
+    call_activity(android_app, extra_window_id, method, "()V", &[])
+}
+
+fn call_activity(
+    android_app: &AndroidApp,
+    extra_window_id: Option<u64>,
+    method: &str,
+    signature: &str,
+    args: &[JValue],
+) -> anyhow::Result<()> {
+    if android_app.vm_as_ptr().is_null() || android_app.activity_as_ptr().is_null() {
         anyhow::bail!("AndroidApp vm/activity pointer is null");
     }
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let mut env = vm.attach_current_thread().context("attach_current_thread")?;
-    match extra_window_id {
-        Some(id) => {
-            let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
-                // Activity tore down between dispatch and call;
-                // silently drop. The keyboard would have no
-                // surface to attach to anyway.
-                return Ok(());
-            };
-            env.call_method(activity_ref.as_obj(), method, "()V", &[])
-                .with_context(|| format!("call ExtraWindowActivity.{method}()"))?;
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        match extra_window_id {
+            Some(id) => {
+                let Some(activity_ref) = crate::multi_window::extra_activity_for(id) else {
+                    // Activity tore down between dispatch and call;
+                    // silently drop. The keyboard would have no
+                    // surface to attach to anyway.
+                    return Ok(());
+                };
+                env.call_method(activity_ref.as_obj(), method, signature, args)
+                    .with_context(|| format!("call ExtraWindowActivity.{method}()"))?;
+            }
+            None => {
+                env.call_method(activity, method, signature, args)
+                    .with_context(|| format!("call MainActivity.{method}()"))?;
+            }
         }
-        None => {
-            let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-            env.call_method(&activity, method, "()V", &[])
-                .with_context(|| format!("call MainActivity.{method}()"))?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 // --------------------------------------------------------------------
@@ -844,17 +881,16 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImeSendKeyEvent<'local
     );
 }
 
-/// Whether soft-keyboard input should be delivered as key events (the
-/// focused editor is in a vim command mode) instead of committed as text.
-/// Read by Kotlin's `commitText`. Global decision: only one editor is
-/// focused at a time and the app-side vim observer keeps the atomic in
-/// sync with it, so no window_id is needed.
+/// Whether soft-keyboard input for this IME window should be delivered as
+/// key events instead of committed as text; see [`TEXT_INPUT_FOCUSED`].
+/// Read by Kotlin's `commitText`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImeRouteAsKeys<'local>(
     _env: JNIEnv<'local>,
     _bridge: JObject<'local>,
+    window_id: i64,
 ) -> bool {
-    ime_route_as_keys()
+    route_as_keys(window_id as u64)
 }
 
 #[unsafe(no_mangle)]
@@ -869,7 +905,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImePerformEditorAction
 
 /// Kotlin pushes its `imeShown` state here whenever it changes
 /// (after showSoftInput / hideSoftInput / WindowInsetsListener edge).
-/// We mirror it into [`SOFT_KEYBOARD_VISIBLE`] so the pane button can
+/// We mirror it into [`SOFT_KEYBOARD_VISIBLE`] so the status bar keyboard button can
 /// reflect the actual OS visibility.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetSoftKeyboardVisible<'local>(
@@ -878,4 +914,17 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetSoftKeyboardVisible
     visible: jni::sys::jboolean,
 ) {
     SOFT_KEYBOARD_VISIBLE.store(visible != 0, Ordering::Release);
+    crate::platform::wake_run_loop();
+}
+
+/// `MainActivity` pushes [`PHYSICAL_KEYBOARD_BLOCKS_IME`] here at startup
+/// and whenever an input device or the Android setting changes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeSetPhysicalKeyboardBlocksIme<'local>(
+    _env: JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    blocks_ime: jni::sys::jboolean,
+) {
+    PHYSICAL_KEYBOARD_BLOCKS_IME.store(blocks_ime != 0, Ordering::Release);
+    crate::platform::wake_run_loop();
 }

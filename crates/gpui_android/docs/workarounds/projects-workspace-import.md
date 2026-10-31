@@ -4,8 +4,7 @@
 
 ~/projects is the canonical workspace dir, mkdir'd at boot
 (`ZedApplication.onCreate` does `File(filesDir, "home/projects").mkdirs()`,
-plus `storage::setup_user_symlinks` re-mkdirs at android_main entry — both
-are idempotent). This serves two purposes:
+and created on demand by the importer). This serves two purposes:
 
 1. The `ZedDocumentsProvider` SAF root (added in L8 / 3178a2174d)
    exposes `~`; pre-creating `home/projects` ensures the "Zed" sidebar
@@ -26,12 +25,13 @@ proactive. Today the import path is:
    banner appears.
 3. User taps the banner → confirmation dialog explains the constraint
    and offers Copy / Suppress / Cancel.
-4. Copy runs `storage::copy_tree(src, ~/projects/<basename>)` and
-   activates the new worktree.
+4. `project_import::import_project` reserves a unique destination, copies in
+   the background, and opens the completed project in the initiating window.
 
-`storage::copy_tree` is unchanged: recursive, preserves symlinks +
-file modes, errors per-entry are logged and skipped (a half-imported
-tree is more useful than a hard failure midway through).
+The importer preserves symlinks and regular-file permissions. Errors and
+cancellation remove the incomplete copy and leave the original untouched;
+errors remain visible in the dialog. See [the copy implementation and its
+upstream replacement criteria](noexec-banner-move.md).
 
 ## Note: the L9-attempted picker default to ~/projects
 

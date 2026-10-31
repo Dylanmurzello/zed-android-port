@@ -466,54 +466,25 @@ impl WorktreeStore {
         cx: &App,
     ) -> Option<(Entity<Worktree>, Arc<RelPath>)> {
         let abs_path = SanitizedPath::new(abs_path.as_ref());
-
-        // File-identity-aware lookup. The input path and the worktree's
-        // stored `abs_path` may name the same on-disk inode via DIFFERENT
-        // byte sequences. Common cases:
-        //
-        //   - Android's `/data/user/0/<pkg>` and `/data/data/<pkg>` are
-        //     two independent mount-bind entries onto the same inode.
-        //     Neither is a symlink at the syscall level (`readlink`
-        //     returns the path unchanged), so `fs::canonicalize` is a
-        //     no-op. But `stat` returns the same `(dev, ino)` for both.
-        //   - macOS firmlinks (`/var` ↔ `/private/var`, `/tmp` ↔
-        //     `/private/tmp`) — kernel-managed equivalence with no
-        //     symlink visibility.
-        //   - User-created symlinks (`~/projects/foo -> /elsewhere/foo`)
-        //     where canonicalize WOULD work, but inode comparison also
-        //     covers them.
-        //
-        // First try the literal string `strip_prefix` (fast path; one
-        // memcmp, no syscalls). On miss, fall back to inode-walk: stat
-        // the worktree root once for its `(dev, ino)`, walk the input
-        // path's ancestors upward statting each, return the suffix when
-        // an ancestor's `(dev, ino)` matches. O(depth) syscalls per
-        // worktree on miss, zero on hit.
         for tree in self.worktrees() {
             let path_style = tree.read(cx).path_style();
-            let tree_abs = tree.read(cx).abs_path();
-            if let Some(relative_path) =
-                path_style.strip_prefix(abs_path.as_ref(), tree_abs.as_ref())
+            if let Some(relative_path) = path_style
+                .strip_prefix(abs_path.as_ref(), tree.read(cx).abs_path().as_ref())
+                .ok()
+                .and_then(|path| RelPath::new(path, path_style).ok())
             {
                 return Some((tree.clone(), relative_path.into_arc()));
             }
-            if let Some(suffix) = util::path_equivalence::strip_prefix_by_identity(
+            // Android reaches the app's data dir as both /data/data/<package>
+            // and /data/user/0/<package>, bind mounts of one directory that
+            // canonicalize doesn't unify, so on a miss compare file identity.
+            #[cfg(target_os = "android")]
+            if let Some(path) = zdroid_hooks::strip_prefix_by_identity(
                 abs_path.as_ref(),
-                tree_abs.as_ref(),
-            ) {
-                let rel = if suffix.is_empty() {
-                    RelPath::empty().into_arc()
-                } else {
-                    let mut rel = std::path::PathBuf::new();
-                    for component in &suffix {
-                        rel.push(component);
-                    }
-                    match RelPath::new(rel.as_path(), path_style) {
-                        Ok(cow) => cow.into_arc(),
-                        Err(_) => continue,
-                    }
-                };
-                return Some((tree.clone(), rel));
+                tree.read(cx).abs_path().as_ref(),
+            ) && let Ok(relative_path) = RelPath::new(&path, path_style)
+            {
+                return Some((tree.clone(), relative_path.into_arc()));
             }
         }
         None
@@ -839,27 +810,21 @@ impl WorktreeStore {
                 }
             };
 
-            self.loading_worktrees
-                .insert(abs_path.clone(), task.shared());
+            let loading_task = cx.spawn({
+                let abs_path = abs_path.clone();
+                async move |this, cx| {
+                    let result = task.await;
+                    this.update(cx, |this, cx| {
+                        this.loading_worktrees.remove(&abs_path);
+                        if !visible || !this.scanning_enabled || result.is_err() {
+                            this.update_initial_scan_state(cx);
+                        }
+                    })
+                    .ok();
 
-            if visible && self.scanning_enabled {
-                *self.initial_scan_complete.0.borrow_mut() = false;
-            }
-        }
-        let task = self.loading_worktrees.get(&abs_path).unwrap().clone();
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                this.loading_worktrees.remove(&abs_path);
-                if !visible || !this.scanning_enabled || result.is_err() {
-                    this.update_initial_scan_state(cx);
-                }
-            })
-            .ok();
-
-            match result {
-                Ok(worktree) => {
-                    if !is_via_collab {
+                    if let Ok(worktree) = &result
+                        && !is_via_collab
+                    {
                         if let Some((trusted_worktrees, worktree_store)) = this
                             .update(cx, |_, cx| {
                                 TrustedWorktrees::try_get_global(cx).zip(Some(cx.entity()))
@@ -878,16 +843,25 @@ impl WorktreeStore {
 
                         this.update(cx, |this, cx| {
                             if this.scanning_enabled && visible {
-                                this.observe_worktree_scan_completion(&worktree, cx);
+                                this.observe_worktree_scan_completion(worktree, cx);
                             }
                         })
                         .ok();
                     }
-                    Ok(worktree)
+
+                    result
                 }
-                Err(err) => Err((*err).cloned()),
+            });
+
+            self.loading_worktrees
+                .insert(abs_path.clone(), loading_task.shared());
+
+            if visible && self.scanning_enabled {
+                *self.initial_scan_complete.0.borrow_mut() = false;
             }
-        })
+        }
+        let task = self.loading_worktrees.get(&abs_path).unwrap().clone();
+        cx.background_spawn(async move { task.await.map_err(|error| (*error).cloned()) })
     }
 
     fn create_remote_worktree(
@@ -1444,7 +1418,7 @@ impl WorktreeStore {
         let entry_id = ProjectEntryId::from_proto(request.entry_id);
         let new_worktree_id = WorktreeId::from_proto(request.new_worktree_id);
         let rel_path = RelPath::from_unix_str(&request.new_path)
-            .with_context(|| format!("received invalid relative path {:?}", &request.new_path))?;
+            .with_context(|| format!("received invalid relative path {:?}", request.new_path))?;
 
         let (scan_id, task) = this.update(&mut cx, |this, cx| {
             let worktree = this
@@ -1526,7 +1500,7 @@ impl WorktreeStore {
                 let main_path = snapshot
                     .root_repo_common_dir()
                     .filter(|dir| !crate::git_store::is_submodule_git_dir(dir))
-                    .map(|dir| crate::git_store::repo_identity_path(dir))
+                    .map(|dir| crate::git_store::repo_identity_path(dir, snapshot.path_style()))
                     .filter(|repo_path| {
                         snapshot.root_repo_is_linked_worktree()
                             || *repo_path == folder_path.as_path()
@@ -1559,4 +1533,3 @@ impl WorktreeHandle {
         }
     }
 }
-

@@ -70,6 +70,6 @@ body:
   - type: textarea
     attributes:
       label: Additional context
-      description: Anything else useful. Magisk module version (if chroot), `pkg list-installed` snippet (if bootstrap), root status, ROM build number.
+      description: Anything else useful. An `apt list --installed` snippet from the Zdroid terminal, ROM build number.
     validations:
       required: false

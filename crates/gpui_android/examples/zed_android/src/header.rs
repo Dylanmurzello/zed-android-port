@@ -8,9 +8,7 @@
 //! settings row below — same vertical order users see on Mac (system
 //! menu bar above the app's title bar).
 
-use gpui::{
-    Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
-};
+use gpui::{Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div};
 
 use crate::menu_bar::MenuBar;
 use crate::title_bar::TitleBar;

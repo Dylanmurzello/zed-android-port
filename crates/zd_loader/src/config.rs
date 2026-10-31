@@ -173,6 +173,8 @@ pub struct Config {
     pub traceme: bool,
     /// The descriptor to read the program from; see `env::EXEC_FD`.
     pub exec_fd: Option<i32>,
+    /// The signal mask to start the guest with; see `env::SIGMASK`.
+    pub sigmask: Option<u64>,
     /// The guest's auxiliary vector as built for it, served as
     /// `/proc/self/auxv`.
     pub auxv_ptr: usize,
@@ -209,6 +211,7 @@ impl Config {
             close_fds: false,
             traceme: false,
             exec_fd: None,
+            sigmask: None,
             auxv_ptr: 0,
             auxv_len: 0,
             guest_exe: Buf::new(),
@@ -373,6 +376,8 @@ pub fn init(
             config.traceme = value == b"1";
         } else if let Some(value) = env_value(entry, env::EXEC_FD.as_bytes()) {
             config.exec_fd = descriptor(value);
+        } else if let Some(value) = env_value(entry, env::SIGMASK.as_bytes()) {
+            config.sigmask = signal_mask(value);
         } else if let Some(value) = env_value(entry, env::IDENTITY.as_bytes()) {
             config.identity = Identity::parse(value).ok_or(InitError::BadIdentity)?;
         } else if let Some(value) = env_value(entry, env::GUEST_ENV.as_bytes()) {
@@ -439,6 +444,20 @@ pub fn set_auxv(ptr: usize, len: usize) {
     let config = unsafe { &mut *config };
     config.auxv_ptr = ptr;
     config.auxv_len = len;
+}
+
+fn signal_mask(value: &[u8]) -> Option<u64> {
+    if value.is_empty() {
+        return None;
+    }
+    let mut mask: u64 = 0;
+    for &digit in value {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        mask = mask.checked_mul(10)?.checked_add(u64::from(digit - b'0'))?;
+    }
+    Some(mask)
 }
 
 fn descriptor(value: &[u8]) -> Option<i32> {

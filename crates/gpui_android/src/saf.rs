@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use android_activity::AndroidApp;
 use anyhow::{Context as _, Result};
 use futures::channel::oneshot;
-use jni::{JavaVM, objects::JObject, objects::JString};
+use jni::objects::{JObject, JString};
 
 type PendingPathsSender = oneshot::Sender<Result<Option<Vec<PathBuf>>>>;
 type PendingPathSender = oneshot::Sender<Result<Option<PathBuf>>>;
@@ -34,10 +34,7 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 
 /// Launch `ACTION_OPEN_DOCUMENT_TREE` and resolve the sender with the
 /// picked tree path, or `Ok(None)` if the user cancelled.
-pub(crate) fn pick_folder(
-    android_app: &AndroidApp,
-    sender: PendingPathsSender,
-) {
+pub(crate) fn pick_folder(android_app: &AndroidApp, sender: PendingPathsSender) {
     log::info!("saf: pick_folder requested");
     set_pending(Pending::Paths(sender), android_app, "launchOpenTree");
 }
@@ -96,36 +93,29 @@ fn send_cancel(p: Option<Pending>) {
 
 fn call_void_method(android_app: &AndroidApp, method: &str) -> Result<()> {
     log::info!("saf: calling MainActivity.{method}()");
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    env.call_method(&activity, method, "()V", &[])?;
-    log::info!("saf: MainActivity.{method}() returned");
-    Ok(())
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        env.call_method(activity, method, "()V", &[])?;
+        log::info!("saf: MainActivity.{method}() returned");
+        Ok(())
+    })
 }
 
-fn launch_create_document(
-    android_app: &AndroidApp,
-    suggested_name: Option<&str>,
-) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let name = env.new_string(suggested_name.unwrap_or("untitled"))?;
-    env.call_method(
-        &activity,
-        "launchCreateDocument",
-        "(Ljava/lang/String;)V",
-        &[(&name).into()],
-    )?;
-    Ok(())
+fn launch_create_document(android_app: &AndroidApp, suggested_name: Option<&str>) -> Result<()> {
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let name = env.new_string(suggested_name.unwrap_or("untitled"))?;
+        env.call_method(
+            activity,
+            "launchCreateDocument",
+            "(Ljava/lang/String;)V",
+            &[(&name).into()],
+        )?;
+        Ok(())
+    })
 }
 
 /// Called from MainActivity's ActivityResultLauncher callback.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_MainActivity_onPickerResult<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_MainActivity_onPickerResult<'local>(
     mut env: jni::JNIEnv<'local>,
     _activity: JObject<'local>,
     uri_string: JString<'local>,
@@ -154,14 +144,10 @@ fn handle_tree_result(uri: &str) -> Result<Option<PathBuf>> {
     if uri.is_empty() {
         return Ok(None);
     }
-    if let Some(rest) =
-        uri.strip_prefix("content://com.android.externalstorage.documents/tree/")
-    {
+    if let Some(rest) = uri.strip_prefix("content://com.android.externalstorage.documents/tree/") {
         return Ok(Some(decode_storage_segment(rest)?));
     }
-    if let Some(rest) =
-        uri.strip_prefix("content://com.zdroid.documents/tree/")
-    {
+    if let Some(rest) = uri.strip_prefix("content://com.zdroid.documents/tree/") {
         return Ok(Some(decode_zed_segment(rest)?));
     }
     Err(anyhow::anyhow!("unsupported tree URI authority: {uri}"))
@@ -176,9 +162,7 @@ fn handle_document_result(uri: &str) -> Result<Option<PathBuf>> {
     {
         return Ok(Some(decode_storage_segment(rest)?));
     }
-    if let Some(rest) =
-        uri.strip_prefix("content://com.zdroid.documents/document/")
-    {
+    if let Some(rest) = uri.strip_prefix("content://com.zdroid.documents/document/") {
         return Ok(Some(decode_zed_segment(rest)?));
     }
     Err(anyhow::anyhow!("unsupported document URI authority: {uri}"))
@@ -204,11 +188,7 @@ fn decode_storage_segment(segment: &str) -> Result<PathBuf> {
     } else {
         PathBuf::from(format!("/storage/{volume}"))
     };
-    Ok(if rel.is_empty() {
-        root
-    } else {
-        root.join(rel)
-    })
+    Ok(if rel.is_empty() { root } else { root.join(rel) })
 }
 
 fn percent_decode(s: &str) -> String {
@@ -217,10 +197,7 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (
-                hex_value(bytes[i + 1]),
-                hex_value(bytes[i + 2]),
-            ) {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
                 out.push((hi << 4) | lo);
                 i += 3;
                 continue;

@@ -75,10 +75,10 @@ A device that runs debug builds carries the debug certificate, and the release-s
 - [ ] **Open Project** from the welcome screen pops the SAF picker. Pick a folder, project loads.
 - [ ] **Clone Repository** from the welcome screen pops the URL modal. Submit a small public repo URL. Toast appears with Cancel button. Clone completes, project opens.
 - [ ] Open a folder on `/sdcard/`. Yellow Move chip appears in the title bar. Tap, confirm Copy. Toast with Cancel button shows. Cancel mid-copy: dst at `~/projects/<name>` is removed cleanly.
-- [ ] On a wiped install (`adb shell pm clear com.zdroid`; never on a device whose rootfs you want to keep), the first launch extracts the rootfs behind the splash (`adb logcat -d | grep runtime_setup` shows `rootfs installed from the bundled image`), opens the All files access toggle for Zdroid, asks to allow notifications once the first child starts, the "Installing git and certificates" notification completes, and Settings → Android Runtime names the installed image.
+- [ ] On a wiped install (`adb shell pm clear com.zdroid`; never on a device whose rootfs you want to keep), the first launch extracts the rootfs behind the splash (`adb logcat -d | grep runtime_setup` shows `rootfs installed from the bundled image`), opens the All files access toggle for Zdroid, asks to allow notifications once the first child starts, and the "Installing git, the SSH client and certificates" notification completes.
 - [ ] On that same wiped install, in the integrated terminal, the README's commands exactly as a new user types them: `apt install -y nodejs npm`, then `npm install -g @anthropic-ai/claude-code`, then `claude --version`. No question may appear on the way (a debconf menu is a seed the installer is missing, not something to answer), and `claude` must resolve in a fresh terminal. This cannot be done on the emulator (its surface hangs after the first paint) and a dev device's tuned rootfs does not count: tzdata, node and npm being present there is what hid the time zone menu from the 0.4.0 smoke.
 - [ ] `pwd` in the terminal prints the directory, not `.` with a `getcwd` error, both under a project and after `cd /usr` (the kernel's spelling of the files dir must match the engine's).
-- [ ] Over the previous release, `files/rootfs` is untouched, `readlink files/zd-runtime/bash` points at the new `/data/app/~~...` loader, and no `files/usr` or `files/bin/zd-exec` remains.
+- [ ] Over the previous release, `files/rootfs` and the home folder are untouched and `readlink files/zd-runtime/bash` points at the new `/data/app/~~...` loader.
 - [ ] `zdroid runtime: engine self test` from the command palette passes every step.
 - [ ] Integrated terminal opens as `root@zdroid`. `apt install -y python3 && python3 -c 'import os; print(os.getcwd())'` prints the project dir.
 - [ ] `apt install -y nodejs npm && npm install -g @anthropic-ai/claude-code && claude` runs, claude responds.
@@ -159,7 +159,7 @@ gh release create "$VERSION" \
   "/tmp/zdroid-release-build/Zdroid-${VERSION#v}.apk"
 ```
 
-`--latest` is intentional — every new release should be the latest entry on the public page. The bootstrap and spawnd assets of the adapter era stay published as pre-releases for history; nothing new is hosted besides the APK.
+`--latest` is intentional — every new release should be the latest entry on the public page. Nothing is hosted besides the APK.
 
 ### 8. Verify the public release works for anonymous users
 

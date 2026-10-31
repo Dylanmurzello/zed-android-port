@@ -5,10 +5,8 @@
 //! child of the app process, and Android treats an app's children as
 //! "phantom processes": once the app is cached (not visible, no foreground
 //! service) the phantom process killer stops them and the low-memory
-//! killer takes the app itself early. The chroot adapter never saw this
-//! because the root daemon forked its children; the rootfs engine's
-//! children are ours. A foreground service holds the process out of the
-//! cached state for as long as children exist.
+//! killer takes the app itself early. A foreground service holds the
+//! process out of the cached state for as long as children exist.
 //!
 //! Android mounts `/proc` with `hidepid=invisible`, so an app sees only
 //! the processes of its own uid: itself and its descendants. That makes
@@ -16,15 +14,17 @@
 //! every spawn path (the command bridge, PTY shells, tools the children
 //! start themselves) and cheap to read, a few entries per scan.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread::Thread;
 use std::time::{Duration, Instant};
 
 use android_activity::AndroidApp;
 use anyhow::{Context as _, Result};
-use jni::{JNIEnv, JavaVM, objects::JClass, objects::JObject};
+use jni::{JNIEnv, objects::JClass};
 
-/// How often the process table is read while the app runs.
+/// How often the process table is read. The scan runs on its own thread,
+/// so it never wakes the main loop.
 const SCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// How long the service outlives the last child, so a language server
 /// restart or a new terminal does not bounce the notification.
@@ -32,36 +32,41 @@ const STOP_DEBOUNCE: Duration = Duration::from_secs(30);
 /// Time given to SIGTERM before SIGKILL at quit.
 const TERMINATE_GRACE: Duration = Duration::from_millis(200);
 const TERMINATE_POLL: Duration = Duration::from_millis(20);
+/// No push before this long after a failed one: Android 12+ refuses a
+/// foreground service start from the background, and retrying every scan
+/// would only repeat the exception.
+const RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 static KEEP_AWAKE: AtomicBool = AtomicBool::new(false);
+/// Set at quit, so the scanner doesn't restart the service while the
+/// children are being terminated.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+static SCANNER: OnceLock<Thread> = OnceLock::new();
 
 /// Mirror of `android_runtime.keep_awake`: hold a partial wake lock for
 /// the service's lifetime so builds and indexing continue with the screen
 /// off. Pushed from the app's settings observer.
 pub fn set_keep_awake(enabled: bool) {
-    KEEP_AWAKE.store(enabled, Ordering::Release);
+    if KEEP_AWAKE.swap(enabled, Ordering::AcqRel) != enabled
+        && let Some(scanner) = SCANNER.get()
+    {
+        scanner.unpark();
+    }
 }
 
 struct ServiceState {
-    last_scan: Option<Instant>,
     idle_since: Option<Instant>,
     /// `(active, keep_awake)` as last pushed to the Activity; `None` until
     /// the first push.
     pushed: Option<(bool, bool)>,
-    /// No push before this instant after a failed one: Android 12+ refuses
-    /// a foreground service start from the background, and retrying every
-    /// scan would only repeat the exception.
     retry_after: Option<Instant>,
 }
 
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState {
-    last_scan: None,
     idle_since: None,
     pushed: None,
     retry_after: None,
 });
-
-const RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
 fn service_state() -> std::sync::MutexGuard<'static, ServiceState> {
     match SERVICE.lock() {
@@ -70,28 +75,45 @@ fn service_state() -> std::sync::MutexGuard<'static, ServiceState> {
     }
 }
 
-/// Reconcile the foreground service with the process tree. Called from the
-/// platform loop every tick; reads `/proc` every [`SCAN_INTERVAL`] and
-/// calls into the Activity only on a transition.
-pub(crate) fn tick(android_app: &AndroidApp) {
+/// Starts the thread that keeps the foreground service in step with the
+/// process tree. Later calls, when the Activity is recreated, do nothing.
+pub(crate) fn start(android_app: &AndroidApp) {
+    if SCANNER.get().is_some() {
+        return;
+    }
+    let android_app = android_app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("runtime-service".into())
+        .spawn(move || {
+            loop {
+                reconcile(&android_app);
+                std::thread::park_timeout(SCAN_INTERVAL);
+            }
+        });
+    match spawned {
+        Ok(handle) => {
+            SCANNER.set(handle.thread().clone()).ok();
+        }
+        Err(error) => log::error!("runtime_service: cannot start the scanner: {error}"),
+    }
+}
+
+/// Reads the process table and calls into the Activity only on a
+/// transition.
+fn reconcile(android_app: &AndroidApp) {
+    if SHUTTING_DOWN.load(Ordering::Acquire) {
+        return;
+    }
     let now = Instant::now();
     let keep_awake = KEEP_AWAKE.load(Ordering::Acquire);
     let mut state = service_state();
-    let due = state
-        .last_scan
-        .is_none_or(|last| now.duration_since(last) >= SCAN_INTERVAL);
     let was_active = state.pushed.is_some_and(|(active, _)| active);
-    let active = if due {
-        state.last_scan = Some(now);
-        if descendants().iter().any(|process| process.is_live()) {
-            state.idle_since = None;
-            true
-        } else {
-            let idle_since = *state.idle_since.get_or_insert(now);
-            was_active && now.duration_since(idle_since) < STOP_DEBOUNCE
-        }
+    let active = if descendants().iter().any(Process::is_live) {
+        state.idle_since = None;
+        true
     } else {
-        was_active
+        let idle_since = *state.idle_since.get_or_insert(now);
+        was_active && now.duration_since(idle_since) < STOP_DEBOUNCE
     };
     let wanted = (active, keep_awake);
     if state.pushed == Some(wanted) || (!active && state.pushed.is_none()) {
@@ -117,6 +139,7 @@ pub(crate) fn tick(android_app: &AndroidApp) {
 /// exits, since `std::process::exit` runs no destructors and the kernel
 /// reparents orphans to init, where an idle language server would live on.
 pub(crate) fn shutdown(android_app: &AndroidApp) {
+    SHUTTING_DOWN.store(true, Ordering::Release);
     let mut state = service_state();
     if state.pushed.is_some_and(|(active, _)| active)
         && let Err(error) = set_runtime_service(android_app, false, false)
@@ -230,62 +253,42 @@ fn signal(pid: i32, signal: i32) {
 
 /// `MainActivity.setRuntimeServiceActive(active, keepAwake)`.
 fn set_runtime_service(android_app: &AndroidApp, active: bool, keep_awake: bool) -> Result<()> {
-    let (vm, activity) = activity(android_app)?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    env.call_method(
-        &activity,
-        "setRuntimeServiceActive",
-        "(ZZ)V",
-        &[active.into(), keep_awake.into()],
-    )
-    .context("call MainActivity.setRuntimeServiceActive")?;
+    let applied = crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(
+                activity,
+                "setRuntimeServiceActive",
+                "(ZZ)Z",
+                &[active.into(), keep_awake.into()],
+            )
+            .context("call MainActivity.setRuntimeServiceActive")?
+            .z()?)
+    })?;
+    anyhow::ensure!(applied, "Android refused to start the runtime service");
     Ok(())
 }
 
 /// Whether the user already exempted the app from battery optimization.
 pub fn ignoring_battery_optimizations() -> Result<bool> {
     let android_app = crate::updater::android_app()?;
-    let (vm, activity) = activity(android_app)?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let ignoring = env
-        .call_method(&activity, "isIgnoringBatteryOptimizations", "()Z", &[])
-        .context("call MainActivity.isIgnoringBatteryOptimizations")?
-        .z()?;
-    Ok(ignoring)
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "isIgnoringBatteryOptimizations", "()Z", &[])
+            .context("call MainActivity.isIgnoringBatteryOptimizations")?
+            .z()?)
+    })
 }
 
 /// Open the system dialog that exempts the app from battery optimization.
 /// Returns `true` when the dialog opened or the exemption already holds.
 pub fn request_battery_exemption() -> Result<bool> {
     let android_app = crate::updater::android_app()?;
-    let (vm, activity) = activity(android_app)?;
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread")?;
-    let opened = env
-        .call_method(&activity, "requestIgnoreBatteryOptimizations", "()Z", &[])
-        .context("call MainActivity.requestIgnoreBatteryOptimizations")?
-        .z()?;
-    Ok(opened)
-}
-
-fn activity(android_app: &AndroidApp) -> Result<(JavaVM, JObject<'static>)> {
-    let vm_ptr = android_app.vm_as_ptr();
-    let activity_ptr = android_app.activity_as_ptr();
-    anyhow::ensure!(
-        !vm_ptr.is_null() && !activity_ptr.is_null(),
-        "AndroidApp vm/activity pointer is null"
-    );
-    // SAFETY: both pointers come from android-activity and stay valid for
-    // the Activity's lifetime; the JObject is a borrowed reference that is
-    // never deleted here.
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as _) }.context("JavaVM::from_raw")?;
-    let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-    Ok((vm, activity))
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        Ok(env
+            .call_method(activity, "requestIgnoreBatteryOptimizations", "()Z", &[])
+            .context("call MainActivity.requestIgnoreBatteryOptimizations")?
+            .z()?)
+    })
 }
 
 /// `MainActivity.onDestroy` calls this before it kills the process, so a

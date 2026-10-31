@@ -181,10 +181,45 @@ fn installs_the_bundled_image() {
     );
     eprintln!("alternatives links checked: {alternatives}");
 
-    // A reset over an existing tree swaps and leaves no .old behind.
-    zdroid_runtime::install::install(&runtime, &mut open_image(), &["1.1.1.1".into()], "Etc/UTC", &mut sink)
+    // The guest's home is the app's home folder, outside the rootfs.
+    let home = runtime.workspace_root();
+    let passwd = fs::read_to_string(rootfs.join("etc/passwd")).unwrap();
+    let root_entry = passwd
+        .lines()
+        .find(|line| line.starts_with("root:"))
         .unwrap();
+    assert_eq!(root_entry.split(':').nth(5), home.to_str());
+    assert!(
+        fs::read_to_string(rootfs.join("etc/gitconfig"))
+            .unwrap()
+            .contains("directory = *")
+    );
+    for name in [".bashrc", ".profile", ".lldbinit"] {
+        assert!(home.join(name).is_file(), "{name} seeded into the home");
+    }
+    assert!(home.join(".cargo/bin").is_dir());
+
+    // A reset over an existing tree swaps, leaves the home and its files as
+    // they are, and leaves no .old behind.
+    fs::write(home.join(".bash_history"), "ls\n").unwrap();
+    fs::write(home.join(".bashrc"), "# mine\n").unwrap();
+    zdroid_runtime::install::install(
+        &runtime,
+        &mut open_image(),
+        &["1.1.1.1".into()],
+        "Etc/UTC",
+        &mut sink,
+    )
+    .unwrap();
     assert!(!rootfs.with_file_name("rootfs.old").exists());
+    assert_eq!(
+        fs::read_to_string(home.join(".bash_history")).unwrap(),
+        "ls\n"
+    );
+    assert_eq!(
+        fs::read_to_string(home.join(".bashrc")).unwrap(),
+        "# mine\n"
+    );
     assert_eq!(
         fs::read_to_string(rootfs.join("etc/resolv.conf")).unwrap(),
         "nameserver 1.1.1.1\n"

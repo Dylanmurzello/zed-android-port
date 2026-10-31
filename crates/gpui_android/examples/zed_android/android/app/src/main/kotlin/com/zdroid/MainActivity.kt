@@ -3,10 +3,17 @@ package com.zdroid
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.app.ActivityManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.graphics.drawable.Animatable
+import android.hardware.input.InputManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -24,17 +31,18 @@ import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
+import java.security.MessageDigest
 
 /// SAF flows go through legacy `startActivityForResult` instead of
 /// `ActivityResultLauncher` because `ActivityResultRegistry` silently
@@ -66,7 +74,7 @@ class MainActivity : GameActivity(), ImeHost {
 
     /// Focusable invisible view that owns the IME `InputConnection`.
     /// Installed in `onCreate`. Rust signals show/hide via JNI calls
-    /// to `showIme()` / `hideIme()` on this Activity; those methods
+    /// to `requestIme()` / `hideIme()` on this Activity; those methods
     /// requestFocus on the host and invoke `InputMethodManager`.
     private var imeHostView: ImeHostView? = null
 
@@ -114,30 +122,16 @@ class MainActivity : GameActivity(), ImeHost {
     private var extraKeysLockedMeta: Int = 0
 
     /// Mirrors the IME's visibility from our perspective so repeated
-    /// `showIme()` calls within a single visible-IME session don't
-    /// re-trigger requestFocus / showSoftInput. gpui's paint logic
-    /// fires `set_input_handler` every frame while the editor holds
-    /// text focus (take then set per frame, see
-    /// `crates/gpui/src/window.rs` paint flow), so without this
-    /// flag the IME would receive show / focus events 60+ times per
-    /// second and flicker visibly.
+    /// `requestIme(true)` calls within a single visible-IME session
+    /// (every click into a text field makes one) don't re-trigger
+    /// requestFocus / showSoftInput.
     private var imeShown: Boolean = false
 
-    /// Set right before we call `imm.hideSoftInputFromWindow` from
-    /// our own code (hideIme / toggleIme). The WindowInsets listener
-    /// consults this to distinguish "we asked the IME to close"
-    /// (don't mark manual-dismiss) from "user closed it via Back /
-    /// swipe" (mark manual-dismiss so auto-show stays suppressed).
+    /// Set right before we hide the IME from our own code (hideIme /
+    /// requestIme). The WindowInsets listener consults this to log
+    /// "we asked the IME to close" apart from "user closed it via Back
+    /// / swipe".
     private var programmaticHidePending: Boolean = false
-
-    /// Set right before we initiate a programmatic show. Helps the
-    /// WindowInsetsListener distinguish the steady-state-0 inset
-    /// (no IME) from a steady-state-0 inset WHILE we're mid-show
-    /// (animation hasn't started or just started). Without this the
-    /// listener fires "user dismissed" between our show call and
-    /// the first positive inset, resetting our state. Cleared once
-    /// the inset goes positive (confirmed show).
-    private var programmaticShowPending: Boolean = false
 
     /// Last ime-bottom inset value observed by the listener.
     /// Listener fires on every inset change; we only treat the
@@ -147,10 +141,69 @@ class MainActivity : GameActivity(), ImeHost {
     /// with a hide.
     private var lastImeInsetBottom: Int = 0
 
+    /// Bumped by every show or hide request, so a [confirmImeShown] check
+    /// from an earlier show can tell it's stale.
+    private var imeRequestGeneration: Int = 0
+
+    /// The programming extras row covers the window above the keyboard,
+    /// so it counts as obscured too.
+    private val insetsReporter = WindowInsetsReporter(
+        PRIMARY_WINDOW_ID,
+        keyboardAccessoryHeight = {
+            extraKeysView?.takeIf { it.visibility == View.VISIBLE }?.height ?: 0
+        },
+        // Edge-to-edge (setDecorFitsSystemWindows=false) means the OS
+        // does NOT auto-translate content above the IME — the IME draws
+        // over the bottom of our surface. The row, gravity=BOTTOM, would
+        // sit behind the keyboard, so it moves up by the keyboard's
+        // height. This follows every frame of the keyboard's slide: the
+        // insets listener only gets the slide's end state, before it
+        // starts, and gpui's layout ends at the row's top edge.
+        onImeBottomChanged = { imeBottom ->
+            extraKeysView?.translationY = -imeBottom.toFloat()
+        },
+    )
+
+    /// After a show request, clears [imeShown] if the IME never appeared,
+    /// so the status bar keyboard button doesn't offer to hide a keyboard
+    /// that isn't there.
+    private fun confirmImeShown(host: ImeHostView) {
+        val generation = ++imeRequestGeneration
+        host.checkImeShownLater {
+            if (generation != imeRequestGeneration || !imeShown) return@checkImeShownLater
+            Log.i("zdroid_ime", "IME didn't appear after the show request, marking it hidden")
+            setImeShown(false)
+        }
+    }
+
+    /// Keeps [PhysicalKeyboard.blocksIme], and Rust's copy of it, current
+    /// for every window: the status bar hides its keyboard button while a
+    /// physical keyboard blocks the on-screen one.
+    private val inputDeviceListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) = refreshPhysicalKeyboard()
+        override fun onInputDeviceRemoved(deviceId: Int) = refreshPhysicalKeyboard()
+        override fun onInputDeviceChanged(deviceId: Int) = refreshPhysicalKeyboard()
+    }
+
+    /// Android's "show on-screen keyboard while a physical keyboard is
+    /// connected" setting, changed in the system's language and input
+    /// settings.
+    private val showImeWithHardKeyboardObserver =
+        object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) = refreshPhysicalKeyboard()
+        }
+
+    private fun refreshPhysicalKeyboard() {
+        if (!PhysicalKeyboard.refresh(this)) return
+        val blocksIme = PhysicalKeyboard.blocksIme
+        Log.i("zdroid_ime", "physical keyboard blocks the on-screen one: $blocksIme")
+        NativeBridge.nativeSetPhysicalKeyboardBlocksIme(blocksIme)
+    }
+
     /// Setter that wraps the `imeShown` mutation and ALSO pushes
     /// the value into Rust's `SOFT_KEYBOARD_VISIBLE` mirror. Every
     /// site that flips `imeShown` should go through here so the
-    /// pane keyboard button's `toggle_state` highlight stays
+    /// status bar keyboard button's `toggle_state` highlight stays
     /// synchronized with the OS-side IME visibility.
     private fun setImeShown(shown: Boolean) {
         if (imeShown != shown) {
@@ -181,12 +234,31 @@ class MainActivity : GameActivity(), ImeHost {
                     android.view.Gravity.BOTTOM,
                 )
                 addContentView(view, params)
-                view.translationY = -lastImeInsetBottom.toFloat()
+                view.translationY = -insetsReporter.imeBottom.toFloat()
+                // The row has no height until its first layout, and its
+                // height follows the display's density and font scale.
+                view.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                    if (bottom - top != oldBottom - oldTop) insetsReporter.refresh()
+                }
                 extraKeysView = view
             }
             extraKeysView?.visibility = View.VISIBLE
         } else {
             extraKeysView?.visibility = View.GONE
+        }
+        insetsReporter.refresh()
+    }
+
+    /// Zed's "prevent idle sleep", requested while an agent works. Called
+    /// from `gpui_android::platform` via JNI.
+    @Suppress("unused")
+    fun setKeepScreenOn(on: Boolean) {
+        runOnUiThread {
+            if (on) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
         }
     }
 
@@ -210,53 +282,15 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    /// Bring up the soft keyboard. Called from Rust via JNI on the
-    /// edge transition into text-input focus. The first call within
-    /// a focus session does the real work; repeats are filtered.
-    /// Suppressed entirely when the user has manually dismissed the
-    /// IME (see [toggleIme] + the WindowInsets listener installed
-    /// in [onCreate]) — the user can re-summon via the pane keyboard
-    /// toggle button or by tapping into a different text target
-    /// (which triggers `restartImeForTarget` and clears the flag).
-    @Suppress("unused")
-    fun showIme() {
-        runOnUiThread {
-            val host = imeHostView ?: run {
-                Log.w("zdroid_ime", "showIme: imeHostView is null, skipping")
-                return@runOnUiThread
-            }
-            if (imeManuallyDismissed) {
-                Log.i("zdroid_ime", "showIme suppressed (user dismissed)")
-                return@runOnUiThread
-            }
-            Log.i(
-                "zdroid_ime",
-                "showIme called imeShown=$imeShown hostFocused=${host.isFocused}"
-            )
-            if (imeShown) return@runOnUiThread
-            if (!host.isFocused) host.requestFocus()
-            // Use WindowInsetsControllerCompat for the show path too
-            // (matches hide). `imm.showSoftInput` requires focused
-            // text-input AND has a documented "first call silently
-            // fails" race when window state is mid-transition — the
-            // observed symptom where toggleIme:showing was followed
-            // by WindowInsets immediately reporting IME hidden because
-            // imm.show didn't actually take effect. InsetsController
-            // routes through the OS-level inset animation directly.
-            programmaticShowPending = true
-            androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                .show(androidx.core.view.WindowInsetsCompat.Type.ime())
-            setImeShown(true)
-        }
-    }
-
     /// Dismiss the soft keyboard. Called from Rust on the edge
-    /// transition out of text-input focus.
+    /// transition out of text-input focus, and when a physical keyboard
+    /// connects.
     @Suppress("unused")
     fun hideIme() {
         runOnUiThread {
             Log.i("zdroid_ime", "hideIme called imeShown=$imeShown")
             if (!imeShown) return@runOnUiThread
+            imeRequestGeneration++
             programmaticHidePending = true
             // Use WindowInsetsControllerCompat over
             // `imm.hideSoftInputFromWindow` — the Android docs flag
@@ -272,52 +306,36 @@ class MainActivity : GameActivity(), ImeHost {
         }
     }
 
-    /// True when the user explicitly dismissed the IME (Back press,
-    /// IME-bar swipe, etc.) and we should suppress the auto-show
-    /// that fires on every text-input focus transition. Cleared by:
-    /// - [toggleIme] when the user taps the pane keyboard button
-    ///   to bring the IME back up,
-    /// - any `restartImeForTarget` call (focus moved to a different
-    ///   input target — fresh context, fresh auto-show budget).
-    @Volatile
-    private var imeManuallyDismissed: Boolean = false
-
-    fun isImeManuallyDismissed(): Boolean = imeManuallyDismissed
-
-    fun setImeManuallyDismissed(dismissed: Boolean) {
-        if (imeManuallyDismissed != dismissed) {
-            Log.i("zdroid_ime", "imeManuallyDismissed: $imeManuallyDismissed -> $dismissed")
-            imeManuallyDismissed = dismissed
-        }
-    }
-
-    /// Toggle the IME. If currently shown, hides it AND marks the
-    /// IME as manually-dismissed so the auto-show on text-input
-    /// focus is suppressed until the user re-toggles. If currently
-    /// hidden, shows the IME and clears the manually-dismissed
-    /// flag so subsequent focuses behave normally again.
+    /// Show or hide the IME on request, through gpui's
+    /// `request_virtual_keyboard` and `dismiss_virtual_keyboard`: a click
+    /// into a text field, a single-line editor gaining focus, or the status
+    /// bar keyboard button.
     @Suppress("unused")
-    fun toggleIme() {
+    fun requestIme(show: Boolean) {
         runOnUiThread {
             val host = imeHostView ?: return@runOnUiThread
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                as android.view.inputmethod.InputMethodManager
-            if (imeShown) {
-                Log.i("zdroid_ime", "toggleIme: hiding (manual dismiss)")
-                programmaticHidePending = true
-                // Modern hide path — see hideIme rationale. Sidesteps
-                // the `hideSoftInputFromWindow` first-call race that
-                // produced the two-taps-to-dismiss regression.
-                androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-                    .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
-                setImeShown(false)
-                setImeManuallyDismissed(true)
+            if (show) {
+                Log.i("zdroid_ime", "requestIme: showing imeShown=$imeShown")
+                if (!imeShown) {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
+                        as android.view.inputmethod.InputMethodManager
+                    if (!host.isFocused) host.requestFocus()
+                    imm.showSoftInput(host, 0)
+                    setImeShown(true)
+                    confirmImeShown(host)
+                }
             } else {
-                Log.i("zdroid_ime", "toggleIme: showing (clearing manual-dismiss)")
-                if (!host.isFocused) host.requestFocus()
-                imm.showSoftInput(host, 0)
-                setImeShown(true)
-                setImeManuallyDismissed(false)
+                Log.i("zdroid_ime", "requestIme: hiding imeShown=$imeShown")
+                if (imeShown) {
+                    imeRequestGeneration++
+                    programmaticHidePending = true
+                    // Modern hide path — see hideIme rationale. Sidesteps
+                    // the `hideSoftInputFromWindow` first-call race that
+                    // produced the two-taps-to-dismiss regression.
+                    androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                        .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
+                    setImeShown(false)
+                }
             }
         }
     }
@@ -386,10 +404,6 @@ class MainActivity : GameActivity(), ImeHost {
                 "restartImeForTarget: switching mode ${currentImeMode} -> $modeId"
             )
             currentImeMode = modeId
-            // Focus moved to a different input target — fresh
-            // auto-show budget. Any prior manual dismiss applied
-            // to the outgoing target, not this one.
-            setImeManuallyDismissed(false)
             val host = imeHostView ?: return@runOnUiThread
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
                 as android.view.inputmethod.InputMethodManager
@@ -451,6 +465,15 @@ class MainActivity : GameActivity(), ImeHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installSplashOverlay()
+        ZdRuntimeService.startIfBackgroundMode(this)
+        watchDnsServers()
+        // Reopening from Recents brings back the intent that started the
+        // task, which may be an earlier "Open with".
+        val relaunched = savedInstanceState != null ||
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (!relaunched) {
+            OpenedFiles.handle(this, intent)
+        }
         // Edge-to-edge: tell the OS we want to draw behind status / nav bars
         // and the cutout area, so gpui's surface gets the full display
         // bounds. Without this, GameActivity respects system insets and the
@@ -474,19 +497,25 @@ class MainActivity : GameActivity(), ImeHost {
         // gpui's text input flows through `ZdroidInputConnection`. Lives
         // alongside GameActivity's SurfaceView; touch dispatch is
         // unaffected (touch goes through the NDK input queue, focus is
-        // independent). MainActivity calls `showIme()` / `hideIme()` to
-        // bring up / dismiss the keyboard when gpui signals
-        // `set_input_handler` / `take_input_handler`.
+        // independent). Rust calls `requestIme()` / `hideIme()` to bring
+        // up / dismiss the keyboard.
         val host = ImeHostView(this)
         addContentView(host, android.view.ViewGroup.LayoutParams(1, 1))
         imeHostView = host
 
+        getSystemService(InputManager::class.java)
+            ?.registerInputDeviceListener(inputDeviceListener, null)
+        contentResolver.registerContentObserver(
+            PhysicalKeyboard.showImeWithHardKeyboardUri,
+            false,
+            showImeWithHardKeyboardObserver,
+        )
+        refreshPhysicalKeyboard()
+
         // Detect when the IME is dismissed by the user (Back press,
         // swipe-down on the keyboard) rather than programmatically by
         // us. Without this, our `imeShown` flag and the OS's actual
-        // visibility drift, and the user-dismiss intent is lost the
-        // next time text-input focus reasserts (auto-show pops the
-        // keyboard back up — exactly the annoyance the user reported).
+        // visibility drift.
         //
         // Mechanism: the `ime()` inset goes from non-zero to zero
         // whenever the IME closes. We compare to `programmaticHidePending`
@@ -500,24 +529,18 @@ class MainActivity : GameActivity(), ImeHost {
             val nowVisible = imeBottom > 0
 
             if (!wasVisible && nowVisible) {
-                // 0 → positive: IME just opened. Confirms a show.
-                programmaticShowPending = false
+                // 0 → positive: IME just opened. Confirms a show, so a
+                // pending `confirmImeShown` check has nothing to correct.
+                imeRequestGeneration++
                 if (!imeShown) setImeShown(true)
                 Log.i("zdroid_ime", "WindowInsets: IME shown (inset bottom=$imeBottom)")
             } else if (wasVisible && !nowVisible) {
                 // positive → 0: IME just closed. Distinguish source.
                 if (programmaticHidePending) {
                     programmaticHidePending = false
-                    Log.i(
-                        "zdroid_ime",
-                        "WindowInsets: IME hidden (programmatic, keeping manual-dismiss flag)"
-                    )
+                    Log.i("zdroid_ime", "WindowInsets: IME hidden (programmatic)")
                 } else {
-                    Log.i(
-                        "zdroid_ime",
-                        "WindowInsets: IME hidden by user (Back / swipe), marking manual-dismiss"
-                    )
-                    setImeManuallyDismissed(true)
+                    Log.i("zdroid_ime", "WindowInsets: IME hidden by user (Back / swipe)")
                 }
                 setImeShown(false)
             }
@@ -527,25 +550,17 @@ class MainActivity : GameActivity(), ImeHost {
             // "user dismissed" on the steady-state-0 reading right
             // after our show call, before the animation had started.
 
-            // Edge-to-edge (setDecorFitsSystemWindows=false) means the
-            // OS does NOT auto-translate content above the IME — the
-            // IME draws over the bottom of our surface. Any view with
-            // gravity=BOTTOM (the ExtraKeysView) would sit at the
-            // screen bottom and be hidden behind the keyboard. Apply
-            // the IME bottom inset as a negative translationY on the
-            // row so it floats just above the keyboard, following the
-            // IME show/hide animation smoothly.
-            extraKeysView?.translationY = -imeBottom.toFloat()
-
             lastImeInsetBottom = imeBottom
+            insetsReporter.onApplyWindowInsets(insets)
             insets
         }
+        insetsReporter.install(host)
 
         // Pointer-capture probe. When the decor view gains focus we ask
         // Android for raw pointer events. The captured listener
         // stringifies every event and forwards it to Rust for logging
-        // only; no synthesis yet. This is here to verify whether Samsung
-        // Book Cover Keyboard's trackpad gesture overlay (which
+        // only; no synthesis yet. This is here to verify whether Samsung's
+        // keyboard-cover trackpad gesture overlay (which
         // collapses two-finger scroll into single-pointer relative
         // motion in non-DeX tablet mode, never firing ACTION_SCROLL)
         // sits above or below the AOSP gesture-recognizer layer that
@@ -582,7 +597,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// of the GameActivity SurfaceView (API 29+). Null on older devices
     /// and during the brief window between Activity create and
     /// pointer-capture acquire.
-    private var cursorOverlay: CursorSurfaceControl? = null
+    private var cursorOverlay: CursorOverlay? = null
 
     /// Desktop-classic auto-hide: cursor disappears on the first
     /// keystroke and reappears on any pointer motion. Tracked so we
@@ -722,10 +737,14 @@ class MainActivity : GameActivity(), ImeHost {
         cursorOverlay = CursorSurfaceControl(this, surfaceView, displaySize)
     }
 
+    /// The surface above the on-screen keyboard and the extras row, where
+    /// gpui lays out; they would hide the cursor below it.
     private fun visibleBounds(): Pair<Float, Float> {
         val sv = findSurfaceView(window.decorView)
         val w = (sv?.width ?: window.decorView.width).toFloat().coerceAtLeast(1f)
-        val h = (sv?.height ?: window.decorView.height).toFloat().coerceAtLeast(1f)
+        val h = ((sv?.height ?: window.decorView.height) - insetsReporter.obscuredBottom)
+            .toFloat()
+            .coerceAtLeast(1f)
         return w to h
     }
 
@@ -847,6 +866,9 @@ class MainActivity : GameActivity(), ImeHost {
             handleCapturedEvent(event)
             return true
         }
+        // Captured events above carry relative motion; only absolute hover
+        // and scroll positions are moved into surface space.
+        offsetEventToSurface(event)
         return super.onGenericMotionEvent(event)
     }
 
@@ -874,9 +896,11 @@ class MainActivity : GameActivity(), ImeHost {
                 var sumRx = 0f
                 var sumRy = 0f
                 val limit = event.pointerCount
+                val rotation = displayRotation()
                 for (i in 0 until limit) {
-                    sumRx += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-                    sumRy += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+                    val (dx, dy) = capturedRelativeDelta(event, i, rotation)
+                    sumRx += dx
+                    sumRy += dy
                 }
                 val (maxX, maxY) = visibleBounds()
                 // Mouse-tuned pointer curve. Under pointer capture Android
@@ -893,7 +917,7 @@ class MainActivity : GameActivity(), ImeHost {
                 cursorOverlay?.move(cursorX, cursorY)
             }
         }
-        forwardCapturedPointer(event)
+        forwardCapturedPointer(PRIMARY_WINDOW_ID, event, cursorX, cursorY)
     }
 
     /// Hide the hardware-pointer cursor sprite when the user shifts
@@ -919,6 +943,42 @@ class MainActivity : GameActivity(), ImeHost {
         return super.dispatchTouchEvent(event)
     }
 
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        offsetEventToSurface(event)
+        return super.onTouchEvent(event)
+    }
+
+    private var lastSurfaceOffsetX = Int.MIN_VALUE
+    private var lastSurfaceOffsetY = Int.MIN_VALUE
+
+    /**
+     * GameActivity forwards input to gpui from the Activity-level
+     * onTouchEvent / onGenericMotionEvent, in window coordinates, while gpui
+     * expects them relative to the SurfaceView. The two differ when the
+     * surface doesn't start at the window's top-left corner, as in DeX
+     * freeform windows, where every click and hover landed off by the
+     * surface's offset. Applied only there, after the view tree has
+     * dispatched the event, so sibling views like the extras row still
+     * hit-test with their own coordinates.
+     */
+    private fun offsetEventToSurface(event: MotionEvent) {
+        val surface = findSurfaceView(window.decorView) ?: return
+        val surfaceLocation = IntArray(2)
+        val decorLocation = IntArray(2)
+        surface.getLocationInWindow(surfaceLocation)
+        window.decorView.getLocationInWindow(decorLocation)
+        val offsetX = surfaceLocation[0] - decorLocation[0]
+        val offsetY = surfaceLocation[1] - decorLocation[1]
+        if (offsetX != lastSurfaceOffsetX || offsetY != lastSurfaceOffsetY) {
+            Log.i("zdroid_input", "surface input origin offset=($offsetX,$offsetY)")
+            lastSurfaceOffsetX = offsetX
+            lastSurfaceOffsetY = offsetY
+        }
+        if (offsetX != 0 || offsetY != 0) {
+            event.offsetLocation(-offsetX.toFloat(), -offsetY.toFloat())
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Key input flips modality to keyboard; central applier
         // hides the sprite. ACTION_DOWN only so auto-repeat doesn't
@@ -928,6 +988,19 @@ class MainActivity : GameActivity(), ImeHost {
             applyCursorVisibility()
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /// A file another app opened while Zdroid runs (`OpenFileActivity`).
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        OpenedFiles.handle(this, intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The setting may have changed while the system's settings were in
+        // front, in case the observer didn't fire.
+        refreshPhysicalKeyboard()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -964,73 +1037,33 @@ class MainActivity : GameActivity(), ImeHost {
         return false
     }
 
-    private fun forwardCapturedPointer(event: MotionEvent) {
-        val n = event.pointerCount
-        val xs = FloatArray(n)
-        val ys = FloatArray(n)
-        val rxs = FloatArray(n)
-        val rys = FloatArray(n)
-        for (i in 0 until n) {
-            xs[i] = event.getX(i)
-            ys[i] = event.getY(i)
-            rxs[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-            rys[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
-        }
-        val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        // `cursorX` / `cursorY` are the canonical cursor position in
-        // physical pixels (decorView coordinate space). Kotlin owns
-        // this because it also has to position `cursorView` at the
-        // same coords; passing it across JNI per event keeps the Rust
-        // side from drifting against the visible sprite.
-        NativeBridge.nativeOnCapturedPointer(
-            event.actionMasked,
-            event.source,
-            event.buttonState,
-            n,
-            xs,
-            ys,
-            rxs,
-            rys,
-            vs,
-            hs,
-            cursorX,
-            cursorY,
-        )
+    /** Backs the Zdroid menu's background-mode toggle. */
+    @Suppress("unused") // called from Rust via JNI
+    fun isBackgroundModeEnabled(): Boolean = ZdRuntimeService.isBackgroundModeEnabled(this)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun setBackgroundModeEnabled(enabled: Boolean) {
+        ZdRuntimeService.setBackgroundModeEnabled(this, enabled)
+        if (enabled) requestNotificationPermissionOnce()
     }
 
-    @Suppress("unused")
-    private fun describeCapturedPointer(event: MotionEvent): String {
-        val sb = StringBuilder()
-        sb.append("act=").append(MotionEvent.actionToString(event.actionMasked))
-        sb.append(" src=0x").append(java.lang.Integer.toHexString(event.source))
-        sb.append(" btn=0x").append(java.lang.Integer.toHexString(event.buttonState))
-        sb.append(" n=").append(event.pointerCount)
-        val pc = event.pointerCount.coerceAtMost(3)
-        for (i in 0 until pc) {
-            sb.append(" p").append(i).append("=(")
-            sb.append("%.1f".format(event.getX(i))).append(",")
-            sb.append("%.1f".format(event.getY(i))).append(" rx=")
-            sb.append("%.2f".format(event.getAxisValue(MotionEvent.AXIS_RELATIVE_X, i))).append(" ry=")
-            sb.append("%.2f".format(event.getAxisValue(MotionEvent.AXIS_RELATIVE_Y, i)))
-            sb.append(" tt=").append(event.getToolType(i))
-            sb.append(")")
-        }
-        val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        if (vs != 0f || hs != 0f) {
-            sb.append(" vscroll=").append("%.2f".format(vs))
-            sb.append(" hscroll=").append("%.2f".format(hs))
-        }
-        return sb.toString()
-    }
+    /** Backs gpui's credential API; see `gpui_android/src/credentials.rs`. */
+    @Suppress("unused") // called from Rust via JNI
+    fun writeCredential(url: String, username: String, password: ByteArray): Boolean =
+        SecureCredentialStore.write(this, url, username, password)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun readCredential(url: String): ByteArray? =
+        SecureCredentialStore.read(this, url)
+
+    @Suppress("unused") // called from Rust via JNI
+    fun deleteCredential(url: String): Boolean =
+        SecureCredentialStore.delete(this, url)
 
     @Suppress("unused") // called from Rust via JNI
     /**
      * Open an HTTPS URL in the user's default browser. Called via JNI from
-     * the Rust side's `cx.open_url(...)`. Empty Android-platform stub before;
-     * fix for the runtime picker's "Get module" button which delegates to
-     * `cx.open_url(SPAWND_RELEASE_URL)`.
+     * the Rust side's `cx.open_url(...)`.
      *
      * Safe to call from any thread; `runOnUiThread` so `startActivity` runs
      * on main. Logs and swallows ActivityNotFoundException (rare on a stock
@@ -1114,8 +1147,8 @@ class MainActivity : GameActivity(), ImeHost {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+: raw /sdcard paths need "All files access", a
             // per-app toggle in system settings rather than a dialog. Open
-            // it once per install; the Android Runtime settings page opens
-            // it again on request.
+            // it once per install; the Android settings page opens it again
+            // on request.
             if (Environment.isExternalStorageManager()) {
                 Log.i(TAG, "requestStoragePermissions: all files access granted")
                 return 1
@@ -1143,6 +1176,35 @@ class MainActivity : GameActivity(), ImeHost {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), REQ_STORAGE_PERMS)
         }
         return 0
+    }
+
+    /// Android's own Clear storage for this app: deletes all of its data and
+    /// ends the process. Backs the clean start that an install from before
+    /// 0.10 needs.
+    @Suppress("unused") // called from Rust via JNI
+    fun clearAppData(): Boolean {
+        val activityManager = getSystemService(ActivityManager::class.java) ?: return false
+        return activityManager.clearApplicationUserData()
+    }
+
+    /// Opens the home folder, `ZedDocumentsProvider`'s root, in Android's
+    /// Files app, where folders can be copied to shared storage.
+    @Suppress("unused") // called from Rust via JNI
+    fun openHomeInFiles(): Boolean {
+        val root = DocumentsContract.buildRootUri(
+            "com.zdroid.documents",
+            File(filesDir, "home").absolutePath,
+        )
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(root, DocumentsContract.Root.MIME_TYPE_ITEM)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return try {
+            startActivity(intent)
+            true
+        } catch (error: ActivityNotFoundException) {
+            Log.w(TAG, "no app opens the documents provider's root", error)
+            false
+        }
     }
 
     /// Open the system "All files access" toggle for this package on
@@ -1174,10 +1236,10 @@ class MainActivity : GameActivity(), ImeHost {
     }
 
     /// Returns Android's currently-active DNS server IPs as a comma-joined
-    /// string. The Rust side writes them to /sdcard/.zed/r in resolv.conf
-    /// format so Bun-compiled CLIs (whose c-ares is patched to read from
-    /// /sdcard/.zed/r) can do DNS without proot. Falls back to empty
-    /// string if no active network — caller layers in public-DNS defaults.
+    /// string, which the Rust side writes to the runtime's
+    /// /etc/resolv.conf at boot ([watchDnsServers] keeps it current). Falls
+    /// back to empty string if no active network — caller layers in
+    /// public-DNS defaults.
     @Suppress("unused") // called from Rust via JNI
     fun getActiveDnsServers(): String {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -1187,6 +1249,33 @@ class MainActivity : GameActivity(), ImeHost {
         return props.dnsServers
             .mapNotNull { it.hostAddress }
             .joinToString(",")
+    }
+
+    private var dnsCallback: ConnectivityManager.NetworkCallback? = null
+
+    /// Reports the default network's DNS servers to Rust whenever they
+    /// change (Wi-Fi to mobile data, a VPN connecting), so the runtime's
+    /// `/etc/resolv.conf` follows Android's. Its programs use glibc's
+    /// resolver, which reads only that file. Android calls back once right
+    /// after registering, with the current servers.
+    private fun watchDnsServers() {
+        val connectivity = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                val servers = linkProperties.dnsServers
+                    .mapNotNull { it.hostAddress }
+                    .joinToString(",")
+                if (servers.isNotEmpty()) {
+                    NativeBridge.nativeDnsServersChanged(servers)
+                }
+            }
+        }
+        try {
+            connectivity.registerDefaultNetworkCallback(callback)
+            dnsCallback = callback
+        } catch (t: Throwable) {
+            Log.w(TAG, "DNS server updates unavailable", t)
+        }
     }
 
     /// Returns the running app's versionName (e.g. "0.2.0"). The in-app
@@ -1210,40 +1299,129 @@ class MainActivity : GameActivity(), ImeHost {
     @Suppress("unused") // called from Rust via JNI
     fun nativeLibraryDir(): String = applicationInfo.nativeLibraryDir ?: ""
 
-    /// Hand a downloaded APK to Android's package installer. Rust
-    /// calls this after the updater finishes writing the APK to
-    /// `cacheDir/updater/zdroid-<tag>.apk`. We wrap the path in a
-    /// FileProvider content:// URI (per the manifest provider
-    /// declaration at `.updater.fileprovider`) so the installer can
-    /// read across the app-private boundary; FLAG_GRANT_READ_URI_PERMISSION
-    /// is what makes that grant explicit.
-    ///
-    /// Returns true on a successful intent dispatch (the installer UI
-    /// will then take over and prompt the user). Returns false if the
-    /// file is missing or the installer can't be started — Rust logs
-    /// the failure but doesn't retry.
+    /// Whether Android lets Zdroid install APKs ("Install unknown apps").
     @Suppress("unused") // called from Rust via JNI
-    fun launchPackageInstaller(apkPath: String): Boolean {
+    fun canInstallUpdates(): Boolean = packageManager.canRequestPackageInstalls()
+
+    /// Opens Zdroid's "Install unknown apps" settings page. When the user
+    /// comes back, `onActivityResult` reports whether they allowed it.
+    @Suppress("unused") // called from Rust via JNI
+    fun requestInstallPermission() {
+        runOnUiThread {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName"),
+            )
+            try {
+                startActivityForResult(intent, REQ_INSTALL_PERMISSION)
+            } catch (t: Throwable) {
+                Log.e(TAG_UPDATE, "Couldn't open the install permission settings", t)
+                NativeBridge.nativeOnInstallPermissionResult(false)
+            }
+        }
+    }
+
+    /// Installs a downloaded update with a PackageInstaller session, which
+    /// Android recommends over handing the APK to the installer in an
+    /// intent. [UpdateInstallReceiver] gets the outcome: Android asks the
+    /// user to confirm, then replaces the app or says why it couldn't.
+    /// Returns null once the session is committed, or why it couldn't be.
+    /// Copies the APK, so Rust calls it off the UI thread.
+    @Suppress("unused") // called from Rust via JNI
+    fun installUpdate(apkPath: String): String? {
         val file = File(apkPath)
         if (!file.exists()) {
-            Log.e(TAG_UPDATE, "launchPackageInstaller: APK missing at $apkPath")
-            return false
+            return "The downloaded APK is missing"
         }
+        if (!isTrustedUpdateApk(file)) {
+            return "The downloaded APK isn't Zdroid signed with this build's key"
+        }
+        val installer = packageManager.packageInstaller
+        var sessionId: Int? = null
         return try {
-            val uri = FileProvider.getUriForFile(
-                this,
-                "com.zdroid.updater.fileprovider",
-                file,
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            // An earlier attempt's session still holds its copy of the APK.
+            UpdateInstallReceiver.end(this)
+            installer.mySessions.forEach { installer.abandonSession(it.sessionId) }
+            val params = PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL
+            ).apply {
+                setAppPackageName(packageName)
+                setSize(file.length())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    setPackageSource(PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE)
+                }
             }
-            startActivity(intent)
+            val id = installer.createSession(params)
+            sessionId = id
+            installer.openSession(id).use { session ->
+                file.inputStream().use { input ->
+                    session.openWrite("zdroid.apk", 0, file.length()).use { output ->
+                        input.copyTo(output)
+                        session.fsync(output)
+                    }
+                }
+                session.commit(UpdateInstallReceiver.begin(this, id))
+            }
+            null
+        } catch (t: Throwable) {
+            Log.e(TAG_UPDATE, "installUpdate failed", t)
+            UpdateInstallReceiver.end(this)
+            sessionId?.let { id -> runCatching { installer.abandonSession(id) } }
+            t.message ?: t.toString()
+        }
+    }
+
+    /// Shows Android's prompt for the update session in flight again.
+    /// Returns false if there's no prompt to show or it couldn't start.
+    @Suppress("unused") // called from Rust via JNI
+    fun showUpdatePrompt(): Boolean {
+        val confirmation = UpdateInstallReceiver.confirmation() ?: return false
+        return try {
+            startActivity(confirmation)
             true
         } catch (t: Throwable) {
-            Log.e(TAG_UPDATE, "launchPackageInstaller dispatch failed", t)
+            Log.e(TAG_UPDATE, "Couldn't show the update prompt", t)
+            false
+        }
+    }
+
+    /// Only hand the system installer an APK for this package, signed by
+    /// the same certificates as the running build. The installer would
+    /// reject a different signer anyway, but a different package would
+    /// install as a separate app.
+    @Suppress("DEPRECATION")
+    private fun isTrustedUpdateApk(file: File): Boolean {
+        return try {
+            // Android 9 leaves signingInfo unset for APK archives, so also
+            // request the legacy signatures as a fallback.
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
+            } else {
+                PackageManager.GET_SIGNATURES
+            }
+            val current = packageManager.getPackageInfo(packageName, flags)
+            val archive = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+                ?: return false
+            if (archive.packageName != packageName) return false
+
+            fun signerDigests(info: android.content.pm.PackageInfo): Set<String> {
+                val signingInfoSigners = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+                val signatures = signingInfoSigners ?: info.signatures.orEmpty()
+                return signatures.map { signature ->
+                    MessageDigest.getInstance("SHA-256")
+                        .digest(signature.toByteArray())
+                        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                }.toSet()
+            }
+
+            val currentSigners = signerDigests(current)
+            currentSigners.isNotEmpty() && currentSigners == signerDigests(archive)
+        } catch (t: Throwable) {
+            Log.e(TAG_UPDATE, "Could not verify update APK", t)
             false
         }
     }
@@ -1252,21 +1430,12 @@ class MainActivity : GameActivity(), ImeHost {
     /// process tree (`gpui_android::runtime_service`) and pushes the
     /// result here on transitions. Starting is idempotent and re-reads
     /// `keepAwake`, so a settings change while active is one more start.
-    @Suppress("unused")
-    fun setRuntimeServiceActive(active: Boolean, keepAwake: Boolean) {
-        val intent = Intent(this, ZdRuntimeService::class.java)
-        try {
-            if (active) {
-                intent.action = ZdRuntimeService.ACTION_START
-                intent.putExtra(ZdRuntimeService.EXTRA_KEEP_AWAKE, keepAwake)
-                ContextCompat.startForegroundService(this, intent)
-                requestNotificationPermissionOnce()
-            } else {
-                stopService(intent)
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG_RUNTIME, "setRuntimeServiceActive($active) failed", t)
-        }
+    /// Returns false when Android refused the start, so Rust retries.
+    @Suppress("unused") // called from Rust via JNI
+    fun setRuntimeServiceActive(active: Boolean, keepAwake: Boolean): Boolean {
+        val applied = ZdRuntimeService.setChildrenActive(this, active, keepAwake)
+        if (active) requestNotificationPermissionOnce()
+        return applied
     }
 
     private var notificationPermissionRequested: Boolean = false
@@ -1274,9 +1443,7 @@ class MainActivity : GameActivity(), ImeHost {
     /// Android 13+ posts no notification, the foreground service's
     /// included, until POST_NOTIFICATIONS is granted. Asked once, the
     /// first time the service starts; the service runs either way, a
-    /// denial only hides its notification. (The targetSdk 28 builds got
-    /// no dialog on One UI 8 and this request came back denied there,
-    /// measured 2026-10-28; from targetSdk 33 it is a real prompt.)
+    /// denial only hides its notification.
     private fun requestNotificationPermissionOnce() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (notificationPermissionRequested) return
@@ -1349,8 +1516,18 @@ class MainActivity : GameActivity(), ImeHost {
     /// the process here guarantees the next launch starts fresh with
     /// zero stale static state.
     override fun onDestroy() {
-        Log.i(TAG, "onDestroy isFinishing=$isFinishing — exiting process for clean restart")
+        Log.i(
+            TAG,
+            "onDestroy isFinishing=$isFinishing isChangingConfigurations=$isChangingConfigurations — exiting process for clean restart",
+        )
         splashHandler.removeCallbacksAndMessages(null)
+        dnsCallback?.let { callback ->
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
+        }
+        dnsCallback = null
+        getSystemService(InputManager::class.java)
+            ?.unregisterInputDeviceListener(inputDeviceListener)
+        contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)
         cursorOverlay?.release()
         cursorOverlay = null
         // A swiped-away task reaches here with the Rust side still alive:
@@ -1389,6 +1566,11 @@ class MainActivity : GameActivity(), ImeHost {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_INSTALL_PERMISSION) {
+            // The settings page always returns RESULT_CANCELED; ask again.
+            NativeBridge.nativeOnInstallPermissionResult(packageManager.canRequestPackageInstalls())
+            return
+        }
         if (requestCode != REQ_OPEN_TREE && requestCode != REQ_CREATE_DOCUMENT) {
             return
         }
@@ -1422,7 +1604,8 @@ class MainActivity : GameActivity(), ImeHost {
         private const val REQ_OPEN_TREE = 0xA1
         private const val REQ_CREATE_DOCUMENT = 0xA2
         private const val REQ_STORAGE_PERMS = 0xA3
-        private const val REQ_POST_NOTIFICATIONS = 0xA4
+        private const val REQ_INSTALL_PERMISSION = 0xA4
+        private const val REQ_POST_NOTIFICATIONS = 0xA5
         private const val PREFS = "zdroid"
         private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
         /// Software cursor side length in dp. Scaled by display

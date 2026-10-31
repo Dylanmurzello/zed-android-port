@@ -32,6 +32,7 @@ pub struct RegistryAgentMetadata {
     pub version: SharedString,
     pub repository: Option<SharedString>,
     pub website: Option<SharedString>,
+    pub license_url: Option<SharedString>,
     pub icon_path: Option<SharedString>,
 }
 
@@ -86,6 +87,10 @@ impl RegistryAgent {
 
     pub fn website(&self) -> Option<&SharedString> {
         self.metadata().website.as_ref()
+    }
+
+    pub fn license_url(&self) -> Option<&SharedString> {
+        self.metadata().license_url.as_ref()
     }
 
     pub fn icon_path(&self) -> Option<&SharedString> {
@@ -396,6 +401,7 @@ async fn build_registry_agents(
             version: entry.version.into(),
             repository: entry.repository.map(Into::into),
             website: entry.website.map(Into::into),
+            license_url: entry.license_url.map(Into::into),
             icon_path,
         };
 
@@ -581,7 +587,8 @@ fn resolve_icon_url(entry: &RegistryEntry) -> Option<String> {
 fn current_platform_key() -> Option<&'static str> {
     let os = if cfg!(target_os = "macos") {
         "darwin"
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        // Android runs Linux builds in its runtime.
         "linux"
     } else if cfg!(target_os = "windows") {
         "windows"
@@ -642,6 +649,8 @@ struct RegistryEntry {
     repository: Option<String>,
     #[serde(default)]
     website: Option<String>,
+    #[serde(default)]
+    license_url: Option<String>,
     #[serde(default)]
     icon: Option<String>,
     distribution: RegistryDistribution,

@@ -8,7 +8,7 @@
 
 Every launch (and reinstall) showed the Restricted Mode trust prompt for
 projects the user had previously trusted. Looked like data was being wiped.
-It wasn't — the SQLite db at `$PREFIX/db/0-dev/db.sqlite` was preserving
+It wasn't — the SQLite db at `<data>/files/db/0-dev/db.sqlite` was preserving
 trust grants correctly across launches (verified mtime + row count) — we
 just weren't loading them.
 

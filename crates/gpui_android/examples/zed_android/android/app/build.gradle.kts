@@ -11,7 +11,7 @@ plugins {
 // gitignored: contributors who clone the repo can still build the debug
 // variant, but a release build that produces a signed APK requires the
 // keystore + properties to be present locally (or provided by CI via
-// env-var injected secrets, future work).
+// a separate signing job in CI).
 val signingPropsFile = file("signing.properties")
 val signingProps = Properties().apply {
     if (signingPropsFile.exists()) {
@@ -106,10 +106,10 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 // zed-askpass-helper bundling.
 //
 // `zed-askpass-helper` is the SSH_ASKPASS relay binary that ssh
-// (running inside the Kali chroot) exec's to prompt the user for a
+// (running in the Ubuntu runtime) exec's to prompt the user for a
 // password via Zed's in-process modal. The helper MUST be statically
-// linked: ssh inside the chroot can't resolve bionic's dynamic linker
-// (`/system/bin/linker64` lives outside the chroot fs), so a
+// linked: the engine loader maps programs into the rootfs, where bionic's
+// dynamic linker (`/system/bin/linker64`) doesn't exist, so a
 // dynamically-linked build fails exec with the shell's misleading
 // "not found".
 //
@@ -123,9 +123,6 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 val askpassHelperDir = file("${workspaceRoot}/crates/gpui_android/examples/zed_android/askpass-helper")
 val askpassHelperBin = file("${askpassHelperDir}/target/aarch64-linux-android/release/zed-askpass-helper")
 val askpassHelperAsset = file("src/main/assets/zed-askpass-helper")
-val askpassHelperSrc = fileTree("${askpassHelperDir}/src") {
-    include("**/*.rs")
-}
 
 tasks.register<Exec>("buildAskpassHelper") {
     description = "Build zed-askpass-helper (static aarch64) via cargo-ndk and stage into assets/."
@@ -141,15 +138,16 @@ tasks.register<Exec>("buildAskpassHelper") {
         "26",
         "build",
         "--release",
+        "--locked",
+        "--target-dir",
+        file("${askpassHelperDir}/target").absolutePath,
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
         environment("ANDROID_NDK_HOME", ndk)
     }
 
-    inputs.files(askpassHelperSrc)
-    inputs.file("${askpassHelperDir}/Cargo.toml")
-    inputs.file("${askpassHelperDir}/.cargo/config.toml")
+    outputs.upToDateWhen { false }
     outputs.file(askpassHelperBin)
 }
 
@@ -180,7 +178,6 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 // different image base, because the engine's seccomp filter only allows
 // syscalls from the fixed window the loader is linked into.
 val zdLoaderDir = file("${workspaceRoot}/crates/zd_loader")
-val zdEngineCoreDir = file("${workspaceRoot}/crates/zd_engine_core")
 val zdLoaderBin = file("${zdLoaderDir}/target/aarch64-linux-android/release/zd_loader")
 val zdLoaderJniLib = file("src/main/jniLibs/arm64-v8a/libzdload.so")
 val ndkHomeForVerify = providers.environmentVariable("ANDROID_NDK_HOME")
@@ -199,6 +196,9 @@ tasks.register<Exec>("buildZdLoader") {
         "26",
         "build",
         "--release",
+        "--locked",
+        "--target-dir",
+        file("${zdLoaderDir}/target").absolutePath,
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
@@ -213,11 +213,9 @@ tasks.register<Exec>("buildZdLoader") {
     environment.remove("RUSTFLAGS")
     environment.remove("CARGO_ENCODED_RUSTFLAGS")
 
-    inputs.files(fileTree("${zdLoaderDir}/src") { include("**/*.rs") })
-    inputs.files(fileTree("${zdEngineCoreDir}/src") { include("**/*.rs") })
-    inputs.file("${zdLoaderDir}/Cargo.toml")
-    inputs.file("${zdLoaderDir}/.cargo/config.toml")
-    inputs.file("${zdEngineCoreDir}/Cargo.toml")
+    // Cargo tracks transitive sources, lockfiles and build flags; a Gradle
+    // source-only check can reuse a loader from a different dependency graph.
+    outputs.upToDateWhen { false }
     outputs.file(zdLoaderBin)
 }
 
@@ -336,6 +334,12 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
+            // Strip the native libraries in the APK, but keep their symbol
+            // tables in build/outputs/native-debug-symbols for symbolizing
+            // profiles and crashes. CI publishes the file with each build.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -344,7 +348,12 @@ android {
 }
 
 dependencies {
-    implementation("androidx.games:games-activity:3.0.5")
+    // android-activity's native GameActivity code is version 4.4 and
+    // supports the 4.0 Java side. 4.4.0's Java side attaches input listeners
+    // to its SurfaceView, which send captured mouse and trackpad events
+    // through native code that leaks them, and it focuses that SurfaceView
+    // on every window focus change, away from the IME host.
+    implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
     // ActivityResultLauncher / ActivityResultContracts for SAF picker.

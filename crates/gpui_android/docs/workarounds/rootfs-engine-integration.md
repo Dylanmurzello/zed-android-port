@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunks 0 to 4
-**Files:** `crates/zdroid_runtime/src/{runtime,install,env}.rs`, `crates/zdroid_runtime/rootfs-image.properties`, `crates/gpui_android/src/runtime_links.rs`, `crates/gpui_util/src/lib.rs` (`BRIDGE_PROGRAM`, `env_root_program_path`), `crates/util/src/command.rs`, `crates/gpui_android/examples/zed_android/src/{lib,runtime_setup}.rs`, `android/app/build.gradle.kts` (`fetchRootfsImage`, `stageRootfsAsset`), `crates/settings_ui/src/page_data.rs` (Android Runtime page)
+**Files:** `crates/zdroid_runtime/src/{runtime,install,env}.rs`, `crates/zdroid_runtime/rootfs-image.properties`, `crates/gpui_android/src/runtime_links.rs`, `crates/zdroid_hooks/src/zdroid_hooks.rs` (`BRIDGE_PROGRAM`, `environment_root_program`), `crates/gpui_android/examples/zed_android/src/{lib,runtime_setup}.rs`, `android/app/build.gradle.kts` (`fetchRootfsImage`, `stageRootfsAsset`), `crates/settings_ui/src/page_data/android.rs` (Android page)
 
 ## Problem
 
@@ -10,10 +10,7 @@ Zed spawns tools the way a desktop does: `Command::new("rust-analyzer")`
 resolved on PATH, or an absolute path under its data dir for the Node and
 language servers it downloads itself. On Android the editor is a bionic
 process in an app sandbox, and the tools are Linux binaries that expect
-glibc, `/usr`, `/etc` and a root user. Three earlier adapters (a
-Termux-style bootstrap of patched packages, a Magisk chroot daemon, an
-intent bridge to the Termux app) each covered part of that and none of
-it cleanly.
+glibc, `/usr`, `/etc` and a root user.
 
 ## Constraint
 
@@ -56,20 +53,35 @@ writeup is the editor side.
   so `apt install` or `cargo install` lands on Zed's PATH within seconds.
   The loader runs the guest program named by `argv[0]`.
 - **The bridge.** `util::command::Command::new` and `gpui_util::
-  new_std_command` rewrite an absolute program under the files dir to
+  new_std_command` (both through `zdroid_hooks::new_std_command`) rewrite an absolute program under the files dir to
   `zdload <program>`, so a downloaded language server or the managed Node
   runs in the rootfs. Entries under the farm and `bin/` are exempt, else
   the loader would open its own link as the guest program.
 - **The environment.** `rootfs-guest-env.md`.
-- **Reset.** Settings → Android Runtime → Reset runtime terminates the
+- **Reset.** Settings → Android → Reset Runtime terminates the
   editor's children (`runtime_service::terminate_descendants`) and
-  extracts the bundled image again over a fresh staging dir; projects
-  and editor state are outside the rootfs and untouched.
-- **Upgrades from the adapter era.** Boot deletes the old bootstrap prefix
-  (`<data>/files/usr`), the `bin/zd-exec` binary and the adapter
-  selection file; the chroot-era editor state under `home/.zed-env` is
-  the user's own settings and is left alone. Farm entries that still
-  point at `../bin/zd-exec` are swept by the farm refresh.
+  extracts the bundled image again over a fresh staging dir; the home
+  folder and editor state are outside the rootfs and untouched.
+- **The home folder.** The guest's home is the app's home folder,
+  `<data>/files/home`: `$HOME` in the guest view and root's entry in the
+  rootfs's `/etc/passwd`, which ssh reads instead of `$HOME`. It holds
+  `projects/`, the `storage/` links into shared storage, dotfiles, SSH keys
+  and per-user toolchains (`~/.cargo`, `~/.local`); the Files app shows it
+  as Zdroid's root. Being outside the rootfs at an identity-mapped path, it
+  survives a reset, and a tool's `getcwd` under `~/projects` reports the
+  path Zed uses. The image's `/root` would be neither: a reset replaces
+  it, and the engine's reverse lookup reports paths under it as
+  `/root/...`, which the editor can't match to its worktrees. The
+  installer gives the folder the image's root `.bashrc` and `.profile`
+  where it has none.
+- **Upgrades from Bootstrap and chroot releases.** They aren't migrated:
+  their programs, and what Zed installed with them, don't run in the
+  rootfs. When boot finds the old prefix (`<data>/files/usr`) or the
+  `bin/zd-exec` bridge, it sets nothing up and restores no session; an
+  empty window asks to clear the app's data, and every other answer quits
+  (`runtime_setup::open_clean_start`,
+  `ActivityManager.clearApplicationUserData`). Open Files lets the user
+  copy the home folder out first.
 
 ## Why not the obvious fix
 
@@ -80,11 +92,6 @@ was a choice with one option. The image is a tenth of the APK, and an
 APK that is complete offline needs no install UI at all. Extraction
 cannot be skipped: the engine needs real files for the kernel to open and
 mmap, an archive cannot be executed in place.
-
-A selection file and a provider trait were the adapter era's shape. With
-one runtime every value in the file is a constant, so the file, the
-`RuntimeId`, the picker and the "legacy type" handling went with the
-adapters; the only state is whether the sentinel exists.
 
 ## Failure mode
 

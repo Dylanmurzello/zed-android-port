@@ -7,10 +7,10 @@ crates/zed/resources/windows/zed.sh text eol=lf
 # Files where conflicts during an upstream Zed merge should auto-resolve to
 # OURS. See UPSTREAM_MERGE.md.
 #
-# Requires per-clone setup (run once after cloning):
-#   git config merge.ours.driver true
-#
-# Without that, `merge=ours` is silently ignored.
+# The `ours` driver applies only when enabled for that one command:
+#   git -c merge.ours.driver=true merge vX.Y.Z
+# Leave it unset otherwise: during rebases, cherry-picks and other merges it
+# silently keeps one side of these files.
 
 # Identity / docs (ONLY files where we have actually authored content
 # different from upstream, verified via
@@ -36,4 +36,7 @@ UPSTREAM_MERGE.md       merge=ours
 # they intentionally use default 3-way merge so upstream improvements
 # flow through.
 crates/gpui_android/**         merge=ours
+crates/zd_engine_core/**       merge=ours
+crates/zd_loader/**            merge=ours
+crates/zdroid_hooks/**         merge=ours
 crates/zdroid_runtime/**       merge=ours

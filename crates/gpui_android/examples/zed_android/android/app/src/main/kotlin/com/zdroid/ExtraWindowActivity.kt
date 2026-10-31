@@ -10,6 +10,7 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -61,7 +62,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     /// Invisible 1x1 [ImeHostView] that owns the IME `InputConnection`
     /// for this Activity's gpui window. Installed in [onCreate]
     /// alongside the SurfaceView; Rust signals show / hide via JNI
-    /// calls to [showIme] / [hideIme] which requestFocus on this view
+    /// calls to [requestIme] / [hideIme] which requestFocus on this view
     /// and invoke `InputMethodManager`.
     private var imeHostView: ImeHostView? = null
 
@@ -75,15 +76,15 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     // `ZdroidInputConnection.commitText` never intercepts.
 
     /// Mirror of the OS IME's visibility from our perspective. Same
-    /// rationale as MainActivity: gpui's `set_input_handler` /
-    /// `take_input_handler` fires per paint, so we filter repeats
-    /// before touching `InputMethodManager`.
+    /// rationale as MainActivity: every click into a text field requests
+    /// the keyboard, so we filter repeats before touching
+    /// `InputMethodManager`.
     private var imeShown: Boolean = false
     private var programmaticHidePending: Boolean = false
-    private var programmaticShowPending: Boolean = false
     private var lastImeInsetBottom: Int = 0
-    @Volatile
-    private var imeManuallyDismissed: Boolean = false
+
+    /// Created in [onCreate], once the window id is known.
+    private var insetsReporter: WindowInsetsReporter? = null
 
     @Volatile
     private var imeTextState: ImeTextState? = null
@@ -118,7 +119,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     /// Hardware-composited cursor sprite. Child SurfaceControl of
     /// `surfaceView` (API 29+). Null on older devices and prior to
     /// first pointer-capture acquire.
-    private var cursorOverlay: CursorSurfaceControl? = null
+    private var cursorOverlay: CursorOverlay? = null
 
     // Cursor modality is the process-wide [InputModality] flag.
     // See `MainActivity` for the longer note; settings/picker
@@ -147,7 +148,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         extraWindowId = intent.getLongExtra(EXTRA_WINDOW_ID, -1L)
         if (extraWindowId < 0L) {
             Log.e(TAG, "onCreate: missing or invalid $EXTRA_WINDOW_ID extra; finishing")
-            finish()
+            finishAndRemoveTask()
             return
         }
         Log.i(TAG, "onCreate windowId=$extraWindowId")
@@ -158,10 +159,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         // through the rest of onCreate would attach a SurfaceView that fires
         // JNI callbacks against a Rust runtime with no matching gpui Window —
         // touches do nothing, no rendering, ghost window. Detect early and
-        // bail. The user can re-open via the main app.
+        // bail, removing the Recents card that brought us back. The user can
+        // re-open via the main app.
         if (!NativeBridge.nativeIsExtraWindowKnown(extraWindowId)) {
             Log.w(TAG, "onCreate windowId=$extraWindowId not known to Rust runtime (resurrection?); finishing")
-            finish()
+            finishAndRemoveTask()
             return
         }
 
@@ -233,6 +235,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             // grant focus on its own.
             isFocusable = true
             isFocusableInTouchMode = true
+            // After keyboard, mouse or trackpad input, Android draws a
+            // translucent highlight over the focused view. This view
+            // fills the window, so the highlight was the whitish tint
+            // these windows still showed after the OPAQUE change above.
+            defaultFocusHighlightEnabled = false
             // Captured-pointer events arrive via the Activity-level
             // `onGenericMotionEvent` override below — same pattern as
             // MainActivity. We don't install an
@@ -253,11 +260,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         addContentView(imeHost, android.view.ViewGroup.LayoutParams(1, 1))
         imeHostView = imeHost
 
-        // Inset-transition listener — same rationale as MainActivity.
-        // Tracks programmatic-vs-user IME dismissals so the
-        // auto-show on text-input focus is correctly suppressed
-        // once the user has manually closed the keyboard in this
-        // window (Back press, swipe-down on the IME bar).
+        val reporter = WindowInsetsReporter(extraWindowId)
+        insetsReporter = reporter
+        // Inset-transition listener — same rationale as MainActivity:
+        // keeps [imeShown] in step when the user closes the keyboard
+        // (Back press, swipe-down on the IME bar).
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(imeHost) { _, insets ->
             val imeBottom = insets.getInsets(
                 androidx.core.view.WindowInsetsCompat.Type.ime()
@@ -265,7 +272,8 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             val wasVisible = lastImeInsetBottom > 0
             val nowVisible = imeBottom > 0
             if (!wasVisible && nowVisible) {
-                programmaticShowPending = false
+                // Confirms a show; see MainActivity.
+                imeRequestGeneration++
                 if (!imeShown) setImeShown(true)
                 Log.i(TAG_IME, "WindowInsets[w=$extraWindowId]: IME shown (inset=$imeBottom)")
             } else if (wasVisible && !nowVisible) {
@@ -273,21 +281,19 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                     programmaticHidePending = false
                     Log.i(TAG_IME, "WindowInsets[w=$extraWindowId]: IME hidden (programmatic)")
                 } else {
-                    Log.i(
-                        TAG_IME,
-                        "WindowInsets[w=$extraWindowId]: IME hidden by user, marking manual-dismiss"
-                    )
-                    setImeManuallyDismissed(true)
+                    Log.i(TAG_IME, "WindowInsets[w=$extraWindowId]: IME hidden by user")
                 }
                 setImeShown(false)
             }
             lastImeInsetBottom = imeBottom
+            reporter.onApplyWindowInsets(insets)
             insets
         }
+        reporter.install(imeHost)
     }
 
     /// Update [imeShown] and push the value into Rust's
-    /// `SOFT_KEYBOARD_VISIBLE` mirror so the pane keyboard button's
+    /// `SOFT_KEYBOARD_VISIBLE` mirror so the status bar keyboard button's
     /// `toggle_state` highlight reflects this window's IME state.
     /// The global atomic represents whichever Activity most recently
     /// transitioned — only one IME can be up across the app at a time,
@@ -299,6 +305,20 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         }
     }
 
+    /// Bumped by every show or hide request; see `MainActivity`.
+    private var imeRequestGeneration: Int = 0
+
+    /// Clears [imeShown] if the IME never appeared after a show request;
+    /// see `MainActivity.confirmImeShown`.
+    private fun confirmImeShown(host: ImeHostView) {
+        val generation = ++imeRequestGeneration
+        host.checkImeShownLater {
+            if (generation != imeRequestGeneration || !imeShown) return@checkImeShownLater
+            Log.i(TAG_IME, "IME[w=$extraWindowId] didn't appear after the show request, marking it hidden")
+            setImeShown(false)
+        }
+    }
+
     /// JNI hook from
     /// `gpui_android::platform::tick_extras_row_enabled`. Kept as a
     /// no-op for extra windows so the Rust-side broadcast that
@@ -307,47 +327,13 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
     @Suppress("unused", "UNUSED_PARAMETER")
     fun setProgrammingExtrasRowEnabled(enabled: Boolean) {}
 
-    private fun setImeManuallyDismissed(dismissed: Boolean) {
-        if (imeManuallyDismissed != dismissed) {
-            Log.i(TAG_IME, "imeManuallyDismissed[w=$extraWindowId]: $imeManuallyDismissed -> $dismissed")
-            imeManuallyDismissed = dismissed
-        }
-    }
-
-    /// Bring up the soft keyboard for this window. Called from Rust
-    /// via JNI when gpui's `set_input_handler` fires on a text-input
-    /// focus inside this Activity's gpui window. Suppressed while the
-    /// user has manually dismissed the IME in this window.
-    @Suppress("unused")
-    fun showIme() {
-        runOnUiThread {
-            val host = imeHostView ?: run {
-                Log.w(TAG_IME, "showIme[w=$extraWindowId]: imeHostView is null, skipping")
-                return@runOnUiThread
-            }
-            if (imeManuallyDismissed) {
-                Log.i(TAG_IME, "showIme[w=$extraWindowId] suppressed (user dismissed)")
-                return@runOnUiThread
-            }
-            Log.i(
-                TAG_IME,
-                "showIme[w=$extraWindowId] imeShown=$imeShown hostFocused=${host.isFocused}"
-            )
-            if (imeShown) return@runOnUiThread
-            if (!host.isFocused) host.requestFocus()
-            programmaticShowPending = true
-            WindowInsetsControllerCompat(window, window.decorView)
-                .show(WindowInsetsCompat.Type.ime())
-            setImeShown(true)
-        }
-    }
-
     /// Dismiss the soft keyboard.
     @Suppress("unused")
     fun hideIme() {
         runOnUiThread {
             Log.i(TAG_IME, "hideIme[w=$extraWindowId] imeShown=$imeShown")
             if (!imeShown) return@runOnUiThread
+            imeRequestGeneration++
             programmaticHidePending = true
             WindowInsetsControllerCompat(window, window.decorView)
                 .hide(WindowInsetsCompat.Type.ime())
@@ -355,26 +341,50 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         }
     }
 
-    /// Toggle the IME — pane keyboard button entry point.
+    /// Zed's "prevent idle sleep", requested while an agent works; see
+    /// `MainActivity.setKeepScreenOn`.
     @Suppress("unused")
-    fun toggleIme() {
+    fun setKeepScreenOn(on: Boolean) {
+        runOnUiThread {
+            if (on) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    /// Called by Rust (`multi_window::set_extra_activity_title`) from the
+    /// gpui thread; `setTitle` must run on the UI thread.
+    @Suppress("unused")
+    fun setWindowTitle(windowTitle: String) {
+        runOnUiThread { title = windowTitle }
+    }
+
+    /// Show or hide the IME on request; see `MainActivity.requestIme`.
+    @Suppress("unused")
+    fun requestIme(show: Boolean) {
         runOnUiThread {
             val host = imeHostView ?: return@runOnUiThread
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
-                as android.view.inputmethod.InputMethodManager
-            if (imeShown) {
-                Log.i(TAG_IME, "toggleIme[w=$extraWindowId]: hiding (manual dismiss)")
-                programmaticHidePending = true
-                WindowInsetsControllerCompat(window, window.decorView)
-                    .hide(WindowInsetsCompat.Type.ime())
-                setImeShown(false)
-                setImeManuallyDismissed(true)
+            if (show) {
+                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: showing imeShown=$imeShown")
+                if (!imeShown) {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
+                        as android.view.inputmethod.InputMethodManager
+                    if (!host.isFocused) host.requestFocus()
+                    imm.showSoftInput(host, 0)
+                    setImeShown(true)
+                    confirmImeShown(host)
+                }
             } else {
-                Log.i(TAG_IME, "toggleIme[w=$extraWindowId]: showing (clearing manual-dismiss)")
-                if (!host.isFocused) host.requestFocus()
-                imm.showSoftInput(host, 0)
-                setImeShown(true)
-                setImeManuallyDismissed(false)
+                Log.i(TAG_IME, "requestIme[w=$extraWindowId]: hiding imeShown=$imeShown")
+                if (imeShown) {
+                    imeRequestGeneration++
+                    programmaticHidePending = true
+                    WindowInsetsControllerCompat(window, window.decorView)
+                        .hide(WindowInsetsCompat.Type.ime())
+                    setImeShown(false)
+                }
             }
         }
     }
@@ -397,7 +407,6 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 "restartImeForTarget[w=$extraWindowId]: $currentImeMode -> $modeId"
             )
             currentImeMode = modeId
-            setImeManuallyDismissed(false)
             val host = imeHostView ?: return@runOnUiThread
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE)
                 as android.view.inputmethod.InputMethodManager
@@ -446,6 +455,9 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        if (extraWindowId >= 0L) {
+            NativeBridge.nativeOnExtraFocusChanged(extraWindowId, hasFocus)
+        }
         // Mirror MainActivity: request capture when this window gains
         // focus and a trackpad/mouse is connected, release when focus
         // is lost. Without this, spawned windows fall back to
@@ -589,9 +601,12 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         cursorOverlay = CursorSurfaceControl(this, surfaceView, displaySize)
     }
 
+    /// The surface above the on-screen keyboard; see `MainActivity`.
     private fun visibleBounds(): Pair<Float, Float> {
         val w = surfaceView.width.toFloat().coerceAtLeast(1f)
-        val h = surfaceView.height.toFloat().coerceAtLeast(1f)
+        val h = (surfaceView.height - (insetsReporter?.obscuredBottom ?: 0))
+            .toFloat()
+            .coerceAtLeast(1f)
         return w to h
     }
 
@@ -635,9 +650,11 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 var sumRx = 0f
                 var sumRy = 0f
                 val limit = event.pointerCount
+                val rotation = displayRotation()
                 for (i in 0 until limit) {
-                    sumRx += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-                    sumRy += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+                    val (dx, dy) = capturedRelativeDelta(event, i, rotation)
+                    sumRx += dx
+                    sumRy += dy
                 }
                 val (maxX, maxY) = visibleBounds()
                 // Mouse-tuned pointer curve (shared accelerateMouse) so the
@@ -651,7 +668,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                 cursorOverlay?.move(cursorX, cursorY)
             }
         }
-        forwardCapturedPointer(event)
+        forwardCapturedPointer(extraWindowId, event, cursorX, cursorY)
     }
 
     /// JNI bridge: Rust's `cursor.rs::set_pointer_icon_inner` pushes the
@@ -662,37 +679,6 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         runOnUiThread {
             cursorOverlay?.setStyle(style)
         }
-    }
-
-    private fun forwardCapturedPointer(event: MotionEvent) {
-        val n = event.pointerCount
-        val xs = FloatArray(n)
-        val ys = FloatArray(n)
-        val rxs = FloatArray(n)
-        val rys = FloatArray(n)
-        for (i in 0 until n) {
-            xs[i] = event.getX(i)
-            ys[i] = event.getY(i)
-            rxs[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-            rys[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
-        }
-        val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
-        val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
-        NativeBridge.nativeOnExtraCapturedPointer(
-            extraWindowId,
-            event.actionMasked,
-            event.source,
-            event.buttonState,
-            n,
-            xs,
-            ys,
-            rxs,
-            rys,
-            vs,
-            hs,
-            cursorX,
-            cursorY,
-        )
     }
 
     /// Forward hardware key events to the gpui-side window. AppCompatActivity
@@ -732,7 +718,7 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             InputModality.setNonPointer()
             applyCursorVisibility()
         }
-        if (extraWindowId >= 0L) {
+        if (extraWindowId >= 0L && !isSystemKey(event.keyCode)) {
             NativeBridge.nativeOnExtraKeyEvent(
                 extraWindowId,
                 event.action,
@@ -743,6 +729,18 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    // The keys GameActivity's default key filter leaves to the system in the
+    // main window, so volume and the like work in every window.
+    private fun isSystemKey(keyCode: Int): Boolean = when (keyCode) {
+        KeyEvent.KEYCODE_VOLUME_UP,
+        KeyEvent.KEYCODE_VOLUME_DOWN,
+        KeyEvent.KEYCODE_VOLUME_MUTE,
+        KeyEvent.KEYCODE_CAMERA,
+        KeyEvent.KEYCODE_ZOOM_IN,
+        KeyEvent.KEYCODE_ZOOM_OUT -> true
+        else -> false
     }
 
     private inner class SurfaceCallback(private val id: Long) : SurfaceHolder.Callback {
@@ -779,10 +777,12 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         val xs = FloatArray(pointerCount)
         val ys = FloatArray(pointerCount)
         val ids = IntArray(pointerCount)
+        val toolTypes = IntArray(pointerCount)
         for (i in 0 until pointerCount) {
             xs[i] = event.getX(i)
             ys[i] = event.getY(i)
             ids[i] = event.getPointerId(i)
+            toolTypes[i] = event.getToolType(i)
         }
         // ACTION_SCROLL (mouse wheel + trackpad two-finger scroll) carries
         // its delta on the AXIS_VSCROLL / AXIS_HSCROLL axes — getX/Y return
@@ -797,12 +797,13 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
             event.actionIndex,
             event.metaState,
             event.buttonState,
-            event.eventTime,
+            event.flags,
             vscroll,
             hscroll,
             xs,
             ys,
             ids,
+            toolTypes,
         )
     }
 

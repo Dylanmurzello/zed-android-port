@@ -31,6 +31,7 @@ use crate::provider::openai_subscribed::OpenAiSubscribedProvider;
 use crate::provider::opencode::OpenCodeLanguageModelProvider;
 use crate::provider::vercel_ai_gateway::VercelAiGatewayLanguageModelProvider;
 use crate::provider::x_ai::XAiLanguageModelProvider;
+use crate::provider::x_ai_subscribed::XAiSubscribedProvider;
 pub use crate::settings::*;
 
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
@@ -220,14 +221,17 @@ fn register_language_model_providers(
     credentials_provider: Arc<dyn CredentialsProvider>,
     cx: &mut Context<LanguageModelRegistry>,
 ) {
-    registry.register_provider(
-        Arc::new(CloudLanguageModelProvider::new(
-            user_store,
-            client.clone(),
+    // Android uses direct providers without Zed accounts or hosted models.
+    if !cfg!(target_os = "android") {
+        registry.register_provider(
+            Arc::new(CloudLanguageModelProvider::new(
+                user_store,
+                client.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
+        );
+    }
     registry.register_provider(
         Arc::new(AnthropicLanguageModelProvider::new(
             client.http_client(),
@@ -244,30 +248,34 @@ fn register_language_model_providers(
         )),
         cx,
     );
-    registry.register_provider(
-        Arc::new(OllamaLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
+    // Android leaves out the local model servers (Ollama, LM Studio,
+    // llama.cpp). A remote one can be added as an OpenAI-compatible provider.
+    if !cfg!(target_os = "android") {
+        registry.register_provider(
+            Arc::new(OllamaLanguageModelProvider::new(
+                client.http_client(),
+                credentials_provider.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(LmStudioLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
+        );
+        registry.register_provider(
+            Arc::new(LmStudioLanguageModelProvider::new(
+                client.http_client(),
+                credentials_provider.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
-    registry.register_provider(
-        Arc::new(LlamaCppLanguageModelProvider::new(
-            client.http_client(),
-            credentials_provider.clone(),
+        );
+        registry.register_provider(
+            Arc::new(LlamaCppLanguageModelProvider::new(
+                client.http_client(),
+                credentials_provider.clone(),
+                cx,
+            )),
             cx,
-        )),
-        cx,
-    );
+        );
+    }
     registry.register_provider(
         Arc::new(DeepSeekLanguageModelProvider::new(
             client.http_client(),
@@ -318,6 +326,14 @@ fn register_language_model_providers(
     );
     registry.register_provider(
         Arc::new(XAiLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
+            cx,
+        )),
+        cx,
+    );
+    registry.register_provider(
+        Arc::new(XAiSubscribedProvider::new(
             client.http_client(),
             credentials_provider.clone(),
             cx,

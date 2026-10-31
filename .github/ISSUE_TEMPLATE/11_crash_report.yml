@@ -58,6 +58,6 @@ body:
   - type: textarea
     attributes:
       label: Additional context
-      description: Magisk module version (if chroot), bootstrap version (if bootstrap), free disk space on `/data`, anything else relevant.
+      description: Rootfs version (`cat /data/user/0/com.zdroid/files/rootfs/.rootfs-version` in the Zdroid terminal), free disk space on `/data`, anything else relevant.
     validations:
       required: false

@@ -79,8 +79,10 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 const MIN_FREE_BYTES: u64 = 600 * 1024 * 1024;
-const ESSENTIALS_SCRIPT: &str =
-    "apt-get update && apt-get install -y --no-install-recommends ca-certificates git";
+/// The SSH client is what Zed runs for remote projects and git's SSH
+/// remotes, and git only recommends it.
+const ESSENTIALS_SCRIPT: &str = "apt-get update && apt-get install -y --no-install-recommends \
+     ca-certificates git openssh-client";
 
 fn sibling(rootfs: &Path, suffix: &str) -> PathBuf {
     let mut name = rootfs
@@ -202,7 +204,15 @@ fn install_inner(
     extract(image, staging, &translator, progress)?;
 
     progress.step("Seeding configuration");
-    seed(staging, nameservers, timezone, &runtime.bind_guest_dirs())?;
+    let home = runtime.workspace_root();
+    seed(
+        staging,
+        nameservers,
+        timezone,
+        &runtime.bind_guest_dirs(),
+        &home,
+    )?;
+    seed_home(staging, &home)?;
     let image = self::image();
     fs::write(
         staging.join(VERSION_FILE),
@@ -235,7 +245,7 @@ fn install_inner(
 // runtime spawns the loader directly.
 #[allow(clippy::disallowed_methods)]
 pub fn install_essentials(runtime: &Runtime, progress: &mut dyn ProgressSink) -> Result<()> {
-    progress.step("Installing git and certificates");
+    progress.step("Installing git, the SSH client and certificates");
     let mut command = runtime.command("/bin/sh");
     command
         .args(["-c", ESSENTIALS_SCRIPT])
@@ -304,13 +314,6 @@ pub fn install_essentials(runtime: &Runtime, progress: &mut dyn ProgressSink) ->
         bail!("apt-get exited with {status}: {detail}");
     }
     Ok(())
-}
-
-/// Whether the essentials step has something left to do.
-pub fn essentials_missing(runtime: &Runtime) -> bool {
-    let rootfs = runtime.rootfs_dir();
-    !rootfs.join("usr/bin/git").exists()
-        || !rootfs.join("etc/ssl/certs/ca-certificates.crt").exists()
 }
 
 fn shorten(text: &str, max_chars: usize) -> String {
@@ -475,13 +478,15 @@ fn extract(
 }
 
 /// Files the guest needs that the base image does not ship usable:
-/// resolvers (Android has no resolv.conf), a hostname, and debugger
-/// configs that keep SIGSYS traps from stopping gdb/lldb sessions.
+/// resolvers (Android has no resolv.conf), a hostname, root's home in
+/// `/etc/passwd`, git's `safe.directory` and the gdb config that keeps
+/// SIGSYS traps from stopping debug sessions.
 fn seed(
     root: &Path,
     nameservers: &[String],
     timezone: &str,
     bind_guest_dirs: &[String],
+    home: &Path,
 ) -> Result<()> {
     let write = |relative: &str, contents: String| -> Result<()> {
         let path = root.join(relative);
@@ -497,16 +502,16 @@ fn seed(
         "127.0.0.1\tlocalhost\n127.0.1.1\tzdroid\n::1\tlocalhost ip6-localhost ip6-loopback\n"
             .to_string(),
     )?;
-    write("root/.gitconfig", "[safe]\n\tdirectory = *\n".to_string())?;
+    // System-wide, so a user's own ~/.gitconfig doesn't lose it: git sees
+    // every repository as another user's, since the guest is root and the
+    // files belong to the app or to media_rw.
+    write("etc/gitconfig", "[safe]\n\tdirectory = *\n".to_string())?;
     write(
         "etc/gdb/gdbinit",
         "handle SIGSYS nostop noprint pass\n".to_string(),
     )?;
-    write(
-        "root/.lldbinit",
-        "process handle SIGSYS -n false -p true -s false\n".to_string(),
-    )?;
-    for dir in ["root/.cargo/bin", "root/.local/bin", "usr/local/bin", "tmp"] {
+    set_root_home(root, home)?;
+    for dir in ["usr/local/bin", "tmp"] {
         let path = root.join(dir);
         fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
     }
@@ -522,6 +527,57 @@ fn seed(
     }
     fs::set_permissions(root.join("tmp"), fs::Permissions::from_mode(0o1777))
         .context("chmod tmp")?;
+    Ok(())
+}
+
+/// Makes `home` root's home directory in `/etc/passwd`: ssh, among others,
+/// takes the home from there rather than from `$HOME`.
+fn set_root_home(root: &Path, home: &Path) -> Result<()> {
+    let path = root.join("etc/passwd");
+    let passwd = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let home = home.to_str().context("home path is not UTF-8")?;
+    let mut updated = String::with_capacity(passwd.len() + home.len());
+    let mut found = false;
+    for line in passwd.lines() {
+        let mut fields: Vec<&str> = line.split(':').collect();
+        if fields.len() == 7 && fields[0] == "root" {
+            fields[5] = home;
+            found = true;
+        }
+        updated.push_str(&fields.join(":"));
+        updated.push('\n');
+    }
+    if !found {
+        bail!("{} has no root entry", path.display());
+    }
+    fs::write(&path, updated).with_context(|| format!("write {}", path.display()))
+}
+
+/// The guest's home is the app's home folder, outside the rootfs at a path
+/// the editor and the tools spell the same: projects live in it, the Files
+/// app shows it, and a reset leaves it alone. This gives it the image's
+/// root dotfiles and the lldb setting for the engine's traps where it has
+/// none of its own, and the directories the symlink farm watches.
+fn seed_home(root: &Path, home: &Path) -> Result<()> {
+    for dir in [home.join(".cargo/bin"), home.join(".local/bin")] {
+        fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    }
+    for name in [".bashrc", ".profile"] {
+        let target = home.join(name);
+        let source = root.join("root").join(name);
+        if fs::symlink_metadata(&target).is_err() && source.is_file() {
+            fs::copy(&source, &target)
+                .with_context(|| format!("copy {} -> {}", source.display(), target.display()))?;
+        }
+    }
+    let lldbinit = home.join(".lldbinit");
+    if fs::symlink_metadata(&lldbinit).is_err() {
+        fs::write(
+            &lldbinit,
+            "process handle SIGSYS -n false -p true -s false\n",
+        )
+        .with_context(|| format!("write {}", lldbinit.display()))?;
+    }
     Ok(())
 }
 
@@ -570,12 +626,22 @@ pub fn reseed_timezone(runtime: &Runtime, timezone: &str) -> Result<()> {
 }
 
 /// Refresh the resolver file on an installed rootfs (DNS servers change
-/// with the network; boot calls this).
+/// with the network; boot and Android's network callback call this). The
+/// new file is renamed into place, so a lookup running meanwhile reads
+/// either the old servers or the new ones, never no file.
 pub fn reseed_resolv(runtime: &Runtime, nameservers: &[String]) -> Result<()> {
     if !runtime.is_installed() {
         return Ok(());
     }
     let path = runtime.rootfs_dir().join("etc/resolv.conf");
-    remove_existing(&path)?;
-    fs::write(&path, resolv_conf(nameservers)).with_context(|| format!("write {}", path.display()))
+    let contents = resolv_conf(nameservers);
+    if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file())
+        && fs::read_to_string(&path).is_ok_and(|current| current == contents)
+    {
+        return Ok(());
+    }
+    let staged = path.with_extension("conf.new");
+    fs::write(&staged, contents).with_context(|| format!("write {}", staged.display()))?;
+    fs::rename(&staged, &path)
+        .with_context(|| format!("rename {} -> {}", staged.display(), path.display()))
 }

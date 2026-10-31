@@ -15,29 +15,43 @@ android-activity = { version = "0.6", features = ["game-activity"] }
 android_logger = "0.13"
 anyhow = "1"
 jni = "0.21"
+agent_settings = { path = "../../../agent_settings" }
+agent_ui = { path = "../../../agent_ui" }
+acp_tools = { path = "../../../acp_tools" }
+activity_indicator = { path = "../../../activity_indicator" }
 askpass = { path = "../../../askpass" }
 assets = { path = "../../../assets" }
+breadcrumbs = { path = "../../../breadcrumbs" }
+call_hierarchy = { path = "../../../call_hierarchy" }
 client = { path = "../../../client" }
+collections = { path = "../../../collections" }
+copilot_chat = { path = "../../../copilot_chat" }
 command_palette = { path = "../../../command_palette" }
-csv_preview = { path = "../../../csv_preview" }
+tabular_data_preview = { path = "../../../tabular_data_preview" }
 db = { path = "../../../db" }
 diagnostics = { path = "../../../diagnostics" }
 editor = { path = "../../../editor" }
 encoding_selector = { path = "../../../encoding_selector" }
+feature_flags = { path = "../../../feature_flags" }
 feedback = { path = "../../../feedback" }
 file_finder = { path = "../../../file_finder" }
 fs = { path = "../../../fs" }
 futures = "0.3"
 dap_adapters = { path = "../../../dap_adapters" }
 debug_adapter_extension = { path = "../../../debug_adapter_extension" }
+debugger_tools = { path = "../../../debugger_tools" }
 debugger_ui = { path = "../../../debugger_ui" }
 extension = { path = "../../../extension" }
 extension_host = { path = "../../../extension_host" }
+lsp = { path = "../../../lsp" }
 extensions_ui = { path = "../../../extensions_ui" }
 git_ui = { path = "../../../git_ui" }
+git = { path = "../../../git" }
+git_hosting_providers = { path = "../../../git_hosting_providers" }
+git_ui_core = { path = "../../../git_ui_core" }
 language_extension = { path = "../../../language_extension" }
 go_to_line = { path = "../../../go_to_line" }
-gpui = { path = "../../../gpui" }
+gpui = { path = "../../../gpui", features = ["stacker"] }
 gpui_android = { path = "../../" }
 gpui_tokio = { path = "../../../gpui_tokio" }
 image_viewer = { path = "../../../image_viewer" }
@@ -45,42 +59,58 @@ inspector_ui = { path = "../../../inspector_ui" }
 json_schema_store = { path = "../../../json_schema_store" }
 keymap_editor = { path = "../../../keymap_editor" }
 language = { path = "../../../language" }
+language_onboarding = { path = "../../../language_onboarding" }
 language_model = { path = "../../../language_model" }
+language_models = { path = "../../../language_models" }
 language_selector = { path = "../../../language_selector" }
 language_tools = { path = "../../../language_tools" }
+lsp_command_selector = { path = "../../../lsp_command_selector" }
+lsp_locations = { path = "../../../lsp_locations" }
 languages = { path = "../../../languages", features = ["load-grammars"] }
 line_ending_selector = { path = "../../../line_ending_selector" }
+markdown = { path = "../../../markdown" }
 markdown_preview = { path = "../../../markdown_preview" }
+migrator = { path = "../../../migrator" }
 node_runtime = { path = "../../../node_runtime" }
 onboarding = { path = "../../../onboarding" }
 outline = { path = "../../../outline" }
 outline_panel = { path = "../../../outline_panel" }
 log = "0.4"
+parking_lot = "0.12.1"
 multi_buffer = { path = "../../../multi_buffer" }
 notifications = { path = "../../../notifications" }
 paths = { path = "../../../paths" }
 project = { path = "../../../project" }
+prompt_store = { path = "../../../prompt_store" }
 project_panel = { path = "../../../project_panel" }
 project_symbols = { path = "../../../project_symbols" }
+rayon = "1.8"
 recent_projects = { path = "../../../recent_projects" }
 remote = { path = "../../../remote" }
+rope = { path = "../../../rope" }
 settings_profile_selector = { path = "../../../settings_profile_selector" }
 settings_ui = { path = "../../../settings_ui" }
+serde_json = "1"
+sidebar = { path = "../../../sidebar" }
 snippet_provider = { path = "../../../snippet_provider" }
 snippets_ui = { path = "../../../snippets_ui" }
 svg_preview = { path = "../../../svg_preview" }
 tab_switcher = { path = "../../../tab_switcher" }
 tasks_ui = { path = "../../../tasks_ui" }
+telemetry = { path = "../../../telemetry" }
 terminal = { path = "../../../terminal" }
 terminal_view = { path = "../../../terminal_view" }
 theme_selector = { path = "../../../theme_selector" }
 toolchain_selector = { path = "../../../toolchain_selector" }
 which_key = { path = "../../../which_key" }
 shellexpand = "3.1"
+url = "2.2"
 util = { path = "../../../util" }
 watch = { path = "../../../watch" }
+web_search = { path = "../../../web_search" }
 workspace = { path = "../../../workspace" }
 zd_engine_core = { path = "../../../zd_engine_core" }
+zdroid_hooks = { path = "../../../zdroid_hooks" }
 zdroid_runtime = { path = "../../../zdroid_runtime" }
 platform_title_bar = { path = "../../../platform_title_bar" }
 release_channel = { path = "../../../release_channel" }
@@ -92,6 +122,9 @@ uuid = { version = "1.10", features = ["v4"] }
 vim = { path = "../../../vim" }
 vim_mode_setting = { path = "../../../vim_mode_setting" }
 zed_actions = { path = "../../../zed_actions" }
+ui_prompt = { path = "../../../ui_prompt" }
+zlog = { path = "../../../zlog" }
+zlog_settings = { path = "../../../zlog_settings" }
 # Force RustEmbed to bake assets into the binary even in debug builds —
 # without this, settings/theme assets are looked up from the host filesystem
 # at runtime, which doesn't work on a device.
@@ -101,6 +134,7 @@ theme = { path = "../../../theme" }
 theme_extension = { path = "../../../theme_extension" }
 theme_settings = { path = "../../../theme_settings" }
 ui = { path = "../../../ui" }
+ui_input = { path = "../../../ui_input" }
 menu = { path = "../../../menu" }
 auto_update = { path = "../../../auto_update" }
 
@@ -111,15 +145,40 @@ auto_update = { path = "../../../auto_update" }
 # to stay API-compatible. Keep this table in sync with the root Cargo.toml
 # on every upstream merge (UPSTREAM_MERGE.md step).
 [patch.crates-io]
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "e1612d5d98152f8dc2a62e1b51ef7cbf4f7f26b7" }
+# Unify `tree_sitter_language::LanguageFn` between crates.io grammar crates and
+# the git tree-sitter above; two instances of the crate would make grammar
+# constants type-incompatible with `tree_sitter::Language`.
+tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623ec9bf0eaaf7113285c46e8a09018f181b18" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
-async-task = { path = "../../vendor/async-task" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
 windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
-calloop = { git = "https://github.com/zed-industries/calloop" }
-livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
-libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
-notify = { git = "https://github.com/zed-industries/notify", rev = "0890bbb8ca40a4b5d1f67031698dd7918b37d991" }
-notify-types = { git = "https://github.com/zed-industries/notify", rev = "0890bbb8ca40a4b5d1f67031698dd7918b37d991" }
-webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "d0e27be0cdad89eadab3e36207cda0a2b6e359ee" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+notify = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+notify-types = { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "0a1c519cfce9b365229026b55de9b9dbdb6fed3c" }
+# Avoid panicking when a failed EGL call reports EGL_SUCCESS.
+# https://github.com/timothee-haudebourg/khronos-egl/pull/37
+khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+# Not in the root table: Zdroid's own patch. stacker 0.1.25 can't read a
+# thread's stack limit on Android, so gpui's stack guard mapped a new stack on
+# every guarded call; see
+# crates/gpui_android/docs/workarounds/stacker-android-stack-limit.md.
+stacker = { git = "https://github.com/ilkersigirci/stacker", rev = "81eb8f789c55a9330e5b3c9f737f63e684c2f00f" }
+
+# corgi runs build.rs/proc-macros in a sandbox with no write access outside the
+# action's own OUT_DIR. Upstream `scratch` bakes its build-time OUT_DIR in via
+# `env!` and hands every crate one shared directory, which the sandbox can't
+# grant and a content-addressed build can't share. This patch reads OUT_DIR at
+# runtime, so each build script gets a private, writable dir in its own entry —
+# where cxx-build writes its shared cxxbridge headers. Kept local rather than a
+# cxx git fork so Windows cargo builds are unaffected (a git checkout of cxx
+# needs symlink support that Windows CI lacks). webrtc-sys is self-contained, so
+# per-crate scratch dirs are sufficient. Upstream issue:
+# https://github.com/dtolnay/cxx/issues/1752
+scratch = { path = "../../../../tooling/corgi/patches/scratch" }
 
 # Debug builds embed unwind/DWARF tables that overflow llvm-strip's ELF
 # parser at our binary size (2GB+). Drop debug info on Android — backtraces
@@ -128,10 +187,218 @@ webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev 
 debug = "line-tables-only"
 strip = "debuginfo"
 
-# Release: workspace already pins `lto = "thin"` + `codegen-units = 1` for
-# perf. Override `debug` and `strip` here so the release `.so` ships without
-# any debug section at all — the workspace default keeps "limited" debug
-# info which inflates the binary by ~40%.
+# Release: this is its own workspace, so the root workspace's release profile
+# doesn't apply. Use its thin LTO and single codegen unit, which make the `.so`
+# about 17% smaller, but ship it without debug info. The symbol table stays
+# in the build: the Android build strips it from the APK and keeps it in a
+# separate symbols file (`debugSymbolLevel` in build.gradle.kts), which
+# symbolizes profiles and crashes of release builds.
 [profile.release]
 debug = false
-strip = "symbols"
+strip = "none"
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+
+# Like Zed's release bundles (`.cargo/bundle-config.toml`), build Zed's crates
+# for size and keep third-party crates and the hot Zed crates at full speed.
+# Zed's crates are path dependencies here, not workspace members, so they're
+# listed by name. Left out, as upstream: editor, gpui and its platform crates
+# (plus gpui_android), language, multi_buffer, project, rope, scheduler,
+# sum_tree and text. A crate missing from the list builds at full speed. List
+# the Zed crates with:
+#   cargo metadata --format-version 1 --filter-platform aarch64-linux-android \
+#     | jq -r '.packages[] | select(.source == null) | .name'
+[profile.release.package]
+"*" = { opt-level = 3 }
+acp_thread = { opt-level = "z" }
+acp_tools = { opt-level = "z" }
+action_log = { opt-level = "z" }
+activity_indicator = { opt-level = "z" }
+agent = { opt-level = "z" }
+agent_servers = { opt-level = "z" }
+agent_settings = { opt-level = "z" }
+agent_skills = { opt-level = "z" }
+agent_ui = { opt-level = "z" }
+ai_onboarding = { opt-level = "z" }
+anthropic = { opt-level = "z" }
+askpass = { opt-level = "z" }
+assets = { opt-level = "z" }
+audio = { opt-level = "z" }
+auto_update = { opt-level = "z" }
+aws_http_client = { opt-level = "z" }
+bedrock = { opt-level = "z" }
+breadcrumbs = { opt-level = "z" }
+buffer_diff = { opt-level = "z" }
+call_hierarchy = { opt-level = "z" }
+channel = { opt-level = "z" }
+client = { opt-level = "z" }
+clock = { opt-level = "z" }
+cloud_api_client = { opt-level = "z" }
+cloud_api_types = { opt-level = "z" }
+cloud_llm_client = { opt-level = "z" }
+codestral = { opt-level = "z" }
+collections = { opt-level = "z" }
+command_palette = { opt-level = "z" }
+command_palette_hooks = { opt-level = "z" }
+component = { opt-level = "z" }
+context_server = { opt-level = "z" }
+copilot = { opt-level = "z" }
+copilot_chat = { opt-level = "z" }
+copilot_ui = { opt-level = "z" }
+credentials_provider = { opt-level = "z" }
+dap = { opt-level = "z" }
+db = { opt-level = "z" }
+debug_adapter_extension = { opt-level = "z" }
+deepseek = { opt-level = "z" }
+derive_refineable = { opt-level = "z" }
+dev_container = { opt-level = "z" }
+diagnostics = { opt-level = "z" }
+edit_prediction = { opt-level = "z" }
+edit_prediction_context = { opt-level = "z" }
+edit_prediction_metrics = { opt-level = "z" }
+edit_prediction_types = { opt-level = "z" }
+edit_prediction_ui = { opt-level = "z" }
+encoding_selector = { opt-level = "z" }
+env_var = { opt-level = "z" }
+extension = { opt-level = "z" }
+extension_host = { opt-level = "z" }
+extension_suggest = { opt-level = "z" }
+extensions_ui = { opt-level = "z" }
+feature_flags = { opt-level = "z" }
+feature_flags_macros = { opt-level = "z" }
+feedback = { opt-level = "z" }
+file_content = { opt-level = "z" }
+file_finder = { opt-level = "z" }
+file_icons = { opt-level = "z" }
+fs = { opt-level = "z" }
+fuzzy = { opt-level = "z" }
+fuzzy_nucleo = { opt-level = "z" }
+git = { opt-level = "z" }
+git_hosting_providers = { opt-level = "z" }
+git_ui = { opt-level = "z" }
+git_ui_core = { opt-level = "z" }
+go_to_line = { opt-level = "z" }
+google_ai = { opt-level = "z" }
+gpui_macros = { opt-level = "z" }
+gpui_tokio = { opt-level = "z" }
+grammars = { opt-level = "z" }
+html_to_markdown = { opt-level = "z" }
+http_client = { opt-level = "z" }
+http_client_tls = { opt-level = "z" }
+http_proxy = { opt-level = "z" }
+icons = { opt-level = "z" }
+image_viewer = { opt-level = "z" }
+inspector_ui = { opt-level = "z" }
+json_schema_store = { opt-level = "z" }
+keymap_editor = { opt-level = "z" }
+language_core = { opt-level = "z" }
+language_detection = { opt-level = "z" }
+language_extension = { opt-level = "z" }
+language_model = { opt-level = "z" }
+language_model_core = { opt-level = "z" }
+language_models = { opt-level = "z" }
+language_models_cloud = { opt-level = "z" }
+language_selector = { opt-level = "z" }
+language_tools = { opt-level = "z" }
+languages = { opt-level = "z" }
+line_ending_selector = { opt-level = "z" }
+llama_cpp = { opt-level = "z" }
+lmstudio = { opt-level = "z" }
+lsp = { opt-level = "z" }
+lsp_command_selector = { opt-level = "z" }
+lsp_locations = { opt-level = "z" }
+markdown = { opt-level = "z" }
+markdown_preview = { opt-level = "z" }
+menu = { opt-level = "z" }
+mermaid_render = { opt-level = "z" }
+migrator = { opt-level = "z" }
+mistral = { opt-level = "z" }
+net = { opt-level = "z" }
+node_runtime = { opt-level = "z" }
+notifications = { opt-level = "z" }
+oauth_callback_server = { opt-level = "z" }
+ollama = { opt-level = "z" }
+onboarding = { opt-level = "z" }
+open_ai = { opt-level = "z" }
+open_path_prompt = { opt-level = "z" }
+open_router = { opt-level = "z" }
+openai_subscribed = { opt-level = "z" }
+opencode = { opt-level = "z" }
+outline = { opt-level = "z" }
+outline_panel = { opt-level = "z" }
+path = { opt-level = "z" }
+paths = { opt-level = "z" }
+picker = { opt-level = "z" }
+picker_preview = { opt-level = "z" }
+platform_title_bar = { opt-level = "z" }
+prettier = { opt-level = "z" }
+project_panel = { opt-level = "z" }
+project_symbols = { opt-level = "z" }
+prompt_store = { opt-level = "z" }
+proto = { opt-level = "z" }
+proxy_handshake = { opt-level = "z" }
+recent_projects = { opt-level = "z" }
+refineable = { opt-level = "z" }
+release_channel = { opt-level = "z" }
+remote = { opt-level = "z" }
+remote_connection = { opt-level = "z" }
+reqwest_client = { opt-level = "z" }
+rpc = { opt-level = "z" }
+sandbox = { opt-level = "z" }
+search = { opt-level = "z" }
+session = { opt-level = "z" }
+settings = { opt-level = "z" }
+settings_content = { opt-level = "z" }
+settings_json = { opt-level = "z" }
+settings_macros = { opt-level = "z" }
+settings_profile_selector = { opt-level = "z" }
+settings_ui = { opt-level = "z" }
+shell_command_parser = { opt-level = "z" }
+sidebar = { opt-level = "z" }
+snippet = { opt-level = "z" }
+snippet_provider = { opt-level = "z" }
+snippets_ui = { opt-level = "z" }
+sqlez = { opt-level = "z" }
+sqlez_macros = { opt-level = "z" }
+streaming_diff = { opt-level = "z" }
+svg_preview = { opt-level = "z" }
+syntax_theme = { opt-level = "z" }
+system_specs = { opt-level = "z" }
+tab_switcher = { opt-level = "z" }
+tabular_data_preview = { opt-level = "z" }
+task = { opt-level = "z" }
+tasks_ui = { opt-level = "z" }
+telemetry = { opt-level = "z" }
+telemetry_events = { opt-level = "z" }
+terminal = { opt-level = "z" }
+terminal_view = { opt-level = "z" }
+theme = { opt-level = "z" }
+theme_extension = { opt-level = "z" }
+theme_selector = { opt-level = "z" }
+theme_settings = { opt-level = "z" }
+time_format = { opt-level = "z" }
+toolchain_selector = { opt-level = "z" }
+ui = { opt-level = "z" }
+ui_input = { opt-level = "z" }
+ui_macros = { opt-level = "z" }
+ui_prompt = { opt-level = "z" }
+util = { opt-level = "z" }
+vim = { opt-level = "z" }
+vim_mode_setting = { opt-level = "z" }
+watch = { opt-level = "z" }
+web_search = { opt-level = "z" }
+which_key = { opt-level = "z" }
+workspace = { opt-level = "z" }
+worktree = { opt-level = "z" }
+x_ai = { opt-level = "z" }
+x_ai_subscribed = { opt-level = "z" }
+zdroid_runtime = { opt-level = "z" }
+zed_actions = { opt-level = "z" }
+zed_credentials_provider = { opt-level = "z" }
+zed_env_vars = { opt-level = "z" }
+zeta_prompt = { opt-level = "z" }
+zlog = { opt-level = "z" }
+zlog_settings = { opt-level = "z" }
+ztracing = { opt-level = "z" }
+ztracing_macro = { opt-level = "z" }

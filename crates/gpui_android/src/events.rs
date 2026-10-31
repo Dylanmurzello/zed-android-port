@@ -8,8 +8,9 @@
 //!   by `ExtraWindowActivity.forwardTouchEvent`.
 //!
 //! Source-based routing: Finger input (multi-touch, tap, drag) goes to
-//! [`crate::touch`]'s first-class SM. Mouse / stylus / captured-trackpad
-//! continue through these dispatchers. Per-modality submodules:
+//! [`crate::touch`], which feeds gpui's gesture recognizer or the virtual
+//! trackpad. Mouse / stylus / captured-trackpad continue through these
+//! dispatchers. Per-modality submodules:
 //! - [`mouse`] for mouse buttons + wheel + drag (button mapping + scroll
 //!   synthesis).
 //! - [`click_track`] for shared click-count + non-primary held-button
@@ -38,6 +39,24 @@ use crate::window::AndroidWindowState;
 /// small vec rather than a single optional event.
 pub(crate) type MotionInputs = Vec<PlatformInput>;
 
+/// What [`translate_motion_event`] made of an event.
+#[derive(Default)]
+pub(crate) struct TranslatedMotion {
+    pub(crate) inputs: MotionInputs,
+    /// Whether the event is consumed. Events fed to gpui's touch recognizer
+    /// are, even when they produce no input yet.
+    pub(crate) handled: bool,
+}
+
+impl From<MotionInputs> for TranslatedMotion {
+    fn from(inputs: MotionInputs) -> Self {
+        Self {
+            handled: !inputs.is_empty(),
+            inputs,
+        }
+    }
+}
+
 /// Java `MotionEvent.getActionMasked()` constants. We can't reuse
 /// `android_activity::input::MotionAction` for the extra-window path
 /// because that enum's constructor is private: `MotionEvent`s authored
@@ -51,6 +70,13 @@ pub(crate) const JAVA_ACTION_POINTER_UP: i32 = 6;
 pub(crate) const JAVA_ACTION_HOVER_MOVE: i32 = 7;
 pub(crate) const JAVA_ACTION_SCROLL: i32 = 8;
 pub(crate) const JAVA_ACTION_HOVER_ENTER: i32 = 9;
+
+/// Java `MotionEvent.TOOL_TYPE_PALM`, for the same reason.
+pub(crate) const JAVA_TOOL_TYPE_PALM: i32 = 5;
+
+/// Java `MotionEvent.FLAG_CANCELED`: the pointer going up was cancelled,
+/// such as a palm the system rejected, so it must not act as a release.
+pub(crate) const JAVA_FLAG_CANCELED: i32 = 0x20;
 
 /// Convert an Android `MotionEvent` (mouse / stylus / finger) into one
 /// or more gpui `PlatformInput`s. Coordinates arrive from Android in
@@ -66,9 +92,9 @@ pub(crate) fn translate_motion_event(
     event: &MotionEvent,
     scale_factor: f32,
     state: &mut AndroidWindowState,
-) -> MotionInputs {
+) -> TranslatedMotion {
     if event.pointer_count() == 0 {
-        return MotionInputs::new();
+        return TranslatedMotion::default();
     }
     let primary = event.pointer_at_index(0);
     let position = point(
@@ -80,23 +106,9 @@ pub(crate) fn translate_motion_event(
     let pressed_mouse_button = mouse::button_from_state(button_state);
     let input_source = source::classify(event);
 
-    // Track the most recent input modality so UI components can widen
-    // hit zones for touch without affecting mouse precision. In
-    // trackpad mode, finger input is synthesized into mouse events
-    // and the user controls a precise virtual cursor — touch-friendly
-    // widening would actively hurt (splitters / scrollbars capture
-    // clicks meant for adjacent buttons like tab-close). Treat
-    // finger-driven trackpad mode as mouse for hit-test purposes.
-    let is_touch_input =
-        input_source == source::InputSource::Finger && !crate::ime::trackpad_mode_enabled();
-    state.last_input_was_touch.store(
-        is_touch_input,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-
-    // Finger input routes through the first-class touch state machine.
-    // Mouse / stylus / captured-trackpad continue through the match
-    // arms below.
+    // Finger input goes to gpui's touch gestures (or the virtual trackpad)
+    // through `crate::touch`. Mouse / stylus / captured-trackpad continue
+    // through the match arms below.
     if input_source == source::InputSource::Finger {
         return crate::touch::dispatch_primary(state, event, scale_factor);
     }
@@ -112,10 +124,12 @@ pub(crate) fn translate_motion_event(
             if let Some(button) = pressed_mouse_button
                 && button != MouseButton::Left
             {
-                let click_count = state.clicks.next_click_count(button, position, input_source);
+                let click_count = state
+                    .clicks
+                    .next_click_count(button, position, input_source);
                 state.clicks.mark_non_primary_down(button);
                 out.push(mouse::button_down(button, position, modifiers, click_count));
-                return out;
+                return out.into();
             }
             // Mouse left button down. Latch position + time and emit
             // Down(Left) immediately for instant click feedback.
@@ -124,7 +138,12 @@ pub(crate) fn translate_motion_event(
                     .clicks
                     .next_click_count(MouseButton::Left, position, input_source);
             state.clicks.record_primary_down(position);
-            out.push(mouse::button_down(MouseButton::Left, position, modifiers, click_count));
+            out.push(mouse::button_down(
+                MouseButton::Left,
+                position,
+                modifiers,
+                click_count,
+            ));
         }
         MotionAction::Up => {
             // Mouse button release. Resolve the latched click.
@@ -164,7 +183,10 @@ pub(crate) fn translate_motion_event(
             // End the gesture cleanly. Emit the up for whichever button
             // was held (or Left as a default) with click_count=0 so
             // listeners can distinguish a real click.
-            let held = state.clicks.current_non_primary().unwrap_or(MouseButton::Left);
+            let held = state
+                .clicks
+                .current_non_primary()
+                .unwrap_or(MouseButton::Left);
             state.clicks.reset_all();
             out.push(PlatformInput::MouseUp(gpui::MouseUpEvent {
                 button: held,
@@ -182,7 +204,7 @@ pub(crate) fn translate_motion_event(
         }
         _ => {}
     }
-    out
+    out.into()
 }
 
 /// Touch translator for events arriving on extra `SurfaceView`s (i.e.
@@ -191,10 +213,11 @@ pub(crate) fn translate_motion_event(
 /// NDK-backed `MotionEvent`; this one takes the raw fields we marshal
 /// across the JNI boundary in `ExtraWindowActivity.forwardTouchEvent`.
 ///
-/// Source classification isn't yet plumbed across the JNI bridge, so we
+/// Source classification isn't plumbed across the JNI bridge, so we
 /// route touch-like actions (Down/Up/Move/Cancel/PointerDown/PointerUp)
-/// through the touch SM unconditionally and reserve the mouse-only
-/// actions (HOVER_*, SCROLL) for the mouse path below.
+/// through `crate::touch` unconditionally, where a mouse or stylus acts
+/// as a finger, and reserve the mouse-only actions (HOVER_*, SCROLL) for
+/// the mouse path below. The tool types only tell palms apart.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn translate_extra_motion_event(
     window_id: u64,
@@ -202,9 +225,11 @@ pub(crate) fn translate_extra_motion_event(
     action_index: i32,
     meta_state: i32,
     button_state: i32,
+    flags: i32,
     vscroll: f32,
     hscroll: f32,
     positions: &[(f32, f32, i32)],
+    tool_types: &[i32],
     scale_factor: f32,
     state: &mut AndroidWindowState,
 ) -> MotionInputs {
@@ -212,10 +237,10 @@ pub(crate) fn translate_extra_motion_event(
         return Vec::new();
     }
 
-    // Touch-actions go through the touch SM (per-window keyed). Mouse-
-    // only actions (HOVER_ENTER/MOVE, SCROLL) fall through to the legacy
-    // mouse path so a USB mouse plugged in while Settings is open still
-    // hovers + scrolls correctly.
+    // Touch actions go through `crate::touch` (per-window keyed). Mouse-
+    // only actions (HOVER_ENTER/MOVE, SCROLL) fall through to the mouse
+    // path so a USB mouse plugged in while Settings is open still hovers
+    // + scrolls correctly.
     let is_touch_action = matches!(
         action_masked,
         JAVA_ACTION_DOWN
@@ -225,13 +250,6 @@ pub(crate) fn translate_extra_motion_event(
             | JAVA_ACTION_POINTER_DOWN
             | JAVA_ACTION_POINTER_UP
     );
-    // Same trackpad-mode override as the primary surface path:
-    // virtual trackpad treats finger as mouse, no touch-friendly
-    // hit-zone widening.
-    state.last_input_was_touch.store(
-        is_touch_action && !crate::ime::trackpad_mode_enabled(),
-        std::sync::atomic::Ordering::Relaxed,
-    );
     if is_touch_action {
         return crate::touch::dispatch_extra(
             state,
@@ -240,9 +258,11 @@ pub(crate) fn translate_extra_motion_event(
             action_index,
             meta_state,
             button_state,
+            flags,
             vscroll,
             hscroll,
             positions,
+            tool_types,
             scale_factor,
         );
     }

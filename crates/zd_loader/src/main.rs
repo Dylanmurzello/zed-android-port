@@ -301,6 +301,15 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
 
     set_process_name(program);
     let new_sp = build_guest_vector(&stack, &invocation, &loaded);
+    // An exec from the trap handler arrives with every signal but SIGSYS
+    // blocked. The guest gets the mask it called `execve` with, now that
+    // nothing but its own code is left to run and the exec has reset its
+    // handlers.
+    if let Some(mask) = config::get().sigmask
+        && let Err(errno) = sys::rt_sigprocmask(sys::SIG_SETMASK, &(mask & !sys::SIGSYS_BIT))
+    {
+        abort!("sigprocmask(SIG_SETMASK) failed: errno {errno}");
+    }
     // SAFETY: the guest image and its stack are in place.
     if config::get().traceme {
         attach_to_parent();

@@ -55,6 +55,13 @@ pub struct ImportCursorSettings {
 
 pub const FIRST_OPEN: &str = "first_open";
 
+/// Sections the Android app shows on the basics page in place of the AI and
+/// telemetry sections: Android has neither Zed's sign-in nor its telemetry.
+#[derive(Default)]
+pub struct AndroidBasicsSections(pub Vec<fn(&mut isize, &mut App) -> AnyElement>);
+
+impl Global for AndroidBasicsSections {}
+
 actions!(
     onboarding,
     [
@@ -334,7 +341,7 @@ impl Render for Onboarding {
                     .child(
                         v_flex()
                             .min_w_0()
-                            .max_w(rems_from_px(780.))
+                            .max_w(rems_from_px(780_f32))
                             .w_full()
                             .mx_auto()
                             .p_12()
@@ -351,8 +358,14 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("Welcome to Zdroid")
-                                                            .size(HeadlineSize::Small),
+                                                        Headline::new(
+                                                            if cfg!(target_os = "android") {
+                                                                "Welcome to Zdroid"
+                                                            } else {
+                                                                "Welcome to Zed"
+                                                            },
+                                                        )
+                                                        .size(HeadlineSize::Small),
                                                     )
                                                     .child(
                                                         Label::new("The editor for what's next")
@@ -366,7 +379,7 @@ impl Render for Onboarding {
                                         Button::new("finish_setup", "Finish Setup")
                                             .style(ButtonStyle::Filled)
                                             .size(ButtonSize::Medium)
-                                            .width(rems_from_px(200.))
+                                            .width(rems_from_px(200_f32))
                                             .key_binding(KeyBinding::for_action_in(
                                                 &Finish,
                                                 &self.focus_handle,
@@ -630,7 +643,6 @@ impl workspace::SerializableItem for Onboarding {
         workspace: &mut Workspace,
         item_id: workspace::ItemId,
         _closing: bool,
-        _window: &mut Window,
         cx: &mut ui::Context<Self>,
     ) -> Option<gpui::Task<gpui::Result<()>>> {
         let workspace_id = workspace.database_id()?;

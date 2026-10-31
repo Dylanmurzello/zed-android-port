@@ -112,8 +112,14 @@ pub mod env {
     /// an ELF is mapped; a script keeps it, named `/proc/self/fd/<n>` for
     /// its interpreter. Per exec.
     pub const EXEC_FD: &str = "ZD_EXEC_FD";
+    /// The signal mask the guest called `execve` with, in decimal. The
+    /// handler issues the exec with every other signal blocked and the
+    /// kernel keeps the mask across `execve`, so the loader sets this one
+    /// right before the jump into the guest, when no guest handler can run
+    /// on its registers. Per exec.
+    pub const SIGMASK: &str = "ZD_SIGMASK";
     /// Variables that describe one exec and must not reach the guest.
-    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV, TRACEME, EXEC_FD];
+    pub const PER_EXEC: &[&str] = &[PROGRAM, SELFTEST, CLOSE_FDS, IDENTITY, GUEST_ENV, TRACEME, EXEC_FD, SIGMASK];
 }
 
 /// Separator between entries in [`env::BINDS`] and [`env::GUEST_ENV`].

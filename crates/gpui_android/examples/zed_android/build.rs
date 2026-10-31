@@ -6,8 +6,8 @@ fn main() {
     // built independently via `cargo ndk -t arm64-v8a -P 26 build
     // --release` from that subdir, then copied to assets/. If a
     // contributor forgets that step, ssh password prompts will silently
-    // SIGABRT under SELinux untrusted_app_27 (current_exe() falls back
-    // to /system/bin/app_process64). Surface the gap loudly at build
+    // SIGABRT (current_exe() falls back to /system/bin/app_process64,
+    // which the app's SELinux domain can't run). Surface the gap loudly at build
     // time instead of waiting for the runtime symptom.
     let askpass_asset = "android/app/src/main/assets/zed-askpass-helper";
     println!("cargo:rerun-if-changed={askpass_asset}");
@@ -18,7 +18,7 @@ fn main() {
              cd askpass-helper && \\\n    \
              ANDROID_NDK_HOME=$ANDROID_NDK_HOME cargo ndk -t arm64-v8a -P 26 build --release && \\\n    \
              cp target/aarch64-linux-android/release/zed-askpass-helper ../{askpass_asset}\n  \
-             Without it, SSH password / passphrase prompts will SIGABRT under SELinux untrusted_app_27."
+             Without it, SSH password / passphrase prompts will SIGABRT."
         );
     }
 }

@@ -16,7 +16,7 @@
   <a href="https://github.com/Dylanmurzello/zed-android-port/releases/latest"><img src="https://img.shields.io/github/downloads/Dylanmurzello/zed-android-port/total?label=downloads" alt="Total downloads" /></a>
 </p>
 
-Zdroid is an independent port of [Zed](https://zed.dev) for Android, not affiliated with Zed Industries. Upstream's `Editor`, `Workspace`, `Project`, `Search`, `GitGraph`, `Extensions`, and `Terminal` crates run unchanged on a custom `gpui_android` platform backend that composites every pixel via the Adreno Vulkan driver, targeting Android 9+ with a hardware keyboard. A stock Ubuntu rootfs bundled in the APK runs every tool (apt, bash, git, ssh, node, go, rust-analyzer, gdb) through the app's own userland chroot engine: a static loader and a seccomp trap path translator, no root, no patched packages, native speed.
+Zdroid is an independent port of [Zed](https://zed.dev) for Android, not affiliated with Zed Industries. Zed's editing, workspace, search, Git, extension and terminal components run on a `gpui_android` platform backend with Android-specific adaptations and Vulkan rendering. The reference hardware and supported build configuration are documented in [the platform workarounds](crates/gpui_android/docs/workarounds/README.md). A stock Ubuntu rootfs bundled in the APK runs every tool (apt, bash, git, ssh, node, go, rust-analyzer, gdb) through the app's own userland chroot engine: a static loader and a seccomp trap path translator, no root, no patched packages.
 
 ---
 
@@ -24,21 +24,21 @@ Zdroid is an independent port of [Zed](https://zed.dev) for Android, not affilia
   <img src="https://github.com/user-attachments/assets/68f763ba-e051-4217-8779-7bb9327f4a13" alt="Zdroid demo" width="100%" />
 </p>
 
-Vulkan via wgpu. AChoreographer-driven vsync, no JNI hop per frame. Opt-in 120Hz with Mailbox present mode. Glyph fallback into `/system/fonts` so Powerline arrows and CJK render without bundling fonts. The `Editor`, `Workspace`, `Project`, `MultiWorkspace`, `Search`, `GitPanel`, `GitGraph`, `Extensions`, and `Terminal` crates run unchanged. The Rust `.so` is the app process. gpui composites every pixel (yes, you read that right) straight into the Adreno Vulkan driver. Multi-Activity OS-chromed extra windows so DeX freeform renders Settings and secondary editors with real chrome.
+Vulkan via wgpu. AChoreographer-driven vsync, no JNI hop per frame. Opt-in 120Hz with Mailbox present mode. Glyph fallback into `/system/fonts` so Powerline arrows and CJK render without bundling fonts. Editing, projects, search, Git, extensions, and terminal UI use Zed's native implementations. The Rust `.so` is the app process. gpui composites every pixel (yes, you read that right) straight into the Adreno Vulkan driver. Multi-Activity OS-chromed extra windows so DeX freeform renders Settings and secondary editors with real chrome.
 
-A userland chroot without root or ptrace: the kernel only ever execs a 500 KB static loader shipped in the APK, which maps the Ubuntu binary and glibc's ld.so itself, installs a seccomp filter that traps path syscalls, and rewrites every guest path into the rootfs from an in-thread SIGSYS handler, three microseconds per translated syscall. Static binaries, Go, cargo, strace and lldb all run as on Linux because real ptrace stays free. Same engine answers the syscalls Android's own app filter refuses, which is why stock glibc starts at all. SurfaceControl-composited hardware cursor sprite on a sibling overlay, separate from the wgpu frame. Pointer-capture trackpad that consumes historical motion samples so finger drags don't lose 80% of their travel to event batching. SAF DocumentsProvider exposing `~/` as a system volume. Native Android trust via `rustls-platform-verifier`. In-app updater pulling signed APKs from GitHub Releases. Everything else is upstream. Deep-dives for the platform layer live in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
+A userland chroot without root or ptrace: the kernel only ever execs a 500 KB static loader shipped in the APK, which maps the Ubuntu binary and glibc's ld.so itself, installs a seccomp filter that traps path syscalls, and rewrites every guest path into the rootfs from an in-thread SIGSYS handler, three microseconds per translated syscall. Static binaries, Go, cargo, strace and lldb all run as on Linux because real ptrace stays free. Same engine answers the syscalls Android's own app filter refuses, which is why stock glibc starts at all. SurfaceControl-composited hardware cursor sprite on a sibling overlay, separate from the wgpu frame. Pointer-capture trackpad that consumes historical motion samples so finger drags don't lose 80% of their travel to event batching. SAF DocumentsProvider exposing `~/` as a system volume. HTTPS trusts the Mozilla root bundle (`webpki-roots`). In-app updater pulling signed APKs from GitHub Releases. Everything else is upstream. Deep-dives for the platform layer live in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
 
 ---
 
 ## <img src="https://api.iconify.design/lucide:download.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Install
 
-Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/Dylanmurzello/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
+Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/ilkersigirci/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
 
 ### First launch
 
-1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid (on Android 8 to 10 it is a permission dialog instead); turn it on, or later from Settings → Android Runtime → Allow access to /sdcard.
-2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then `git` and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, Settings → Android Runtime → **Install git and certificates** runs it again.
-3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; Settings → Android Runtime → **Allow background activity** asks for the exemption.
+1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid (on Android 8 to 10 it is a permission dialog instead); turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
+2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
+3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; **Settings → Android → Allow Background Activity** asks for the exemption.
 
 ### Setting up your shell environment
 
@@ -50,22 +50,24 @@ apt install -y build-essential curl python3 gdb
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c rust-analyzer
 ```
 
-Zed downloads its own Node for the Node-based language servers (vtsls, eslint, json, tailwind), so npm-based tools work without installing Node; `apt install -y nodejs npm` gives you a system one for the terminal. Claude Code, for example:
+Zed downloads its own Node for the Node-based language servers (vtsls, eslint, json, tailwind) and for the agent panel's Claude Agent and Codex, so those work without installing Node; `apt install -y nodejs npm` gives you a system one for the terminal. The Claude Code and Codex CLIs, for example:
 
 ```sh
 apt install -y nodejs npm
-npm install -g @anthropic-ai/claude-code
+npm install -g @anthropic-ai/claude-code @openai/codex
 ```
+
+In the terminal, run Codex as `codex --no-daemon` (or add `alias codex='codex --no-daemon'` to `~/.bashrc`): by default it starts a background server that sandboxes itself with bubblewrap, which needs namespaces that Android doesn't give an app. The agent panel's Codex doesn't use that server.
 
 Go comes from the official `linux-arm64` tarball unpacked into `/usr/local`; gopls, delve, clangd and the rest install the way their docs say for Linux. Anything that lands in `/usr/bin`, `/usr/local/bin`, `~/.cargo/bin` or `~/.local/bin` shows up on the editor's PATH within a couple of seconds, so language servers start from the editor without configuration.
 
-Settings → Android Runtime → **Reset runtime** extracts the bundled image again when you want a clean slate; projects and editor settings stay.
+**Settings → Android → Reset Runtime** extracts the bundled image again when you want a clean slate; your home folder, projects and editor settings stay.
 
 ### Working with projects
 
 Two storage realms underneath, with different exec rules.
 
-`/data/data/com.zdroid/files/` (surfaced as `~/`) is **exec-mounted**. cargo, go, node, anything you build can `execve` and run. This is where projects should live. `~/projects/<name>` is the default workspace root; `ZedDocumentsProvider` exposes `~/` to other Android apps via the SAF sidebar (look for **Zdroid** in any system file picker).
+`/data/data/com.zdroid/files/` is **exec-mounted**. cargo, go, node, anything you build can run there. This is where projects should live: `files/home/projects/<name>`, which the terminal reaches as `~/projects/<name>`, is the default workspace root. `ZedDocumentsProvider` exposes `files/home` to other Android apps via the SAF sidebar (look for **Zdroid** in any system file picker).
 
 `/storage/emulated/0/` (a.k.a. `/sdcard/`) is **FUSE-mounted with `noexec`**. Read, edit, and save all work; the kernel refuses to execute binaries written here. `cargo run` against a binary under `/sdcard/...` returns `EACCES` and there's no remount workaround (see [`docs/workarounds/android-noexec-mount.md`](crates/gpui_android/docs/workarounds/android-noexec-mount.md) for why).
 
@@ -79,7 +81,7 @@ Three workflows that work with this constraint:
 
 ## <img src="https://api.iconify.design/lucide:hand.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Gestures & input
 
-Each surface toggles in **Settings → Android Input** (or on the first-run onboarding card).
+Each surface toggles in **Settings → Android** (or on the first-run onboarding card).
 
 ### Touch (default)
 - **Tap** to position the cursor
@@ -105,7 +107,7 @@ Plug in or pair a mouse, trackpad, or Book Cover Keyboard and it just works.
 > Working on Samsung tablets and most Android devices we've tested. If your mouse pairs but doesn't move the cursor (seen on some OnePlus / Oppo Pad ColorOS builds), [open an issue](https://github.com/Dylanmurzello/zed-android-port/issues/new) with `adb shell dumpsys input` output so we can triage.
 
 ### Soft keyboard
-Auto-opens on tap into the editor or terminal. The pane tab bar has a keyboard toggle if you want it off.
+Auto-opens on tap into the editor or terminal. The status bar has a keyboard toggle if you want it off.
 - **Programming keys row** above the keyboard with `Esc`, `Tab`, `Ctrl`, `Alt`, and arrows. `Ctrl` and `Alt` are sticky: tap once for the next key, double-tap to lock.
 - **`Ctrl` + letter** combos work in the terminal: `Ctrl+C` sends `^C`, just like a hardware keyboard.
 
@@ -121,9 +123,9 @@ The editor is bionic-linked and runs as the Android app process. Every subproces
 
 How that is possible without root: a distro binary bakes `/usr`, `/lib` and `/etc` into its rodata and its `PT_INTERP`, and no app-writable Android path is that short, so the rewrite cannot happen in the file. It happens at the syscall. The kernel only ever execs `libzdload.so`, a static loader that maps the Ubuntu binary and glibc's own `ld.so`, installs a seccomp filter that traps the path syscalls (`openat`, `execve`, `stat`, `readlink`, `bind` and the rest) and translates the guest path into the rootfs from an in-thread SIGSYS handler, then re-issues the syscall from inside the loader's own text, which the filter lets through. That is proot's idea driven by the kernel's trap instead of a second process and ptrace: three microseconds per translated path syscall instead of two cross-process stops, static binaries run, and real `ptrace` stays free, so gdb, lldb and strace work inside. The same handler answers the syscalls Android's own app filter refuses (`rseq`, `set_robust_list`, the termios2 ioctls, hard links on app data, netlink audit), which is why unmodified glibc, apt and dpkg run at all. Writeups: [`rootfs-engine-integration.md`](crates/gpui_android/docs/workarounds/rootfs-engine-integration.md), [`rootfs-guest-env.md`](crates/gpui_android/docs/workarounds/rootfs-guest-env.md).
 
-Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is `/root`, the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
+Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is the app's home folder (`/data/user/0/com.zdroid/files/home`, the one the Files app shows), which holds your projects and survives a reset, the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
 
-Background survival: a foreground service holds the process out of Android's cached state while a language server or terminal is alive, children are reaped when you quit or swipe the task away, and a language server killed from outside is restarted up to three times in ten minutes before it stays stopped with a hint. **Keep Awake** in Settings → Android Runtime adds a wake lock so builds continue with the screen off. The device-wide phantom process cap (32 on Android 12+) cannot be lifted from an app; Android 14+ has a Developer Options toggle, and over adb `settings put global settings_enable_monitor_phantom_procs false`.
+Background survival: a foreground service holds the process out of Android's cached state while a language server or terminal is alive (always, with **Zdroid → Keep Running in Background**), children are reaped when you quit or swipe the task away, and a language server killed from outside is restarted up to three times in ten minutes before it stays stopped with a hint. **Keep Awake** in Settings → Android adds a wake lock so builds continue with the screen off. The device-wide phantom process cap (32 on Android 12+) cannot be lifted from an app; Android 14+ has a Developer Options toggle, and over adb `settings put global settings_enable_monitor_phantom_procs false`.
 
 Not in the engine: SysV IPC (PostgreSQL), 32-bit guests, mount or user namespaces. `/proc/self/maps` and `mountinfo` still show host paths.
 
@@ -146,11 +148,39 @@ Not in the engine: SysV IPC (PostgreSQL), 32-bit guests, mount or user namespace
 - **LSPs and debuggers.** Whatever you install in the rootfs is on the editor's PATH: rust-analyzer via rustup, gopls, pyright, clangd, jdtls. Zed's own managed Node runs vtsls, eslint and friends. CodeLLDB debugs Rust with real breakpoints.
 - **Extensions.** Browse, install, manage. Themes, language configs, grammars, slash commands.
 - **Remote SSH.** Server-picker pill in the title bar, persisted server list, native askpass.
+- **Agents.** Zed's ACP agent UI, plus Zed's own agent with your API keys ([below](#ai)).
 - **Multi-window.** Android freeform and DeX, each extra window is a real Activity with OS chrome.
 - **Edge-to-edge** rendering with content under the display cutout.
 - **App menu bar** with nested submenus (Settings, Keymap, Themes, Extensions).
 - **Theme follow** for system light/dark.
 - **`ZedDocumentsProvider`** exposes the project root as a SAF volume, so other Android apps can browse Zed's worktrees.
+
+---
+
+<a id="ai"></a>
+## <img src="https://api.iconify.design/lucide:bot.svg?color=%23999999&height=22" valign="middle" /> &nbsp;AI with your own API keys
+
+Besides ACP agents, Zed's own agent and inline assistant work with your API keys, no Zed account needed. Zdroid keeps the API providers Zed supports (Anthropic, OpenAI, Google, OpenRouter and the rest) and OpenAI-compatible endpoints such as a LiteLLM or vLLM gateway. It leaves out Zed-hosted models and web search, Zed sign-in, and the local model servers (Ollama, LM Studio, llama.cpp). ACP agents on an SSH remote keep their own authentication on the remote machine.
+
+To add an OpenAI-compatible endpoint, open **Settings → AI → LLM Providers → Add Provider**, choose **OpenAI**, and enter the URL, API key and model name. Agent tools need a model with tool-call support. Keys are stored in Android Keystore. The same endpoint in `settings.json` (enter the key in LLM Providers):
+
+```json
+{
+  "language_models": {
+    "openai_compatible": {
+      "my-gateway": {
+        "api_url": "https://gateway.example.com/v1",
+        "available_models": [{ "name": "my-model", "max_tokens": 128000 }]
+      }
+    }
+  },
+  "agent": {
+    "default_model": { "provider": "my-gateway", "model": "my-model" }
+  }
+}
+```
+
+Requests come from the tablet, even in an SSH project, so the endpoint must be reachable from it. See [Zed's gateway documentation](https://zed.dev/docs/ai/use-a-gateway).
 
 ---
 
@@ -162,7 +192,7 @@ You'll need:
 - [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk) (`cargo install cargo-ndk`)
 - Android NDK r27 (`sdkmanager "ndk;27.0.12077973"`)
 - Gradle 8+, `adb` on `$PATH`
-- A device with USB debugging on
+- A device with USB or wireless debugging on
 
 ```sh
 cd crates/gpui_android/examples/zed_android
@@ -184,7 +214,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 ## <img src="https://api.iconify.design/lucide:tablet-smartphone.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Tested on
 
-Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver. Compiles for any aarch64 Android 9+ with Vulkan 1.1, but only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
+Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver, and release builds are compiled for its CPU. Other high-end devices from 2022 on should run them too (Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later), but older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Android 9+ and Vulkan 1.1 are required too, and only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
 
 A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized; see [`docs/workarounds/deferred-phone-form-factor-polish.md`](crates/gpui_android/docs/workarounds/deferred-phone-form-factor-polish.md).
 
@@ -215,4 +245,4 @@ Zed Industries' position on a mobile/tablet port: **not planned**.
 - [#34633 start of termux build](https://github.com/zed-industries/zed/issues/34633), closed as "not planned" in Jul 2025.
 - [#43207 gpui: On Android](https://github.com/zed-industries/zed/issues/43207), open in the GPUI Roadmap as "Wide Scope" since Nov 2025.
 
-This repo is what those threads were asking for, built independently. The Termux build attempt failed because the upstream `wasmtime`/`cranelift` deps don't compile inside Termux. We sidestep that by building the APK on a desktop with `cargo-ndk` and running a stock Ubuntu userland through our own ptrace-free chroot engine. No fork of upstream-Zed-with-android-cfg is needed; the Editor, Workspace, Project, Search, GitGraph, Terminal, Extensions crates run unchanged. The work is at the platform boundary, documented in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
+This repo is what those threads were asking for, built independently. The Termux build attempt failed because the upstream `wasmtime`/`cranelift` deps don't compile inside Termux. We sidestep that by building the APK on a desktop with `cargo-ndk` and running a stock Ubuntu userland through our own ptrace-free chroot engine. The editor uses upstream Zed components with Android adaptations at the platform and runtime boundaries, documented in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).

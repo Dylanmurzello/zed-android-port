@@ -6,9 +6,37 @@
 //! for `/sdcard` lives here too, as the other system screen the settings
 //! page opens.
 
-use gpui::{App, Context, actions};
-use settings::{Settings as _, SettingsStore};
+use gpui::{App, Context, UpdateGlobal as _, actions};
+use settings::{
+    AndroidRuntimeSettingsContent, RegisterSetting, Settings, SettingsContent, SettingsStore,
+};
 use workspace::Workspace;
+
+#[derive(RegisterSetting)]
+pub struct AndroidRuntimeSettings {
+    pub keep_awake: bool,
+}
+
+impl Settings for AndroidRuntimeSettings {
+    fn from_settings(content: &SettingsContent) -> Self {
+        let android_runtime = content.android_runtime.clone().unwrap_or_default();
+        AndroidRuntimeSettings {
+            keep_awake: android_runtime.keep_awake.unwrap_or(false),
+        }
+    }
+}
+
+/// Adds the `android_runtime` defaults to Zed's default settings, which only
+/// Android reads, so the Settings window shows their values.
+pub fn set_default_settings(cx: &mut App) {
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            defaults.android_runtime = Some(AndroidRuntimeSettingsContent {
+                keep_awake: Some(false),
+            });
+        });
+    });
+}
 
 actions!(
     zdroid_runtime,
@@ -32,7 +60,7 @@ pub fn register(cx: &mut App) {
     .detach();
 
     let push_keep_awake = |cx: &App| {
-        let settings = workspace::AndroidRuntimeSettings::get_global(cx);
+        let settings = AndroidRuntimeSettings::get_global(cx);
         gpui_android::runtime_service::set_keep_awake(settings.keep_awake);
     };
     push_keep_awake(cx);

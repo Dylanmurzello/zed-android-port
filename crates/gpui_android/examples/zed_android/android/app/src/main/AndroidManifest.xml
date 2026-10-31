@@ -6,7 +6,7 @@
       Shared storage. Android 11+ (targetSdk 30+) gates raw /sdcard paths
       behind MANAGE_EXTERNAL_STORAGE, "All files access": a per-app toggle
       in system settings that MainActivity.requestStoragePermissions opens
-      once on first launch and Settings > Android Runtime opens again.
+      once on first launch and Settings > Android opens again.
       READ/WRITE_EXTERNAL_STORAGE stay for Android 8 to 10, where they are
       the runtime-prompted grants; requestLegacyExternalStorage keeps raw
       paths on Android 10 and preserveLegacyExternalStorage keeps them
@@ -20,11 +20,9 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
-    <!-- Required for the in-app updater to hand the downloaded APK to
-         Android's package installer via ACTION_VIEW. The user still has
-         to grant "Install unknown apps" for this package in system
-         settings the first time; we just need the manifest permission
-         to be allowed to invoke the installer at all. -->
+    <!-- Required for the in-app updater's package installer session. The
+         user still has to grant "Install unknown apps" for this package in
+         system settings the first time. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <!-- Runtime foreground service (ZdRuntimeService). FOREGROUND_SERVICE
          is required from API 28; FOREGROUND_SERVICE_SPECIAL_USE is checked
@@ -39,8 +37,18 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
+    <!--
+      Backups are off because the home directory holds credentials, such
+      as ~/.ssh keys and git tokens, which `adb backup` and cloud or
+      device-to-device backups would otherwise copy off the device.
+      allowBackup covers Android 11 and earlier; from Android 12,
+      dataExtractionRules does, since allowBackup no longer stops
+      device-to-device transfers for apps targeting it.
+    -->
     <application
         android:name=".ZedApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Zdroid"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -52,20 +60,31 @@
         android:resizeableActivity="true">
 
         <!--
+          Lets `adb shell` profile release builds with simpleperf or
+          Perfetto on Android 10 and later, as Google recommends for
+          measuring the builds people run. It doesn't make the app
+          debuggable: no debugger and no run-as.
+        -->
+        <profileable android:shell="true" />
+
+        <!--
           Exhaustive configChanges: in freeform / desktop windowing mode every
           drag-resize fires a config change, which by default destroys+recreates
           the Activity (breaking our gpui Window mid-resize). Declaring every
           relevant config tells the OS to deliver onConfigurationChanged()
           instead. density+colorMode handle cross-display moves; fontScale +
           fontWeightAdjustment handle accessibility setting changes;
-          layoutDirection handles RTL toggle. Verbose but cheap.
+          layoutDirection handles RTL toggle; grammaticalGender handles the
+          "Terms of address" language setting. A recreation would end the app:
+          MainActivity.onDestroy exits the process because gpui can't restart
+          in it. Verbose but cheap.
         -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Zdroid.Splash"
             android:windowLayoutInDisplayCutoutMode="always"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen|grammaticalGender"
             android:windowSoftInputMode="adjustResize|stateAlwaysHidden">
             <meta-data
                 android:name="android.app.lib_name"
@@ -77,10 +96,47 @@
         </activity>
 
         <!--
+          "Open with" and "Edit with" from other apps, such as the Files app:
+          a trampoline that hands the file to MainActivity
+          (OpenFileActivity.kt). The types are the ones Android and file
+          managers give text, source and data files. application/octet-stream
+          is what Android reports for a file with no registered type, such as
+          .gitignore, .ipynb, an SSH .pub key or a file without an extension
+          (seen in One UI's media store).
+        -->
+        <activity
+            android:name=".OpenFileActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <action android:name="android.intent.action.EDIT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="content"/>
+                <data android:scheme="file"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/json"/>
+                <data android:mimeType="application/javascript"/>
+                <data android:mimeType="application/xml"/>
+                <data android:mimeType="application/x-sh"/>
+                <data android:mimeType="application/yaml"/>
+                <data android:mimeType="application/x-yaml"/>
+                <data android:mimeType="application/toml"/>
+                <data android:mimeType="application/sql"/>
+                <data android:mimeType="application/octet-stream"/>
+            </intent-filter>
+        </activity>
+
+        <!--
           Each cx.open_window beyond the primary spawns one of these.
           documentLaunchMode="always" implies FLAG_ACTIVITY_NEW_DOCUMENT |
           FLAG_ACTIVITY_MULTIPLE_TASK, so each open is a fresh task with its
           own Recents card and (in freeform mode) its own OS-chromed window.
+          Document tasks stay in Recents after their Activity finishes unless
+          autoRemoveFromRecents is set: windows closed with Back or the OS
+          chrome X otherwise left empty cards in One UI's Recents.
           taskAffinity differentiates from MainActivity's task. exported=false
           because only our own Rust code launches it (via JNI Intent).
         -->
@@ -89,9 +145,10 @@
             android:exported="false"
             android:resizeableActivity="true"
             android:documentLaunchMode="always"
+            android:autoRemoveFromRecents="true"
             android:taskAffinity="com.zdroid.extra"
             android:windowLayoutInDisplayCutoutMode="always"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation|uiMode|colorMode|fontScale|fontWeightAdjustment|layoutDirection|locale|mcc|mnc|touchscreen|grammaticalGender"
             android:windowSoftInputMode="adjustResize|stateAlwaysHidden"/>
 
         <!--
@@ -115,28 +172,22 @@
             </intent-filter>
         </provider>
 
-        <!-- FileProvider that whitelists the cache dir so the in-app
-             updater can hand a content:// URI for the downloaded APK
-             to Android's package installer via ACTION_VIEW. The
-             installer can't read app-private file:// paths directly,
-             but FileProvider mediates the grant. Authority namespaced
-             under .updater so it doesn't collide with the
-             DocumentsProvider above. -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="com.zdroid.updater.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/updater_file_paths"/>
-        </provider>
+        <!-- The in-app updater's install session reports here, and so does
+             MY_PACKAGE_REPLACED once the update has installed. -->
+        <receiver
+            android:name=".UpdateInstallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
 
         <!--
           Holds the process out of the cached state while language servers
           or terminal shells are running, so Android's phantom process
-          killer leaves them alone. Rust starts and stops it from the
-          process tree (gpui_android::runtime_service); see
+          killer leaves them alone, and while Keep Running in Background
+          is on. Rust reports the process tree
+          (gpui_android::runtime_service); see
           docs/workarounds/runtime-foreground-service.md.
         -->
         <service
@@ -145,7 +196,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the editor's language servers and terminal shells running while the app is in the background"/>
+                android:value="Keeps the editor's language servers, terminal shells and agent sessions running while the app is in the background"/>
         </service>
     </application>
 </manifest>
