@@ -16,8 +16,7 @@ pub use record::CaptureInput;
         test,
         feature = "test-support",
         all(target_os = "windows", target_env = "gnu"),
-        target_os = "freebsd",
-        target_os = "android"
+        target_os = "freebsd"
     ))
 ))]
 mod livekit_client;
@@ -27,8 +26,7 @@ mod livekit_client;
         test,
         feature = "test-support",
         all(target_os = "windows", target_env = "gnu"),
-        target_os = "freebsd",
-        target_os = "android"
+        target_os = "freebsd"
     ))
 ))]
 pub use livekit_client::*;
@@ -39,8 +37,7 @@ pub use livekit_client::*;
         test,
         feature = "test-support",
         all(target_os = "windows", target_env = "gnu"),
-        target_os = "freebsd",
-        target_os = "android"
+        target_os = "freebsd"
     )
 ))]
 mod mock_client;
@@ -50,8 +47,7 @@ mod mock_client;
         test,
         feature = "test-support",
         all(target_os = "windows", target_env = "gnu"),
-        target_os = "freebsd",
-        target_os = "android"
+        target_os = "freebsd"
     )
 ))]
 pub mod test;
@@ -61,8 +57,7 @@ pub mod test;
         test,
         feature = "test-support",
         all(target_os = "windows", target_env = "gnu"),
-        target_os = "freebsd",
-        target_os = "android"
+        target_os = "freebsd"
     )
 ))]
 pub use mock_client::*;

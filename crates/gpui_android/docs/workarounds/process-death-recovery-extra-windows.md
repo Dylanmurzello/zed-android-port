@@ -128,4 +128,3 @@ self-terminates.
 ## See also
 
 - [Multi-Activity OS-chromed extra windows](multi-activity-os-chrome.md)
-- [Activity-recreation idempotency](activity-recreation-idempotency.md) — same theme for the GameActivity recreation case

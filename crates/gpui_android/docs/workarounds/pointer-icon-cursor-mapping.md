@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** `aa8521e6f6` — Map gpui CursorStyle to Android PointerIcon via JNI
-**Files:** `crates/gpui_android/src/cursor.rs`, MainActivity.kt
+**Files:** `crates/gpui_android/src/cursor.rs`, `ZdroidWindow.kt` (`setCursorStyle`)
 
 ## Problem
 

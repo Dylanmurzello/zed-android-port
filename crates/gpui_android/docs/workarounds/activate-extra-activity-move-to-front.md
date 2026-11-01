@@ -3,6 +3,7 @@
 **Status:** Active
 **Phase / Commit:** L7h (post-L7g hotfix)
 **Files:**
+- `ExtraWindowActivity.kt` (`moveOwnTaskToFront`)
 - `crates/gpui_android/src/multi_window.rs` (`activate_extra_activity`)
 - `crates/gpui_android/src/window.rs` (`PlatformWindow::activate` impl)
 
@@ -43,54 +44,21 @@ required.
 
 ## Solution
 
-`AndroidWindow::activate` (only meaningful for extra windows) routes to
-`multi_window::activate_extra_activity`, which:
+`AndroidWindow::activate` routes through
+`multi_window::activate_extra_activity` to the Activity's own
+`moveOwnTaskToFront`. It's a no-op for the main window, or if the extra
+window's Activity is already gone.
 
-1. Looks up the Activity's `GlobalRef` in `EXTRA_ACTIVITY_REFS` by
-   `window_id`. Bails silently if not registered (Activity already
-   destroyed).
-2. Reads `Activity.getTaskId()` to identify the task.
-3. Calls `Activity.getSystemService(Context.ACTIVITY_SERVICE)` to get
-   `ActivityManager`.
-4. Iterates `ActivityManager.getAppTasks()` (returns the calling app's
-   own tasks only, no `GET_TASKS` permission required).
-5. For each `AppTask`, reads `getTaskInfo()` and matches the `taskId` /
-   `id` field. Calls `AppTask.moveToFront()` on the match.
-6. Clears any pending JNI exception before returning.
-
-```rust
-// crates/gpui_android/src/multi_window.rs
-pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) {
-    let result = (|| -> Result<()> {
-        // ... attach JVM, look up GlobalRef ...
-        let task_id = env.call_method(activity_ref.as_obj(), "getTaskId", "()I", &[])?.i()?;
-        let activity_manager = env
-            .call_method(activity_ref.as_obj(), "getSystemService",
-                "(Ljava/lang/String;)Ljava/lang/Object;",
-                &[JValue::Object(&env.new_string("activity")?)])?
-            .l()?;
-        let app_tasks = env.call_method(&activity_manager, "getAppTasks",
-            "()Ljava/util/List;", &[])?.l()?;
-        // iterate, match taskId, AppTask.moveToFront()
-        Ok(())
-    })();
-    // log on err, exception_clear
-}
+```kotlin
+// ExtraWindowActivity.kt
+getSystemService(ActivityManager::class.java)
+    ?.appTasks
+    ?.firstOrNull { it.taskInfo.taskId == taskId }
+    ?.moveToFront()
 ```
 
-Both `taskId` (API 29+, on `TaskInfo`) and `id` (deprecated since API
-29, on `RecentTaskInfo`) field names are tried, since either may be the
-populated one depending on the framework version actually loaded. Try
-modern first, fall back to legacy.
-
-```rust
-// crates/gpui_android/src/window.rs
-fn activate(&self) {
-    let Some(window_id) = self.extra_window_id else { return };
-    let android_app = self.ptr.state.borrow().android_app.clone();
-    crate::multi_window::activate_extra_activity(&android_app, window_id);
-}
-```
+It runs on the UI thread and catches what Android throws for a task that ended
+in the meantime; nothing else would catch that there.
 
 ## Why this works
 

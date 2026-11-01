@@ -1,8 +1,6 @@
 use std::ffi::OsStr;
 #[cfg(not(target_os = "macos"))]
 use std::path::Path;
-#[cfg(target_os = "android")]
-use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -13,64 +11,7 @@ pub use darwin::{Child, Command, Stdio};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000_u32;
 
-/// `chdir(2)` in the forked subprocess fails with ENOENT for paths
-/// rooted at `/storage/emulated/`, `/sdcard/`, or `/mnt/runtime/` even
-/// when the parent process can readdir and open files there. Android's
-/// FUSE-emulated external storage gates entry against the requesting
-/// process's UID + supplementary groups; the parent's media_rw group
-/// membership grants file ops via the FUSE proxy, but the forked
-/// subprocess's chdir() syscall is checked through a separate path
-/// that returns ENOENT for any external-storage prefix. This breaks
-/// every LSP server / build tool spawn whose worktree lives on
-/// `/sdcard/projects/`.
-///
-/// Rewrite the requested CWD to an app-private fallback (Termux home,
-/// then app data dir, then /system/bin) when it falls under an
-/// external-storage prefix. LSP servers receive the actual project
-/// path via the `workspaceFolders` initialize parameter, so
-/// rust-analyzer / pyright / etc. still locate the project root
-/// correctly; only the kernel-level CWD changes.
-#[cfg(target_os = "android")]
-fn android_safe_cwd(dir: &Path) -> PathBuf {
-    const EXTERNAL_PREFIXES: &[&str] = &[
-        "/storage/emulated/",
-        "/storage/self/",
-        "/sdcard/",
-        "/mnt/runtime/",
-        "/mnt/user/",
-        "/mnt/media_rw/",
-    ];
-    let path_str = dir.to_string_lossy();
-    if EXTERNAL_PREFIXES.iter().any(|p| path_str.starts_with(p)) {
-        if let Some(home_path) = crate::env::workspace_root()
-            .cloned()
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        {
-            if home_path.is_dir() {
-                log::debug!(
-                    "util::command: rewriting external-storage CWD {:?} -> {:?}",
-                    dir,
-                    home_path,
-                );
-                return home_path;
-            }
-        }
-        return PathBuf::from("/system/bin");
-    }
-    dir.to_path_buf()
-}
-
 pub use gpui_util::new_std_command;
-
-/// The spawn bridge itself (env-root routing, boot-time root
-/// registration) lives in `gpui_util` so the sync `new_std_command` path
-/// upstream re-exports above carries the Android rewrite too.
-/// Re-exported here so app-side callers keep addressing the bridge
-/// through `util::command`.
-#[cfg(target_os = "android")]
-pub use gpui_util::register_environment_root;
-#[cfg(target_os = "android")]
-use gpui_util::{BRIDGE_PROGRAM, env_root_program_path};
 
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
@@ -99,20 +40,11 @@ impl Command {
         }
         #[cfg(target_os = "android")]
         {
-            // The env-root bridge: an absolute `program` under the app
-            // files dir is rewritten to `zdload <program>`, the engine
-            // loader, so Linux binaries run inside the rootfs. Scripts
-            // need nothing here: the loader handles `#!` lines itself,
-            // including `#!/usr/bin/env`. See `env_root_program_path`.
-            let program_ref = program.as_ref();
-            if let Some(program_path) = env_root_program_path(program_ref) {
-                let mut cmd = smol::process::Command::new(BRIDGE_PROGRAM);
-                cmd.arg(program_path);
-                return Self(cmd);
-            }
-            Self(smol::process::Command::new(program_ref))
+            // Android's synchronous and asynchronous spawns need the same
+            // runtime routing. smol preserves the std command.
+            Self(new_std_command(program).into())
         }
-        #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+        #[cfg(not(any(target_os = "windows", target_os = "android")))]
         Self(smol::process::Command::new(program))
     }
 
@@ -135,11 +67,13 @@ impl Command {
     }
 
     pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
+        // The runtime's programs see the guest environment, which a PATH set
+        // here has to reach.
         #[cfg(target_os = "android")]
         if key.as_ref() == "PATH"
-            && let Some((guest_env_key, guest_env)) = gpui_util::guest_env_for_path(val.as_ref())
+            && let Some((name, value)) = zdroid_hooks::guest_env_for_path(val.as_ref())
         {
-            self.0.env(guest_env_key, guest_env);
+            self.0.env(name, value);
         }
         self.0.env(key, val);
         self
@@ -151,9 +85,12 @@ impl Command {
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
+        #[cfg(target_os = "android")]
         for (key, val) in vars {
             self.env(key, val);
         }
+        #[cfg(not(target_os = "android"))]
+        self.0.envs(vars);
         self
     }
 
@@ -168,14 +105,10 @@ impl Command {
     }
 
     pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        // A spawned process can't enter Android's shared storage.
         #[cfg(target_os = "android")]
-        {
-            self.0.current_dir(android_safe_cwd(dir.as_ref()));
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            self.0.current_dir(dir);
-        }
+        let dir = zdroid_hooks::safe_current_dir(dir.as_ref());
+        self.0.current_dir(dir);
         self
     }
 

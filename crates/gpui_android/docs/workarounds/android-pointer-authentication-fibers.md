@@ -61,6 +61,6 @@ boot) or a thread was created before it ran.
 
 ## See also
 
-- `targetsdk-28-execve.md`: the bump
+- `extract-native-libs-loader.md`: why targetSdk could move to 35
 - `async-task-waker-identity.md`: the other cross-thread runtime fault of
   this port

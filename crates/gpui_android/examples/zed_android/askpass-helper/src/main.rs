@@ -11,7 +11,7 @@
 //! Zygote / Dalvik launcher that hosts the APK's main DEX runtime). When
 //! ssh execs that binary outside of an Activity context, Android aborts
 //! with `Error changing dalvik-cache ownership: Permission denied` —
-//! `untrusted_app_27` SELinux can't re-spawn another instance of the
+//! the app's SELinux domain can't re-spawn another instance of the
 //! Zygote. The askpass attempt SIGABRTs three times, ssh treats it as
 //! three failed password tries, and connection ends with `Permission
 //! denied (publickey,password)` even though the user never got a chance
@@ -20,7 +20,7 @@
 //! This helper is the missing piece: a tiny, regular ELF (not Zygote /
 //! not Dalvik / not app_process) that does the same socket-IPC dance the
 //! askpass crate's `main()` does on desktop. It gets bundled in the APK
-//! as an asset, extracted to `$PREFIX/bin/zed-askpass-helper` at boot,
+//! as an asset, extracted to `<data>/files/zed-askpass-helper` at boot,
 //! and wired in via `askpass::set_askpass_program` so any subsequent
 //! AskPassSession uses this binary instead of `current_exe()`.
 //!
@@ -44,14 +44,10 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let socket = match env::args().find_map(|a| {
-        a.strip_prefix("--askpass=").map(String::from)
-    }) {
+    let socket = match env::args().find_map(|a| a.strip_prefix("--askpass=").map(String::from)) {
         Some(s) if !s.is_empty() => s,
         _ => {
-            eprintln!(
-                "zed-askpass-helper: missing or empty --askpass=<socket> argument"
-            );
+            eprintln!("zed-askpass-helper: missing or empty --askpass=<socket> argument");
             return ExitCode::from(2);
         }
     };
@@ -59,9 +55,7 @@ fn main() -> ExitCode {
     let mut stream = match UnixStream::connect(&socket) {
         Ok(s) => s,
         Err(err) => {
-            eprintln!(
-                "zed-askpass-helper: connect {socket}: {err}"
-            );
+            eprintln!("zed-askpass-helper: connect {socket}: {err}");
             return ExitCode::from(1);
         }
     };

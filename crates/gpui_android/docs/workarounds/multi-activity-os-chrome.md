@@ -37,7 +37,7 @@ Activity's content view.
 So getting chrome means going multi-Activity, multi-task. This is the same
 pattern Chrome browser, Edge, and Files-by-Google use for "open in new
 window" affordances. Universal Android API — not Samsung-private. API floor
-is 24 (`resizeableActivity`); we're at `minSdk=26`, fine.
+is 24 (`resizeableActivity`); the app's `minSdk` is above it.
 
 ## Solution
 
@@ -181,9 +181,6 @@ drop and is reachable from the drain handler via `extra_windows`.
   crashes on JNI access to gpui state from the wrong process.
 - **`taskAffinity` collision**: ExtraWindowActivity ends up in MainActivity's
   task → no separate freeform window, no separate Recents card.
-- **Wrong ClassLoader** (using `Class.forName` instead of Activity's loader):
-  `ClassNotFoundException` for ExtraWindowActivity at startActivity time.
-  See [JNI ClassLoader for app classes](jni-classloader-for-app-classes.md).
 - **`os_closed` flag on AndroidWindow** (not state): gpui drops the wrapper
   on OS X click before drain handler reads the flag → drain misses it.
 
@@ -193,8 +190,7 @@ drop and is reachable from the drain handler via `extra_windows`.
 - [Android 16 freeform configChanges](android16-config-changes-resize.md) — drag-resize destroys Activity by default
 - [`documentLaunchMode` implies Intent flags](document-launch-mode-implies-flags.md)
 - [Cold Activity launch timeout (4s)](activity-launch-cold-timeout.md)
-- [`ZedApplication` for AppCompatActivity native lib load](zedapplication-loadlibrary.md)
-- [JNI ClassLoader for app classes](jni-classloader-for-app-classes.md)
+- [Loading the native library](load-native-library.md)
 - [JNI exception clear after error](jni-exception-clear-after-error.md)
 - [`futures::oneshot::Receiver::try_recv` semantics](futures-oneshot-tryrecv-semantics.md)
 - [Process-death recovery for extra windows](process-death-recovery-extra-windows.md)

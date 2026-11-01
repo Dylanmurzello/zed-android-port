@@ -55,13 +55,8 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
         PanelSizeState::default()
     }
     fn size_state_changed(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
-    /// Snap an incoming size to a panel-specific grid before it gets
-    /// stored. Default is no-op. The terminal panel overrides this to
-    /// round to the nearest multiple of `line_height` so the dock can
-    /// never sit at a fractional-row height, which would otherwise
-    /// produce a visible padding gap that grows and snaps during
-    /// interactive drag (because rendered content is row-quantized but
-    /// the dock allotment is continuous in logical pixels).
+    /// The size a dock drag settles at when it ends, on Android. The
+    /// terminal panel rounds it to whole rows.
     fn snap_size(&self, size: Pixels, _window: &Window, _cx: &App) -> Pixels {
         size
     }
@@ -303,10 +298,34 @@ pub struct Dock {
     active_panel_index: Option<usize>,
     focus_handle: FocusHandle,
     focus_follows_mouse: FocusFollowsMouse,
-    pub(crate) serialized_dock: Option<DockData>,
+    restoration: DockRestoreState,
     zoom_layer_open: bool,
     modal_layer: Entity<ModalLayer>,
+    /// Whether a finger is dragging the resize handle, which gpui's drag and
+    /// drop, and so `active_drag_value`, doesn't track on Android.
+    #[cfg(target_os = "android")]
+    touch_resizing: bool,
     _subscriptions: [Subscription; 2],
+}
+
+enum DockRestoreState {
+    Restoring { pending: Option<DockData> },
+    Finished,
+}
+
+impl DockRestoreState {
+    fn pending(&self) -> Option<&DockData> {
+        match self {
+            Self::Restoring { pending } => pending.as_ref(),
+            Self::Finished => None,
+        }
+    }
+
+    fn discard_pending(&mut self) {
+        if let Self::Restoring { pending } = self {
+            *pending = None;
+        }
+    }
 }
 
 impl Focusable for Dock {
@@ -403,30 +422,10 @@ fn resize_panel_entry(
     entry: &mut PanelEntry,
     size: Option<Pixels>,
     flex: Option<f32>,
-    during_drag: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> (&'static str, PanelSizeState) {
-    let size = size.map(|size| {
-        // Apply the panel's own snap policy before rounding to integer
-        // logical pixels. Panels with row-quantized content (terminal)
-        // override `snap_size` to round to a multiple of their row
-        // height so the dock can't be left at a fractional-row size,
-        // which avoids the visible padding gap during interactive drag.
-        //
-        // Skipped during the drag itself so the user feels pixel-smooth
-        // motion while moving the handle, and the snap is applied once
-        // on drag end (mouse-up finalize) so the dock settles to a
-        // row-multiple at rest. Without this two-phase pattern the
-        // dock height ticks by `line_height` per drag event, which
-        // reads as visible stutter.
-        let clamped = size.max(RESIZE_HANDLE_SIZE);
-        if during_drag {
-            clamped.round()
-        } else {
-            entry.panel.snap_size(clamped, window, cx).round()
-        }
-    });
+    let size = size.map(|size| size.max(RESIZE_HANDLE_SIZE).round());
     let uses_flexible_width = panel_uses_flexible_width(position, entry.panel.as_ref(), window, cx);
     if uses_flexible_width {
         entry.size_state.flex = flex;
@@ -471,9 +470,11 @@ impl Dock {
                 focus_handle: focus_handle.clone(),
                 focus_follows_mouse: WorkspaceSettings::get_global(cx).focus_follows_mouse,
                 _subscriptions: [focus_subscription, zoom_subscription],
-                serialized_dock: None,
+                restoration: DockRestoreState::Restoring { pending: None },
                 zoom_layer_open: false,
                 modal_layer,
+                #[cfg(target_os = "android")]
+                touch_resizing: false,
             }
         });
 
@@ -581,11 +582,23 @@ impl Dock {
             .and_then(|index| self.panel_entries.get(index))
     }
 
+    fn active_panel_entry_mut(&mut self) -> Option<&mut PanelEntry> {
+        self.active_panel_index
+            .and_then(|index| self.panel_entries.get_mut(index))
+    }
+
     pub fn active_panel_index(&self) -> Option<usize> {
         self.active_panel_index
     }
 
     pub fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if open != self.is_open {
+            self.restoration.discard_pending();
+        }
+        self.set_open_internal(open, window, cx);
+    }
+
+    fn set_open_internal(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
         if open != self.is_open {
             self.is_open = open;
             if let Some(active_panel) = self.active_panel_entry() {
@@ -817,34 +830,82 @@ impl Dock {
             },
         );
 
-        self.restore_state(window, cx);
+        self.replay_pending_serialized_state(window, cx);
 
         if panel.read(cx).starts_open(window, cx) {
-            self.activate_panel(index, window, cx);
-            self.set_open(true, window, cx);
+            self.activate_panel_internal(index, window, cx);
+            self.set_open_internal(true, window, cx);
         }
 
         cx.notify();
         index
     }
 
-    pub fn restore_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(serialized) = self.serialized_dock.clone() {
-            if let Some(active_panel) = serialized.active_panel.filter(|_| serialized.visible)
-                && let Some(idx) = self.panel_index_for_persistent_name(active_panel.as_str(), cx)
-            {
-                self.activate_panel(idx, window, cx);
+    pub(crate) fn restore_serialized_state(
+        &mut self,
+        serialized: DockData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match &mut self.restoration {
+            DockRestoreState::Restoring { pending } => {
+                *pending = Some(serialized);
+                self.replay_pending_serialized_state(window, cx);
             }
-
-            if serialized.zoom
-                && let Some(panel) = self.active_panel()
-            {
-                panel.set_zoomed(true, window, cx)
+            DockRestoreState::Finished => {
+                let active_panel_missing = serialized
+                    .active_panel
+                    .as_deref()
+                    .filter(|_| serialized.visible)
+                    .is_some_and(|name| self.panel_index_for_persistent_name(name, cx).is_none());
+                if !active_panel_missing {
+                    self.apply_serialized_state(&serialized, window, cx);
+                }
             }
-            self.set_open(serialized.visible, window, cx);
-            return true;
         }
-        false
+    }
+
+    fn replay_pending_serialized_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(serialized) = self.restoration.pending().cloned() else {
+            return;
+        };
+        let waiting_for_active_panel = serialized
+            .active_panel
+            .as_deref()
+            .filter(|_| serialized.visible)
+            .is_some_and(|name| self.panel_index_for_persistent_name(name, cx).is_none());
+        if waiting_for_active_panel {
+            self.set_open_internal(serialized.visible, window, cx);
+        } else {
+            self.apply_serialized_state(&serialized, window, cx);
+            self.restoration.discard_pending();
+        }
+    }
+
+    fn apply_serialized_state(
+        &mut self,
+        serialized: &DockData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(active_panel) = serialized
+            .active_panel
+            .as_deref()
+            .filter(|_| serialized.visible)
+            && let Some(idx) = self.panel_index_for_persistent_name(active_panel, cx)
+        {
+            self.activate_panel_internal(idx, window, cx);
+        }
+        if serialized.zoom
+            && let Some(panel) = self.active_panel()
+        {
+            panel.set_zoomed(true, window, cx)
+        }
+        self.set_open_internal(serialized.visible, window, cx);
+    }
+
+    pub(crate) fn finish_restoration(&mut self) {
+        self.restoration = DockRestoreState::Finished;
     }
 
     pub fn remove_panel<T: Panel>(
@@ -891,6 +952,18 @@ impl Dock {
     }
 
     pub fn activate_panel(&mut self, panel_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if Some(panel_ix) != self.active_panel_index {
+            self.restoration.discard_pending();
+        }
+        self.activate_panel_internal(panel_ix, window, cx);
+    }
+
+    fn activate_panel_internal(
+        &mut self,
+        panel_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if Some(panel_ix) != self.active_panel_index {
             if let Some(active_panel) = self.active_panel_entry() {
                 active_panel.panel.set_active(false, window, cx);
@@ -1034,19 +1107,17 @@ impl Dock {
         cx.notify();
     }
 
-    pub fn resize_active_panel(
+    fn resize_active_panel(
         &mut self,
         size: Option<Pixels>,
         flex: Option<f32>,
-        during_drag: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(index) = self.active_panel_index
-            && let Some(entry) = self.panel_entries.get_mut(index)
-        {
+        let position = self.position;
+        if let Some(entry) = self.active_panel_entry_mut() {
             let (panel_key, size_state) =
-                resize_panel_entry(self.position, entry, size, flex, during_drag, window, cx);
+                resize_panel_entry(position, entry, size, flex, window, cx);
 
             let workspace = self.workspace.clone();
             cx.defer(move |cx| {
@@ -1060,11 +1131,68 @@ impl Dock {
         }
     }
 
-    pub fn resize_all_panels(
+    fn snap_active_panel_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.active_panel_entry() else {
+            return;
+        };
+        let size_state = entry.size_state;
+        let size = size_state
+            .size
+            .map(|size| entry.panel.snap_size(size, window, cx));
+        self.resize_active_panel(size, size_state.flex, window, cx);
+    }
+
+    /// Resizes the active panel and, when this dock is included in
+    /// `resize_all_panels_in_dock`, all panels using the same sizing mode.
+    pub fn resize_panel_sizes(
         &mut self,
         size: Option<Pixels>,
         flex: Option<f32>,
-        during_drag: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.should_resize_all_panels(cx) {
+            self.resize_all_panels(size, flex, window, cx);
+        } else {
+            self.resize_active_panel(size, flex, window, cx);
+        }
+    }
+
+    /// Resets the active panel and, when this dock is included in
+    /// `resize_all_panels_in_dock`, all panels using the same sizing mode.
+    pub fn reset_panel_sizes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.should_resize_all_panels(cx) {
+            self.reset_all_panel_sizes(window, cx);
+        } else {
+            self.reset_active_panel_size(window, cx);
+        }
+    }
+
+    fn reset_active_panel_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = PanelSizeState::default();
+        self.resize_active_panel(state.size, state.flex, window, cx);
+    }
+
+    fn reset_all_panel_sizes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(active_entry) = self.active_panel_entry() else {
+            return;
+        };
+        let size =
+            (!panel_uses_flexible_width(self.position, active_entry.panel.as_ref(), window, cx))
+                .then(|| active_entry.panel.default_size(window, cx));
+        self.resize_all_panels(size, None, window, cx);
+    }
+
+    fn should_resize_all_panels(&self, cx: &App) -> bool {
+        WorkspaceSettings::get_global(cx)
+            .resize_all_panels_in_dock
+            .contains(&self.position)
+    }
+
+    fn resize_all_panels(
+        &mut self,
+        size: Option<Pixels>,
+        flex: Option<f32>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1088,7 +1216,6 @@ impl Dock {
                     entry,
                     size,
                     flex,
-                    during_drag,
                     window,
                     cx,
                 ));
@@ -1167,36 +1294,90 @@ impl Dock {
     }
 }
 
+/// gpui_android sends finger input to gpui's touch gestures, which scroll the
+/// content under a dragging finger unless an element claims the drag when the
+/// finger lands. gpui's drag and drop, which resizes a dock for the mouse,
+/// doesn't follow touches, so the claimed drag resizes the dock itself.
+#[cfg(target_os = "android")]
+fn touch_resize_listener(
+    dock: WeakEntity<Dock>,
+    workspace: WeakEntity<Workspace>,
+    position: DockPosition,
+) -> impl IntoElement {
+    gpui::canvas(
+        |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
+        move |_, hitbox, window, _| {
+            window.on_mouse_event(move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                if !phase.bubble() {
+                    return;
+                }
+                let Ok(resizing) = dock.read_with(cx, |dock, _| dock.touch_resizing) else {
+                    return;
+                };
+                match event.phase {
+                    gpui::TouchPhase::Started => {
+                        if hitbox.is_hovered(window) {
+                            dock.update(cx, |dock, cx| {
+                                dock.touch_resizing = true;
+                                cx.notify();
+                            })
+                            .log_err();
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }
+                    gpui::TouchPhase::Moved if resizing => {
+                        workspace
+                            .update(cx, |workspace, cx| {
+                                workspace.drag_dock_edge(position, event.position, window, cx);
+                            })
+                            .log_err();
+                        cx.stop_propagation();
+                    }
+                    gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled if resizing => {
+                        dock.update(cx, |dock, cx| {
+                            dock.touch_resizing = false;
+                            dock.snap_active_panel_size(window, cx);
+                            cx.notify();
+                        })
+                        .log_err();
+                    }
+                    _ => {}
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
 impl Render for Dock {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dispatch_context = Self::dispatch_context();
         if let Some(entry) = self.visible_entry() {
             let position = self.position;
-            // Touch-mode widens the resize-handle hit zone and shows
-            // a visible pill in the middle so fingers can find +
-            // grab the edge. Mouse mode stays at the precise 6px
-            // hitbox to avoid intercepting clicks near panel content.
-            let touch_mode = window.last_input_was_touch();
-            let handle_size = if touch_mode { px(20.) } else { RESIZE_HANDLE_SIZE };
+            // Android widens the handle for fingers and draws a grabber
+            // pill on it, lit while this dock is being resized.
+            let handle_size = if window.last_input_was_touch() {
+                px(20.)
+            } else {
+                RESIZE_HANDLE_SIZE
+            };
+            let show_grabber = cfg!(target_os = "android");
             let pill_thickness = px(4.);
             let pill_length = px(32.);
-            // Only THIS dock's resize lights up. We type-check the
-            // active drag and require its position to match self — any
-            // other drag (a tab, a different dock, a scrollbar) leaves
-            // this pill in its rest color.
-            let is_this_dragging = cx
-                .active_drag_value::<DraggedDock>()
-                .is_some_and(|d| d.0 == position);
+            let is_this_dragging = show_grabber
+                && cx
+                    .active_drag_value::<DraggedDock>()
+                    .is_some_and(|dragged_dock| dragged_dock.0 == position);
+            #[cfg(target_os = "android")]
+            let is_this_dragging = is_this_dragging || self.touch_resizing;
             let pill_color = if is_this_dragging {
                 cx.theme().colors().border_focused
             } else {
                 cx.theme().colors().border_variant
             };
             let create_resize_handle = || {
-                // Visible affordance pill at the center of the
-                // handle, perpendicular to the resize axis (Material 3
-                // pattern). Pill stays visible at all sizes so mouse
-                // users get the same affordance as touch.
                 let pill = match position {
                     DockPosition::Bottom => div().w(pill_length).h(pill_thickness),
                     _ => div().w(pill_thickness).h(pill_length),
@@ -1204,64 +1385,42 @@ impl Render for Dock {
                 let pill = pill.bg(pill_color).rounded_full();
                 let handle = div()
                     .id("resize-handle")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(pill)
+                    .when(show_grabber, |handle| {
+                        handle.flex().items_center().justify_center().child(pill)
+                    })
                     .on_drag(DraggedDock(position), |dock, _, _, cx| {
                         cx.stop_propagation();
                         cx.new(|_| dock.clone())
                     })
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|_, _: &MouseDownEvent, window, cx| {
-                            // Direct-manipulation drag claim. On touch
-                            // this gates the gesture-recognizer's
-                            // scroll-synthesis so gpui's on_drag system
-                            // actually receives the MouseMove(Left held)
-                            // events it needs to detect the drag.
-                            window.set_drag_active(true);
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                         }),
                     )
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|dock, e: &MouseUpEvent, window, cx| {
-                            window.set_drag_active(false);
                             if e.click_count == 2 {
-                                dock.resize_active_panel(None, None, false, window, cx);
+                                dock.reset_panel_sizes(window, cx);
                                 dock.workspace
                                     .update(cx, |workspace, cx| {
                                         workspace.serialize_workspace(window, cx);
                                     })
                                     .ok();
                                 cx.stop_propagation();
-                            } else {
-                                // Drag-end finalize: re-apply the size
-                                // with the panel's snap policy so the
-                                // dock settles to its allowed grid
-                                // (row multiples for the terminal
-                                // panel). During the drag itself
-                                // `resize_panel_entry` skipped the
-                                // snap so the user felt pixel-smooth
-                                // motion; without this re-apply on
-                                // mouse-up the dock would stay at a
-                                // non-snapped size and the fractional-
-                                // row padding gap that motivated the
-                                // snap would be back.
-                                if let Some(size_state) = dock.active_panel_size() {
-                                    dock.resize_active_panel(
-                                        size_state.size,
-                                        size_state.flex,
-                                        false,
-                                        window,
-                                        cx,
-                                    );
-                                }
+                            } else if cfg!(target_os = "android") {
+                                dock.snap_active_panel_size(window, cx);
                             }
                         }),
                     )
                     .occlude();
+                #[cfg(target_os = "android")]
+                let handle = handle.child(touch_resize_listener(
+                    cx.weak_entity(),
+                    self.workspace.clone(),
+                    position,
+                ));
                 match self.position() {
                     DockPosition::Left => deferred(
                         handle
@@ -1293,9 +1452,6 @@ impl Render for Dock {
                 }
             };
 
-            // Border between dock and adjacent content. Brighten only
-            // when *this* dock is being dragged so a terminal resize
-            // doesn't make the project-panel border light up too.
             let dock_border_color = if is_this_dragging {
                 cx.theme().colors().border_focused
             } else {

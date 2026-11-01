@@ -1,7 +1,23 @@
 # .gitconfig safe.directory = *
 
 **Status:** Active
+**Files:** `crates/zdroid_runtime/src/install.rs` (`seed`)
 
-Files under /storage/emulated/0 are owned by media_rw (UID 1023); we run as the app's per-app UID. libgit2's dubious-ownership check fires on every repo open. Pre-create ~/.gitconfig with [safe] directory = * at boot if not already present. Idempotent — never clobber a user's existing config.
+## Problem
 
-**Detailed writeup: TODO.** Stub created so the index links resolve.
+git refuses to work in a repository it thinks belongs to another user
+("detected dubious ownership"). In the runtime it always does: the engine
+presents the guest as root, while the files belong to the app's uid, and a
+repository under `/sdcard` belongs to `media_rw`.
+
+## Solution
+
+The installer seeds the rootfs's system-wide `/etc/gitconfig` with `[safe]
+directory = *`. The runtime's git, which Zed and the terminal both run, reads
+it before the user's own `~/.gitconfig`, which stays the user's.
+
+## Failure mode
+
+`git status` in the terminal, or Zed's Git panel, reports dubious ownership:
+`/etc/gitconfig` lost the `[safe]` section. Reset Runtime seeds it again, and
+`git config --global --add safe.directory '*'` works around it meanwhile.

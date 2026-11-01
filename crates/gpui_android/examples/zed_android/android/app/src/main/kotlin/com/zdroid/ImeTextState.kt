@@ -1,7 +1,6 @@
 package com.zdroid
 
 import android.text.SpannableStringBuilder
-import android.util.Log
 import android.view.inputmethod.ExtractedText
 
 /// Kotlin-side mirror of the gpui editor's text state that the IME

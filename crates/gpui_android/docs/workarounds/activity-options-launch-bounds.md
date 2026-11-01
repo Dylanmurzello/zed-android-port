@@ -3,7 +3,7 @@
 **Status:** Active
 **Phase / Commit:** L7e
 **Files:**
-- `crates/gpui_android/src/multi_window.rs` (`LaunchBounds`, `launch_extra_activity_inner`)
+- `crates/gpui_android/src/multi_window.rs` (`LaunchBounds`) and `MainActivity.launchExtraWindow`
 - `crates/gpui_android/src/platform.rs` (`compute_launch_bounds`)
 
 ## Problem
@@ -28,7 +28,7 @@ static. Bounds must come at startActivity time.
 `Bundle` as a second argument to `startActivity(Intent, Bundle)`.
 
 API floor: `ActivityOptions.setLaunchBounds(Rect)` is API 24+. We're at
-`minSdk=26`, fine.
+the app's `minSdk`, fine.
 
 ## Solution
 

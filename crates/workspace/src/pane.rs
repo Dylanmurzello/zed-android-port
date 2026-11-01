@@ -17,6 +17,7 @@ use crate::{
 use anyhow::Result;
 use collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use futures::{StreamExt, stream::FuturesUnordered};
+use git::{CopyFilePermalink, OpenFilePermalink};
 use gpui::{
     Action, Anchor, AnyElement, App, AsyncWindowContext, ClickEvent, ClipboardItem, Context, Div,
     DragMoveEvent, Entity, EntityId, EventEmitter, ExternalPaths, FocusHandle, FocusOutEvent,
@@ -2048,7 +2049,7 @@ impl Pane {
                                 );
                                 window.prompt(
                                     PromptLevel::Warning,
-                                    &format!("Unable to save file: {}", &err),
+                                    &format!("Unable to save file: {err}"),
                                     Some(&detail),
                                     &["Close Without Saving", "Cancel"],
                                     cx,
@@ -2268,6 +2269,14 @@ impl Pane {
         let Some(item_ix) = pane.read_with(cx, |pane, _| pane.index_for_item(item)) else {
             return Ok(true);
         };
+
+        if (save_intent == SaveIntent::Save
+            || save_intent == SaveIntent::FormatAndSave
+            || save_intent == SaveIntent::SaveWithoutFormat)
+            && cx.update(|_window, cx| !item.capability(cx).editable())?
+        {
+            return Ok(true);
+        }
 
         let (
             mut has_conflict,
@@ -3281,8 +3290,19 @@ impl Pane {
                             let parent_abs_path = entry_abs_path
                                 .as_deref()
                                 .and_then(|abs_path| Some(abs_path.parent()?.to_path_buf()));
+                            let has_git_repo = project_path.as_ref().is_some_and(|project_path| {
+                                pane.read(cx).project.upgrade().is_some_and(|project| {
+                                    project
+                                        .read(cx)
+                                        .git_store()
+                                        .read(cx)
+                                        .repository_and_path_for_project_path(project_path, cx)
+                                        .is_some()
+                                })
+                            });
                             let relative_path = project_path
-                                .map(|project_path| project_path.path)
+                                .as_ref()
+                                .map(|project_path| project_path.path.clone())
                                 .filter(|_| has_relative_path);
 
                             let visible_in_project_panel = relative_path.is_some()
@@ -3326,6 +3346,53 @@ impl Pane {
                                                 relative_path.display(path_style).to_string(),
                                             ));
                                         }),
+                                    )
+                                })
+                                .when(has_git_repo, |menu| {
+                                    menu.separator().when_some(
+                                        project_path.clone(),
+                                        |menu, project_path| {
+                                            menu.entry(
+                                                "Open File Permalink",
+                                                Some(OpenFilePermalink.boxed_clone()),
+                                                window.handler_for(&pane, {
+                                                    let project_path = project_path.clone();
+                                                    move |pane, window, cx| {
+                                                        let Some(project) = pane.project.upgrade()
+                                                        else {
+                                                            return;
+                                                        };
+                                                        crate::open_file_permalink(
+                                                            project,
+                                                            project_path.clone(),
+                                                            pane.workspace.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                }),
+                                            )
+                                            .entry(
+                                                "Copy File Permalink",
+                                                Some(CopyFilePermalink.boxed_clone()),
+                                                window.handler_for(
+                                                    &pane,
+                                                    move |pane, window, cx| {
+                                                        let Some(project) = pane.project.upgrade()
+                                                        else {
+                                                            return;
+                                                        };
+                                                        crate::copy_file_permalink(
+                                                            project,
+                                                            project_path.clone(),
+                                                            pane.workspace.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ),
+                                            )
+                                        },
                                     )
                                 })
                                 .when(is_local, |menu| {
@@ -3620,7 +3687,7 @@ impl Pane {
             .overflow_x_scroll()
             .w_full()
             .track_scroll(&self.tab_bar_scroll_handle)
-            .on_scroll_wheel(cx.listener(|this, _, _, _| {
+            .on_scroll(cx.listener(|this, _, _, _| {
                 this.suppress_scroll = true;
             }))
             .children(unpinned_tabs)
@@ -4327,86 +4394,9 @@ fn default_render_tab_bar_buttons(
                         cx,
                     )
                 })
-        });
-
-    // Android-only: keyboard toggle next to the pane controls.
-    // Hidden when `android_input.on_screen_keyboard` is false (user
-    // is on a hardware keyboard and doesn't need the soft IME). The
-    // pane render reads the setting each frame so toggling it in
-    // settings.json takes effect without an app restart. The runtime
-    // gate atomic that the platform reconcile loop consults to gate
-    // auto-show is mirrored via a SettingsStore observer registered
-    // in `zed_android::lib::main` — NOT here, because the pane
-    // doesn't render during onboarding (no project open) and the
-    // atomic would otherwise stay at its `true` default while the
-    // user toggles the setting off in Settings.
-    #[cfg(target_os = "android")]
-    let right_children = {
-        let android_input = crate::AndroidInputSettings::get_global(cx);
-        let on_screen_keyboard_enabled = android_input.on_screen_keyboard;
-        // Master / runtime split for the trackpad-mode icon:
-        // `trackpad_mode` gates icon visibility, `trackpad_mode_active`
-        // controls its toggle state. The runtime atomic the touch
-        // dispatcher reads is pushed from the SettingsStore observer
-        // in `zed_android::lib::main`, not here.
-        let trackpad_master = android_input.trackpad_mode;
-        let trackpad_active = trackpad_master && android_input.trackpad_mode_active;
-
-        let right_children = if on_screen_keyboard_enabled {
-            let keyboard_visible = window.soft_keyboard_visible();
-            right_children.child(
-                IconButton::new("toggle_soft_keyboard", IconName::Keyboard)
-                    .icon_size(IconSize::Small)
-                    .toggle_state(keyboard_visible)
-                    .on_click(|_, window, _| {
-                        window.toggle_soft_keyboard();
-                    })
-                    .tooltip(move |_window, cx| {
-                        Tooltip::for_action(
-                            if keyboard_visible {
-                                "Hide Keyboard"
-                            } else {
-                                "Show Keyboard"
-                            },
-                            &crate::ToggleSoftKeyboard,
-                            cx,
-                        )
-                    }),
-            )
-        } else {
-            right_children
-        };
-
-        // Trackpad-mode toggle — only rendered when the master
-        // `trackpad_mode` setting is on. Tap flips
-        // `trackpad_mode_active` (the runtime state), which the
-        // next pane render will pick up and push to the gpui_android
-        // atomic. When the user disables the master in settings the
-        // icon disappears entirely.
-        if trackpad_master {
-            right_children.child(
-                IconButton::new("toggle_trackpad_mode", IconName::Crosshair)
-                    .icon_size(IconSize::Small)
-                    .toggle_state(trackpad_active)
-                    .on_click(cx.listener(|_pane, _, _window, cx| {
-                        settings::update_settings_file(<dyn fs::Fs>::global(cx), cx, |content, _| {
-                            let android_input = content.android_input.get_or_insert_default();
-                            let current = android_input.trackpad_mode_active.unwrap_or(false);
-                            android_input.trackpad_mode_active = Some(!current);
-                        });
-                    }))
-                    .tooltip(Tooltip::text(if trackpad_active {
-                        "Disable Trackpad Mode"
-                    } else {
-                        "Enable Trackpad Mode (virtual mouse)"
-                    })),
-            )
-        } else {
-            right_children
-        }
-    };
-
-    let right_children = right_children.into_any_element().into();
+        })
+        .into_any_element()
+        .into();
     (None, right_children)
 }
 
@@ -4564,16 +4554,18 @@ impl Render for Pane {
             ))
             .on_action(cx.listener(
                 |pane: &mut Self, action: &RevealInProjectPanel, _window, cx| {
-                    let active_item = pane.active_item();
-                    let entry_id = active_item.as_ref().and_then(|item| {
-                        action
-                            .entry_id
-                            .map(ProjectEntryId::from_proto)
-                            .or_else(|| item.project_entry_ids(cx).first().copied())
-                    });
+                    let entry_id = action.entry_id.map(ProjectEntryId::from_proto);
+                    let active_project_path =
+                        pane.active_item().and_then(|item| item.project_path(cx));
 
                     pane.project
                         .update(cx, |project, cx| {
+                            let entry_id = entry_id.or_else(|| {
+                                active_project_path
+                                    .as_ref()
+                                    .and_then(|path| project.entry_for_path(path, cx))
+                                    .map(|entry| entry.id)
+                            });
                             if let Some(entry_id) = entry_id
                                 && project
                                     .worktree_for_entry(entry_id, cx)
@@ -4738,6 +4730,10 @@ impl Render for Pane {
 }
 
 impl ItemNavHistory {
+    pub fn is_preview_item(&self) -> bool {
+        self.history.0.lock().preview_item_id == Some(self.item.id())
+    }
+
     pub fn push<D: 'static + Any + Send + Sync>(
         &mut self,
         data: Option<D>,
@@ -4749,19 +4745,18 @@ impl ItemNavHistory {
             .upgrade()
             .is_some_and(|item| item.include_in_nav_history())
         {
-            let is_preview_item = self.history.0.lock().preview_item_id == Some(self.item.id());
+            let is_preview_item = self.is_preview_item();
             self.history
                 .push(data, self.item.clone(), is_preview_item, row, cx);
         }
     }
 
     pub fn navigation_entry(&self, data: Option<Arc<dyn Any + Send + Sync>>) -> NavigationEntry {
-        let is_preview_item = self.history.0.lock().preview_item_id == Some(self.item.id());
         NavigationEntry {
             item: self.item.clone(),
             data,
             timestamp: 0,
-            is_preview: is_preview_item,
+            is_preview: self.is_preview_item(),
             row: None,
         }
     }
@@ -9013,6 +9008,45 @@ mod tests {
             pane.activate_next_item(&ActivateNextItem { wrap_around: false }, window, cx);
         });
         assert_item_labels(&pane, ["A", "B", "C*"], cx);
+    }
+
+    #[gpui::test]
+    async fn test_save_intents_are_noops_for_read_only_items(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let pane = workspace.read_with(cx, |workspace, _| workspace.active_pane().clone());
+
+        let item = pane.update_in(cx, |pane, window, cx| {
+            let item = cx.new(|cx| {
+                TestItem::new(cx)
+                    .with_dirty(true)
+                    .with_capability(Capability::ReadOnly)
+                    .with_project_items(&[TestProjectItem::new(1, "read_only.txt", cx)])
+            });
+            pane.add_item(Box::new(item.clone()), true, true, None, window, cx);
+            item
+        });
+
+        for save_intent in [
+            SaveIntent::Save,
+            SaveIntent::FormatAndSave,
+            SaveIntent::SaveWithoutFormat,
+        ] {
+            workspace
+                .update_in(cx, |workspace, window, cx| {
+                    workspace.save_active_item(save_intent, window, cx)
+                })
+                .await
+                .unwrap();
+        }
+
+        item.read_with(cx, |item, _| {
+            assert_eq!(item.save_count, 0);
+            assert_eq!(item.save_as_count, 0);
+        });
     }
 
     fn init_test(cx: &mut TestAppContext) {

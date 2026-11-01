@@ -12,10 +12,13 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.IOException
 import java.util.LinkedList
+import kotlin.io.path.ExperimentalPathApi
+import kotlin.io.path.deleteRecursively
 
-/// Exposes Zed's `~` (i.e. `/data/data/com.zdroid/files/home`) to
-/// other apps via Android's Storage Access Framework. After install Zed
+/// Exposes Zdroid's `~` (i.e. `/data/data/com.zdroid/files/home`) to
+/// other apps via Android's Storage Access Framework. After install Zdroid
 /// shows up in any system "Open from / Save to" picker as its own root —
 /// same pattern as Termux. Read-write; users can browse, edit, share files
 /// from `~` without ADB or run-as.
@@ -23,13 +26,14 @@ import java.util.LinkedList
 /// Lifecycle gotcha: ContentProviders attach earlier than Activities. The
 /// system can fork our process, run `Application.onCreate`, then
 /// `ContentProvider.onCreate`, then service queries — without ever
-/// touching `MainActivity` or `android_main`. So the bootstrap extractor
-/// and env setup haven't run yet on a cold provider query. We rely on
+/// touching `MainActivity` or `android_main`. So the runtime setup and
+/// env setup haven't run yet on a cold provider query. We rely on
 /// `ZedApplication.onCreate` mkdir-ing `~` so the root is at least
 /// browsable; the provider also defends with an `isDirectory()` check.
 ///
-/// Document IDs are absolute filesystem paths (matches Termux). Symlink
-/// escape during search is blocked by canonical-path check.
+/// Document IDs are absolute filesystem paths (matches Termux). Other apps
+/// pass them back through URI grants, so every ID is checked to stay under
+/// `~`. Symlink escape during search is blocked by canonical-path check.
 class ZedDocumentsProvider : DocumentsProvider() {
     private lateinit var baseDir: File
 
@@ -50,8 +54,9 @@ class ZedDocumentsProvider : DocumentsProvider() {
         cursor.newRow().apply {
             add(DocumentsContract.Root.COLUMN_ROOT_ID, baseDir.absolutePath)
             add(DocumentsContract.Root.COLUMN_DOCUMENT_ID, baseDir.absolutePath)
-            add(DocumentsContract.Root.COLUMN_TITLE, "Zed")
-            add(DocumentsContract.Root.COLUMN_SUMMARY, "Zed home directory")
+            add(DocumentsContract.Root.COLUMN_ICON, R.mipmap.ic_launcher)
+            add(DocumentsContract.Root.COLUMN_TITLE, "Zdroid")
+            add(DocumentsContract.Root.COLUMN_SUMMARY, "Home folder")
             add(DocumentsContract.Root.COLUMN_MIME_TYPES, "*/*")
             add(
                 DocumentsContract.Root.COLUMN_FLAGS,
@@ -93,13 +98,14 @@ class ZedDocumentsProvider : DocumentsProvider() {
         val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         val root = getFileForDocId(rootId)
         val rootCanonical = try {
-            root.canonicalPath
+            root.canonicalFile
         } catch (t: Throwable) {
             Log.w(TAG, "querySearchDocuments: cannot resolve canonical path for root: ${t.message}")
             return cursor
         }
         val needle = query.lowercase()
         val pending = LinkedList<File>()
+        val visited = HashSet<File>()
         pending.add(root)
         while (pending.isNotEmpty() && cursor.count < SEARCH_MAX) {
             val file = pending.removeFirst()
@@ -107,7 +113,8 @@ class ZedDocumentsProvider : DocumentsProvider() {
             // path leaves the root subtree (e.g. ~/storage/shared symlink
             // would otherwise expose all of /sdcard during search).
             try {
-                if (!file.canonicalPath.startsWith(rootCanonical)) continue
+                val canonical = file.canonicalFile
+                if (!canonical.startsWith(rootCanonical) || !visited.add(canonical)) continue
             } catch (t: Throwable) {
                 continue
             }
@@ -154,7 +161,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
         displayName: String,
     ): String {
         val parent = getFileForDocId(parentDocumentId)
-        var target = File(parent, displayName)
+        var target = childFile(parent, displayName)
         var counter = 2
         while (target.exists()) {
             // Termux behavior: append " (N)" before extension on conflict.
@@ -175,17 +182,24 @@ class ZedDocumentsProvider : DocumentsProvider() {
         return target.absolutePath
     }
 
+    // Deletes symlinks, not what they point to: `~/storage/shared` links to
+    // shared storage. Kotlin's `File.deleteRecursively` follows them.
+    @OptIn(ExperimentalPathApi::class)
     override fun deleteDocument(documentId: String) {
         val file = getFileForDocId(documentId)
-        if (!file.deleteRecursively()) {
-            throw FileNotFoundException("deleteDocument failed: $documentId")
+        if (file == baseDir) throw FileNotFoundException("cannot delete the home directory")
+        try {
+            file.toPath().deleteRecursively()
+        } catch (e: IOException) {
+            throw FileNotFoundException("deleteDocument failed: $documentId: ${e.message}")
         }
     }
 
     override fun renameDocument(documentId: String, displayName: String): String {
         val file = getFileForDocId(documentId)
+        if (file == baseDir) throw FileNotFoundException("cannot rename the home directory")
         val parent = file.parentFile ?: throw FileNotFoundException("rename: no parent for $documentId")
-        var target = File(parent, displayName)
+        var target = childFile(parent, displayName)
         var counter = 2
         while (target.exists() && target != file) {
             val (base, ext) = splitNameAndExt(displayName)
@@ -198,11 +212,30 @@ class ZedDocumentsProvider : DocumentsProvider() {
         return target.absolutePath
     }
 
-    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
-        // Path-prefix check is enough for our absolute-path docId scheme.
-        // Append separator to avoid `/foo` matching `/foobar`.
-        return documentId == parentDocumentId
-            || documentId.startsWith("$parentDocumentId${File.separator}")
+    // Compares whole path components after resolving `..`, so neither
+    // `/foo` vs `/foobar` nor `/foo/../bar` passes.
+    override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean =
+        File(documentId).normalize().startsWith(File(parentDocumentId).normalize())
+
+    // The Files app opens a document by asking for its path from the root, and
+    // shows its default folder instead when a provider has no answer.
+    override fun findDocumentPath(
+        parentDocumentId: String?,
+        childDocumentId: String,
+    ): DocumentsContract.Path {
+        val top = parentDocumentId?.let(::getFileForDocId) ?: baseDir
+        val child = getFileForDocId(childDocumentId)
+        if (!child.startsWith(top)) {
+            throw FileNotFoundException("$childDocumentId is outside $top")
+        }
+        val path = generateSequence(child) { it.parentFile }
+            .takeWhile { it.startsWith(top) }
+            .map { it.path }
+            .toList()
+            .asReversed()
+        // Android asks for a root only when no parent is given.
+        val root = if (parentDocumentId == null) baseDir.absolutePath else null
+        return DocumentsContract.Path(root, path)
     }
 
     override fun getDocumentType(documentId: String): String =
@@ -211,7 +244,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
     private fun includeFile(cursor: MatrixCursor, file: File) {
         val mime = getMime(file)
         var flags = 0
-        val parentWritable = file.parentFile?.canWrite() == true
+        val parentWritable = file != baseDir && file.parentFile?.canWrite() == true
         if (file.isDirectory) {
             if (file.canWrite()) {
                 flags = flags or DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE
@@ -236,10 +269,26 @@ class ZedDocumentsProvider : DocumentsProvider() {
         }
     }
 
+    // Resolves `..` without following symlinks, so `~/storage/shared` stays
+    // browsable while `~/../databases` is refused.
     private fun getFileForDocId(docId: String): File {
-        val file = File(docId)
+        val file = File(docId).normalize()
+        if (!file.isAbsolute || !file.startsWith(baseDir)) {
+            throw FileNotFoundException("$docId is outside $baseDir")
+        }
         if (!file.exists()) throw FileNotFoundException("$docId not found")
         return file
+    }
+
+    // Display names come from other apps; a `/` or `..` would create or
+    // rename files outside `parent`.
+    private fun childFile(parent: File, displayName: String): File {
+        if (displayName.isEmpty() || displayName == "." || displayName == ".." ||
+            displayName.contains(File.separatorChar)
+        ) {
+            throw FileNotFoundException("invalid document name: $displayName")
+        }
+        return File(parent, displayName)
     }
 
     private fun getMime(file: File): String {
@@ -263,6 +312,7 @@ class ZedDocumentsProvider : DocumentsProvider() {
             DocumentsContract.Root.COLUMN_ROOT_ID,
             DocumentsContract.Root.COLUMN_MIME_TYPES,
             DocumentsContract.Root.COLUMN_FLAGS,
+            DocumentsContract.Root.COLUMN_ICON,
             DocumentsContract.Root.COLUMN_TITLE,
             DocumentsContract.Root.COLUMN_SUMMARY,
             DocumentsContract.Root.COLUMN_DOCUMENT_ID,

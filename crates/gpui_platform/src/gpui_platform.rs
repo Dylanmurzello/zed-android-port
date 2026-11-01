@@ -24,6 +24,16 @@ pub fn headless() -> gpui::Application {
     gpui::Application::with_platform(current_platform(true))
 }
 
+/// Returns a Linux app that may switch among `allowed_modes`.
+///
+/// It starts windowed in the process's own environment, or headless if that names no allowed
+/// display server. Set another initial mode with [`gpui::Application::with_windowing`], and
+/// switch later with [`gpui::App::request_windowing`].
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub fn linux(allowed_modes: gpui::WindowingModes) -> gpui::Application {
+    gpui::Application::with_platform(gpui_linux::linux_platform(allowed_modes))
+}
+
 #[cfg(target_family = "wasm")]
 pub use gpui_web::WebBackendPreference;
 
@@ -55,6 +65,11 @@ pub fn web_init() {
 
 /// Returns the default [`Platform`] for the current OS.
 pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
+    #[cfg(target_os = "ios")]
+    {
+        gpui_ios::current_platform(headless)
+    }
+
     #[cfg(target_os = "macos")]
     {
         Rc::new(gpui_macos::MacPlatform::new(headless))
@@ -73,25 +88,6 @@ pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
         gpui_linux::current_platform(headless)
     }
 
-    #[cfg(target_os = "android")]
-    {
-        // gpui_platform::current_platform isn't reachable on the
-        // Zdroid Android port — `crates/gpui_android/examples/
-        // zed_android/src/lib.rs::android_main` calls
-        // `gpui_android::run_app(app, ...)` directly and constructs
-        // its own AndroidPlatform with the AndroidApp handed in by
-        // android_activity. There's no way to synthesize an
-        // AndroidApp from inside a factory function that doesn't
-        // already have one. Panic loudly if anything routes through
-        // here so the wrong path surfaces immediately instead of
-        // failing as a confusing zero-arg `AndroidPlatform::new`.
-        let _ = headless;
-        unimplemented!(
-            "gpui_platform::current_platform is not supported on Android; \
-             use gpui_android::run_app from your android_main entry instead"
-        );
-    }
-
     #[cfg(target_family = "wasm")]
     {
         let _ = headless;
@@ -99,19 +95,42 @@ pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
     }
 }
 
+/// Returns the current platform's text system for benchmark contexts, built once per
+/// thread and shared by every context on it.
+///
+/// `#[gpui::bench]` creates a context for every Criterion routine call. Building a whole
+/// platform each time only to take its text system leaks the platform's threads on Linux
+/// (a 20-worker dispatcher and a timer thread per call), which slows every later
+/// benchmark in the process.
+#[cfg(feature = "bench-support")]
+pub fn bench_text_system() -> std::sync::Arc<dyn gpui::PlatformTextSystem> {
+    thread_local! {
+        static TEXT_SYSTEM: std::sync::Arc<dyn gpui::PlatformTextSystem> =
+            current_platform(true).text_system();
+    }
+    TEXT_SYSTEM.with(|text_system| text_system.clone())
+}
+
 /// Returns a new [`HeadlessRenderer`] for the current platform, if available.
-#[cfg(feature = "test-support")]
-pub fn current_headless_renderer() -> Option<Box<dyn gpui::PlatformHeadlessRenderer>> {
+#[cfg(any(feature = "bench-support", feature = "test-support"))]
+pub fn current_headless_renderer() -> anyhow::Result<Option<Box<dyn gpui::PlatformHeadlessRenderer>>>
+{
     #[cfg(target_os = "macos")]
     {
-        Some(Box::new(
+        Ok(Some(Box::new(
             gpui_macos::metal_renderer::MetalHeadlessRenderer::new(),
-        ))
+        )))
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        None
+        gpui_wgpu::WgpuHeadlessRenderer::new()
+            .map(|renderer| Some(Box::new(renderer) as Box<dyn gpui::PlatformHeadlessRenderer>))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Ok(None)
     }
 }
 

@@ -1,6 +1,8 @@
-# Vendored async-task: one vtable pointer per task waker
+# async-task: one vtable pointer per task waker
 
-**Status:** Active
+**Status:** Upstream. Zed pins `zed-industries/async-task` at `015845a`
+("Fix task waker vtable identity"), which carries the same one-line fix,
+so this fork doesn't vendor the crate; the bounded drain stays.
 **Phase / Commit:** rootfs engine, chunk 2 (remote development check)
 **Files:** `crates/gpui_android/vendor/async-task/` (one line in `src/raw.rs::RawTask::run`), `crates/gpui_android/examples/zed_android/Cargo.toml` (`[patch.crates-io] async-task`), `crates/gpui_android/src/platform.rs` (bounded drain in `AndroidPlatform::run`)
 

@@ -13,5 +13,7 @@ android/app/signing.properties
 # task (checksum pinned in crates/zdroid_runtime/rootfs-image.properties)
 # and staged here for APK packaging. Not committed.
 android/app/src/main/assets/rootfs/
+# Built by Gradle's `buildAskpassHelper` for every APK.
+android/app/src/main/assets/zed-askpass-helper
 *.iml
 .DS_Store

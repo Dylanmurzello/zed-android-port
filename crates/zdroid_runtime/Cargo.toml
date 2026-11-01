@@ -17,7 +17,6 @@ anyhow.workspace = true
 flate2.workspace = true
 log.workspace = true
 tar.workspace = true
-util.workspace = true
 zd_engine_core.workspace = true
 
 [dev-dependencies]

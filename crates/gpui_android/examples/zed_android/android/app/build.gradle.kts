@@ -11,7 +11,7 @@ plugins {
 // gitignored: contributors who clone the repo can still build the debug
 // variant, but a release build that produces a signed APK requires the
 // keystore + properties to be present locally (or provided by CI via
-// env-var injected secrets, future work).
+// a separate signing job in CI).
 val signingPropsFile = file("signing.properties")
 val signingProps = Properties().apply {
     if (signingPropsFile.exists()) {
@@ -106,10 +106,10 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 // zed-askpass-helper bundling.
 //
 // `zed-askpass-helper` is the SSH_ASKPASS relay binary that ssh
-// (running inside the Kali chroot) exec's to prompt the user for a
+// (running in the Ubuntu runtime) exec's to prompt the user for a
 // password via Zed's in-process modal. The helper MUST be statically
-// linked: ssh inside the chroot can't resolve bionic's dynamic linker
-// (`/system/bin/linker64` lives outside the chroot fs), so a
+// linked: the engine loader maps programs into the rootfs, where bionic's
+// dynamic linker (`/system/bin/linker64`) doesn't exist, so a
 // dynamically-linked build fails exec with the shell's misleading
 // "not found".
 //
@@ -123,9 +123,6 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 val askpassHelperDir = file("${workspaceRoot}/crates/gpui_android/examples/zed_android/askpass-helper")
 val askpassHelperBin = file("${askpassHelperDir}/target/aarch64-linux-android/release/zed-askpass-helper")
 val askpassHelperAsset = file("src/main/assets/zed-askpass-helper")
-val askpassHelperSrc = fileTree("${askpassHelperDir}/src") {
-    include("**/*.rs")
-}
 
 tasks.register<Exec>("buildAskpassHelper") {
     description = "Build zed-askpass-helper (static aarch64) via cargo-ndk and stage into assets/."
@@ -138,18 +135,19 @@ tasks.register<Exec>("buildAskpassHelper") {
         "-t",
         "arm64-v8a",
         "-P",
-        "26",
+        "31",
         "build",
         "--release",
+        "--locked",
+        "--target-dir",
+        file("${askpassHelperDir}/target").absolutePath,
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
         environment("ANDROID_NDK_HOME", ndk)
     }
 
-    inputs.files(askpassHelperSrc)
-    inputs.file("${askpassHelperDir}/Cargo.toml")
-    inputs.file("${askpassHelperDir}/.cargo/config.toml")
+    outputs.upToDateWhen { false }
     outputs.file(askpassHelperBin)
 }
 
@@ -180,7 +178,6 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 // different image base, because the engine's seccomp filter only allows
 // syscalls from the fixed window the loader is linked into.
 val zdLoaderDir = file("${workspaceRoot}/crates/zd_loader")
-val zdEngineCoreDir = file("${workspaceRoot}/crates/zd_engine_core")
 val zdLoaderBin = file("${zdLoaderDir}/target/aarch64-linux-android/release/zd_loader")
 val zdLoaderJniLib = file("src/main/jniLibs/arm64-v8a/libzdload.so")
 val ndkHomeForVerify = providers.environmentVariable("ANDROID_NDK_HOME")
@@ -196,28 +193,28 @@ tasks.register<Exec>("buildZdLoader") {
         "-t",
         "arm64-v8a",
         "-P",
-        "26",
+        "31",
         "build",
         "--release",
+        "--locked",
+        "--target-dir",
+        file("${zdLoaderDir}/target").absolutePath,
     )
 
     providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { ndk ->
         environment("ANDROID_NDK_HOME", ndk)
     }
-    // The app build exports RUSTFLAGS (+fp16 for gemm-f16). Cargo lets an
-    // environment RUSTFLAGS replace the target rustflags in a crate's
-    // .cargo/config.toml, which for the loader means losing the static,
-    // fixed-base, no-crt link: crt1.o then defines a second `_start` and
-    // lld fails with a duplicate symbol. Strip the inherited flags so the
-    // loader's own config governs.
+    // Cargo lets an environment RUSTFLAGS replace the target rustflags in a
+    // crate's .cargo/config.toml, which for the loader means losing the
+    // static, fixed-base, no-crt link: crt1.o then defines a second `_start`
+    // and lld fails with a duplicate symbol. So the loader's own config governs
+    // whatever the environment holds.
     environment.remove("RUSTFLAGS")
     environment.remove("CARGO_ENCODED_RUSTFLAGS")
 
-    inputs.files(fileTree("${zdLoaderDir}/src") { include("**/*.rs") })
-    inputs.files(fileTree("${zdEngineCoreDir}/src") { include("**/*.rs") })
-    inputs.file("${zdLoaderDir}/Cargo.toml")
-    inputs.file("${zdLoaderDir}/.cargo/config.toml")
-    inputs.file("${zdEngineCoreDir}/Cargo.toml")
+    // Cargo tracks transitive sources, lockfiles and build flags; a Gradle
+    // source-only check can reuse a loader from a different dependency graph.
+    outputs.upToDateWhen { false }
     outputs.file(zdLoaderBin)
 }
 
@@ -255,19 +252,14 @@ android {
     namespace = "com.zdroid"
     compileSdk = 35
 
-    // Pin the NDK explicitly so reproducibility doesn't depend on whatever
-    // `sdkmanager --list_installed` happens to surface. Bionic's
-    // `forkpty()` is in API 23+, so any NDK ≥ r21 is sufficient; we use r27
-    // because that's the one we shipped L1 with and `+fp16` codegen
-    // (gemm-f16) wants a recent toolchain.
+    // Pinned so builds don't depend on which NDK happens to be installed.
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.zdroid"
-        // minSdk = 26 enforces bionic ≥ Oreo. `forkpty()` is on the symbol
-        // table from API 23, but cpal/livekit transitive crates require
-        // libaaudio which is API 26.
-        minSdk = 26
+        // Android 12. Release builds need Armv9 cores (.cargo/config.toml),
+        // which shipped with it. Keep in sync with `-P` in the two tasks above.
+        minSdk = 31
         // targetSdk 35. The old pin at 28 kept the app in a SELinux domain
         // that may exec app-private files; the rootfs engine made that
         // moot (the kernel only execs the loader in the native library
@@ -275,8 +267,8 @@ android {
         // level buys: no "built for an older version" install warning, a
         // real notification permission prompt (33+), and the foreground
         // service type declared here is enforced (34+). What it costs:
-        // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE)
-        // on Android 11+; see AndroidManifest.xml.
+        // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE);
+        // see AndroidManifest.xml.
         targetSdk = 35
         versionCode = 20
         versionName = "0.4.0"
@@ -336,6 +328,12 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
+            // Strip the native libraries in the APK, but keep their symbol
+            // tables in build/outputs/native-debug-symbols for symbolizing
+            // profiles and crashes. CI publishes the file with each build.
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -344,9 +342,12 @@ android {
 }
 
 dependencies {
-    implementation("androidx.games:games-activity:3.0.5")
+    // android-activity's native GameActivity code is version 4.4 and
+    // supports the 4.0 Java side. 4.4.0's Java side attaches input listeners
+    // to its SurfaceView, which send captured mouse and trackpad events
+    // through native code that leaks them, and it focuses that SurfaceView
+    // on every window focus change, away from the IME host.
+    implementation("androidx.games:games-activity:4.0.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.core:core-ktx:1.13.1")
-    // ActivityResultLauncher / ActivityResultContracts for SAF picker.
-    implementation("androidx.activity:activity-ktx:1.9.3")
 }

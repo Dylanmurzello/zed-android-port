@@ -46,7 +46,7 @@ fn launch_extra_activity(
 ) -> Result<()> {
     let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
     let mut env = vm.attach_current_thread()?;
-    let result = launch_extra_activity_inner(&mut env, android_app, window_id, bounds);
+    let result = call_into_java(&mut env);
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_clear();
     }
@@ -75,5 +75,4 @@ error — that's already captured in `result`.
 
 ## See also
 
-- [JNI ClassLoader for app classes](jni-classloader-for-app-classes.md) — the original failure mode that surfaced this requirement
 - [Multi-Activity OS-chromed extra windows](multi-activity-os-chrome.md)

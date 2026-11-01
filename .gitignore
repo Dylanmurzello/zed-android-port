@@ -69,3 +69,4 @@ release-notes-draft*.md
 .nixos-test-history
 
 .local*
+.cache

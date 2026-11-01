@@ -1,12 +1,14 @@
-# SSL_CERT_FILE / CURL_CA_BUNDLE env
+# CA certificates for the editor and its tools
 
-**Status:** Removed.
+**Status:** Active.
 
-Zed-the-Rust-process no longer touches these env vars at boot. All in-
-process HTTPS uses `http_client_tls::tls_config()`, which builds a rustls
-`ClientConfig` against the Mozilla root bundle shipped by the
-`webpki-roots` crate. No env-var indirection, no platform JNI bridge,
-no CA-bundle file to ship.
+Android has none of the CA bundle paths Linux programs look for. The tools
+Zed runs live in the Ubuntu runtime, whose `ca-certificates` package (see
+below) provides them. The editor process doesn't read a bundle file.
+
+Zed's own HTTPS: `http_client_tls::tls_config()` builds a
+rustls `ClientConfig` against the Mozilla root bundle shipped by the
+`webpki-roots` crate.
 
 We previously used `rustls-platform-verifier` against Android's system
 trust store via a bundled `.aar`. On Android that path was failing
@@ -26,6 +28,6 @@ the right trade.
 
 Subprocess CA story: the Ubuntu rootfs owns it. `ca-certificates` is
 installed by the essentials step after the first launch (or from
-Settings → Android Runtime), and every tool reads `/etc/ssl/certs` the
-Debian way. The editor process keeps its own trust through
-`rustls-platform-verifier`.
+Settings → Android), and every tool reads `/etc/ssl/certs` the
+Debian way. The editor process keeps its own trust: the `webpki-roots`
+bundle above.

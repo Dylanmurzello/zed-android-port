@@ -4,6 +4,7 @@
 use std::{
     env,
     ffi::OsStr,
+    fmt,
     ops::AddAssign,
     panic::Location,
     pin::Pin,
@@ -31,231 +32,14 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     std::process::Command::new(program)
 }
 
-/// The program the bridge dispatches through: the rootfs engine loader,
-/// by the short name of its stable `<data>/files/bin/zdload` link, which
-/// kernel PATH lookup finds because that directory is on the editor's
-/// PATH. A short name keeps this lib free of app-package assumptions.
-#[cfg(target_os = "android")]
-pub const BRIDGE_PROGRAM: &str = "zdload";
-
-/// The app files dir, the host side of the guest view. Set once at boot
-/// from `lib.rs`; any absolute-path spawn whose program lives under it
-/// is rewritten to route through the loader so it runs in the rootfs.
-///
-/// `OnceLock` so the slot is initialized exactly once and reads are
-/// lock-free for every subsequent `Command::new`.
-#[cfg(target_os = "android")]
-static ENVIRONMENT_ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
-
-/// Called from `lib.rs` at boot. Subsequent `Command::new` calls detect
-/// absolute paths under `root` and rewrite them to
-/// `zdload <abs_path> <args…>`. A second call is a no-op.
-#[cfg(target_os = "android")]
-pub fn register_environment_root(root: std::path::PathBuf) {
-    if ENVIRONMENT_ROOT.set(root).is_err() {
-        log::debug!("gpui_util: environment_root already registered; ignoring re-register");
-    }
-}
-
-/// The app files dir in the two spellings that matter on Android: the
-/// one the editor keys its state by (`/data/user/0/<pkg>/files`, what
-/// `internal_data_path` returns) and the one the kernel reports for
-/// paths under it (`/data/data/<pkg>/files` on Android 16 at targetSdk
-/// 35, where `/data/user/0` is a symlink in the app's mount namespace).
-/// `None` once registered means the two agree.
-#[cfg(target_os = "android")]
-static FILES_DIR_SPELLINGS: OnceLock<Option<(std::path::PathBuf, std::path::PathBuf)>> =
-    OnceLock::new();
-
-/// Called from `lib.rs` at boot, once.
-#[cfg(target_os = "android")]
-pub fn register_files_dir_spellings(editor: std::path::PathBuf, kernel: std::path::PathBuf) {
-    let spellings = (editor != kernel).then_some((editor, kernel));
-    if FILES_DIR_SPELLINGS.set(spellings).is_err() {
-        log::debug!("gpui_util: files dir spellings already registered; ignoring re-register");
-    }
-}
-
-/// `path` with the kernel's spelling of the files dir replaced by the
-/// editor's; `None` when `path` is not under the kernel's spelling or
-/// the spellings agree.
-#[cfg(target_os = "android")]
-pub fn respell_kernel_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    let (editor, kernel) = FILES_DIR_SPELLINGS.get()?.as_ref()?;
-    let rest = path.strip_prefix(kernel).ok()?;
-    Some(editor.join(rest))
-}
-
-/// Android-only env-root bridge helper.
-///
-/// Zed-the-app runs on Android's bionic libc, but every spawn target
-/// that lives under the app files dir (managed Node, downloaded language
-/// servers, debug adapters) is a Linux binary meant to run in the
-/// rootfs. If the host kernel exec'd such a path directly, the process
-/// would fail because the binary's `PT_INTERP`
-/// (`/lib/ld-linux-aarch64.so.1`) does not exist on bionic, or because a
-/// script's shebang resolves against a non-existent host `/usr/bin/env`.
-/// Either way the user sees a bare "No such file or directory" and the
-/// language tool silently dies.
-///
-/// This helper detects the case: program is an absolute path that lives
-/// strictly under the registered environment root. When it matches we
-/// return `Some(program_path)` and the caller rewrites the spawn to
-/// `zdload <program_path> <original_args…>`; the loader maps the binary
-/// into the rootfs and runs it there.
-///
-/// Cost: one read of a `OnceLock` plus a `starts_with` byte-compare on
-/// every `Command::new` invocation. Cache-hot, < 1µs.
-///
-/// Returns `None` when `register_environment_root` was never called,
-/// when `program` is a relative path / short name (kernel PATH lookup
-/// handles those via the `zd-runtime/<name>` symlinks already), or when
-/// the path doesn't live under env_root (system binaries like
-/// `/system/bin/sh` keep their native exec semantics).
-#[cfg(target_os = "android")]
-pub fn env_root_program_path(program: &OsStr) -> Option<std::path::PathBuf> {
-    let root = ENVIRONMENT_ROOT.get()?;
-    let path = std::path::Path::new(program);
-    if !path.is_absolute() {
-        return None;
-    }
-    // A path a tool or the kernel produced may carry the kernel's
-    // spelling of the files dir.
-    let respelled = respell_kernel_path(path);
-    let path = respelled.as_deref().unwrap_or(path);
-    // `starts_with` matches on full path components, so a literal
-    // prefix like `<root>foo` won't false-match against `<root>/foo`.
-    if !path.starts_with(root) {
-        return None;
-    }
-    // The farm and `bin/` hold the loader itself. Routing a farm entry
-    // through the bridge would make the loader open its own symlink as
-    // the guest program; the kernel execs these directly.
-    if path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin")) {
-        return None;
-    }
-    Some(path.to_path_buf())
-}
-
-/// Translate a `PATH` Zed built for a child, in host terms, into the
-/// guest view the loader will apply to that child.
-///
-/// The loader installs the guest environment from `ZD_GUEST_ENV` at every
-/// exec Zed initiates, and its `PATH` entry replaces whatever the spawn
-/// carried, so a per-spawn `PATH` never reached the guest: npm's
-/// lifecycle scripts run as `sh -c "node install.js"` and need the managed
-/// Node's `bin` on it (esbuild installs itself that way). Entries that
-/// exist in the guest view keep their place ahead of the configured guest
-/// `PATH`; Android's own partitions and the bridge's symlink farm, which
-/// points at the loader itself, are host-only and dropped.
-///
-/// Returns the `ZD_GUEST_ENV` assignment to set on the child, or `None`
-/// when this process does not run under the rootfs engine.
-#[cfg(target_os = "android")]
-pub fn guest_env_for_path(host_path: &OsStr) -> Option<(&'static str, std::ffi::OsString)> {
-    let spec = env::var(zd_engine_core::env::GUEST_ENV).ok()?;
-    let root = ENVIRONMENT_ROOT.get().map(|root| root.as_path());
-    let merged = merge_guest_path(&spec, &host_path.to_string_lossy(), root);
-    Some((zd_engine_core::env::GUEST_ENV, merged.into()))
-}
-
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-fn merge_guest_path(spec: &str, host_path: &str, root: Option<&std::path::Path>) -> String {
-    const HOST_ONLY_PREFIXES: &[&str] = &[
-        "/system/",
-        "/apex/",
-        "/vendor/",
-        "/product/",
-        "/odm/",
-        "/data/app/",
-    ];
-    let host_only = |entry: &str| {
-        HOST_ONLY_PREFIXES
-            .iter()
-            .any(|prefix| entry.starts_with(prefix))
-            || root.is_some_and(|root| {
-                let path = std::path::Path::new(entry);
-                path.starts_with(root.join("zd-runtime")) || path.starts_with(root.join("bin"))
-            })
-    };
-    let mut entries: Vec<&str> = Vec::new();
-    for entry in host_path.split(':') {
-        if entry.starts_with('/') && !host_only(entry) && !entries.contains(&entry) {
-            entries.push(entry);
-        }
-    }
-    let separator = zd_engine_core::LIST_SEPARATOR.to_string();
-    let mut items: Vec<String> = Vec::new();
-    let mut replaced = false;
-    for item in spec.split(&separator) {
-        if let Some(guest_path) = item.strip_prefix("PATH=") {
-            for entry in guest_path.split(':') {
-                if !entry.is_empty() && !entries.contains(&entry) {
-                    entries.push(entry);
-                }
-            }
-            items.push(format!("PATH={}", entries.join(":")));
-            replaced = true;
-        } else if !item.is_empty() {
-            items.push(item.to_string());
-        }
-    }
-    if !replaced {
-        items.push(format!("PATH={}", entries.join(":")));
-    }
-    items.join(&separator)
-}
-
-#[cfg(test)]
-mod guest_path_tests {
-    use super::merge_guest_path;
-    use std::path::Path;
-
-    const SPEC: &str = "HOME=/root;PATH=/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp";
-
-    #[test]
-    fn managed_node_dir_leads_and_host_dirs_drop() {
-        let root = Path::new("/data/user/0/com.zdroid/files");
-        let host_path = "/data/user/0/com.zdroid/files/node/v24/bin:/data/user/0/com.zdroid/files/zd-runtime:/data/user/0/com.zdroid/files/bin:/system/bin";
-        assert_eq!(
-            merge_guest_path(SPEC, host_path, Some(root)),
-            "HOME=/root;PATH=/data/user/0/com.zdroid/files/node/v24/bin:/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp"
-        );
-    }
-
-    #[test]
-    fn a_captured_guest_path_keeps_its_order() {
-        let host_path = "/root/.local/bin:/usr/bin:/usr/local/bin:/bin";
-        assert_eq!(
-            merge_guest_path(SPEC, host_path, None),
-            "HOME=/root;PATH=/root/.local/bin:/usr/bin:/usr/local/bin:/bin;TMPDIR=/tmp"
-        );
-    }
-
-    #[test]
-    fn a_spec_without_path_gains_one() {
-        assert_eq!(
-            merge_guest_path("HOME=/root", "/opt/bin:relative:/system/bin", None),
-            "HOME=/root;PATH=/opt/bin"
-        );
-    }
-}
-
+/// Android routes spawns into the runtime's userland.
 #[cfg(target_os = "android")]
 pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
-    // Same env_root bridge as `util::command::Command::new`, mirrored here
-    // so synchronous spawn sites get the rewrite too.
-    let program = program.as_ref();
-    if let Some(program_path) = env_root_program_path(program) {
-        let mut cmd = std::process::Command::new(BRIDGE_PROGRAM);
-        cmd.arg(program_path);
-        return cmd;
-    }
-    std::process::Command::new(program)
+    zdroid_hooks::new_std_command(program)
 }
 
 #[cfg(target_os = "windows")]
-pub fn get_windows_system_shell() -> String {
+pub fn get_powershell() -> Option<String> {
     use std::path::PathBuf;
 
     fn find_pwsh_in_programfiles(find_alternate: bool, find_preview: bool) -> Option<PathBuf> {
@@ -294,7 +78,7 @@ pub fn get_windows_system_shell() -> String {
                 };
 
                 let exe_path = entry.path().join("pwsh.exe");
-                if exe_path.exists() {
+                if exe_path.is_file() {
                     Some((version, exe_path))
                 } else {
                     None
@@ -307,41 +91,38 @@ pub fn get_windows_system_shell() -> String {
     fn find_pwsh_in_msix(find_preview: bool) -> Option<PathBuf> {
         let msix_app_dir =
             PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Microsoft\\WindowsApps");
-        if !msix_app_dir.exists() {
-            return None;
-        }
-
-        let prefix = if find_preview {
-            "Microsoft.PowerShellPreview_"
+        let package_family_name = if find_preview {
+            "Microsoft.PowerShellPreview_8wekyb3d8bbwe"
         } else {
-            "Microsoft.PowerShell_"
+            "Microsoft.PowerShell_8wekyb3d8bbwe"
         };
-        msix_app_dir
-            .read_dir()
-            .ok()?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                if !matches!(entry.file_type(), Ok(ft) if ft.is_dir()) {
-                    return None;
-                }
-
-                if !entry.file_name().to_string_lossy().starts_with(prefix) {
-                    return None;
-                }
-
-                let exe_path = entry.path().join("pwsh.exe");
-                exe_path.exists().then_some(exe_path)
-            })
-            .next()
-    }
-
-    fn find_pwsh_in_scoop() -> Option<PathBuf> {
-        let pwsh_exe =
-            PathBuf::from(std::env::var_os("USERPROFILE")?).join("scoop\\shims\\pwsh.exe");
+        let pwsh_exe = msix_app_dir.join(package_family_name).join("pwsh.exe");
         pwsh_exe.exists().then_some(pwsh_exe)
     }
 
-    static SYSTEM_SHELL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    fn find_pwsh_in_scoop() -> Option<PathBuf> {
+        // Scoop can be installed to a custom location; $SCOOP points at the
+        // scoop root in that case and defaults to %USERPROFILE%\scoop otherwise.
+        let scoop_dir = std::env::var_os("SCOOP").map(PathBuf::from).or_else(|| {
+            std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("scoop"))
+        })?;
+        let pwsh_exe = scoop_dir.join("shims").join("pwsh.exe");
+        pwsh_exe.is_file().then_some(pwsh_exe)
+    }
+
+    fn find_pwsh_in_dotnet_tools() -> Option<PathBuf> {
+        let pwsh_exe =
+            PathBuf::from(std::env::var_os("USERPROFILE")?).join(".dotnet\\tools\\pwsh.exe");
+        pwsh_exe.is_file().then_some(pwsh_exe)
+    }
+
+    fn find_windows_powershell() -> Option<PathBuf> {
+        let system_root = PathBuf::from(std::env::var_os("SystemRoot")?);
+        let powershell = system_root.join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+        powershell.is_file().then_some(powershell)
+    }
+
+    static POWERSHELL: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
         let locations = [
             || find_pwsh_in_programfiles(false, false),
             || find_pwsh_in_programfiles(true, false),
@@ -350,8 +131,10 @@ pub fn get_windows_system_shell() -> String {
             || find_pwsh_in_msix(true),
             || find_pwsh_in_programfiles(true, true),
             || find_pwsh_in_scoop(),
+            || find_pwsh_in_dotnet_tools(),
             || which::which_global("pwsh.exe").ok(),
             || which::which_global("powershell.exe").ok(),
+            || find_windows_powershell(),
         ];
 
         locations
@@ -359,13 +142,28 @@ pub fn get_windows_system_shell() -> String {
             .find_map(|f| f())
             .map(|p| p.to_string_lossy().trim().to_owned())
             .inspect(|shell| log::info!("Found powershell in: {}", shell))
-            .unwrap_or_else(|| {
-                log::warn!("Powershell not found, falling back to `cmd`");
-                "cmd.exe".to_string()
-            })
     });
 
-    (*SYSTEM_SHELL).clone()
+    (*POWERSHELL).clone()
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_windows_system_shell() -> String {
+    static CMD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        log::warn!("Powershell not found, falling back to `cmd`");
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        std::path::PathBuf::from(system_root)
+            .join("System32\\cmd.exe")
+            .to_string_lossy()
+            .into_owned()
+    });
+    get_powershell().unwrap_or_else(|| (*CMD).clone())
+}
+
+#[inline]
+pub const fn is_utf8_char_boundary(u8: u8) -> bool {
+    // This is bit magic equivalent to: b < 128 || b >= 192
+    (u8 as i8) >= -0x40
 }
 
 pub fn post_inc<T: From<u8> + AddAssign<T> + Copy>(value: &mut T) -> T {
@@ -470,7 +268,7 @@ where
             Err(error) => {
                 log_error_with_caller(
                     *Location::caller(),
-                    DebugAsDisplay(&error),
+                    format_args!("{:#}", DebugAsDisplay(&error)),
                     log::Level::Error,
                 );
                 None
@@ -496,7 +294,7 @@ where
         match self {
             Ok(value) => Some(value),
             Err(error) => {
-                log_error_with_caller(*Location::caller(), error, level);
+                log_error_with_caller(*Location::caller(), format_args!("{error:#}"), level);
                 None
             }
         }
@@ -510,10 +308,12 @@ where
     }
 }
 
-fn log_error_with_caller<E>(caller: core::panic::Location<'_>, error: E, level: log::Level)
-where
-    E: std::fmt::Display,
-{
+#[inline(never)]
+fn log_error_with_caller(
+    caller: core::panic::Location<'_>,
+    arguments: fmt::Arguments<'_>,
+    level: log::Level,
+) {
     #[cfg(not(windows))]
     let file = caller.file();
     #[cfg(windows)]
@@ -535,7 +335,7 @@ where
         &log::Record::builder()
             .target(module_path.as_deref().unwrap_or(""))
             .module_path(file.as_deref())
-            .args(format_args!("{:#}", error))
+            .args(arguments)
             .file(Some(caller.file()))
             .line(Some(caller.line()))
             .level(level)
@@ -543,8 +343,13 @@ where
     );
 }
 
+#[track_caller]
 pub fn log_err<E: std::fmt::Display>(error: &E) {
-    log_error_with_caller(*Location::caller(), error, log::Level::Error);
+    log_error_with_caller(
+        *Location::caller(),
+        format_args!("{error:#}"),
+        log::Level::Error,
+    );
 }
 
 // Forces `{:?}` formatting through a `Display`-bounded logging helper so `anyhow::Error` emits a
@@ -670,7 +475,7 @@ where
             Poll::Ready(output) => Poll::Ready(match output {
                 Ok(output) => Some(output),
                 Err(error) => {
-                    log_error_with_caller(location, error, level);
+                    log_error_with_caller(location, format_args!("{error:#}"), level);
                     None
                 }
             }),
@@ -697,7 +502,11 @@ where
             Poll::Ready(output) => Poll::Ready(match output {
                 Ok(output) => Some(output),
                 Err(error) => {
-                    log_error_with_caller(location, DebugAsDisplay(&error), level);
+                    log_error_with_caller(
+                        location,
+                        format_args!("{:#}", DebugAsDisplay(&error)),
+                        level,
+                    );
                     None
                 }
             }),
@@ -807,7 +616,7 @@ where
     F: Fn(&T, &T) -> std::cmp::Ordering,
 {
     if limit == 0 {
-        items.truncate(0);
+        items.clear();
     }
     if items.len() <= limit {
         items.sort_by(compare);
@@ -822,4 +631,69 @@ where
     items.select_nth_unstable_by(limit, compare);
     items.truncate(limit);
     items.sort_by(compare);
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::{ResultExt, TryFutureExt, TryFutureExtBacktrace};
+    use log::{Level, Log, Metadata, Record};
+    use std::{
+        cell::RefCell,
+        future::ready,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+
+    #[test]
+    fn logging_preserves_diagnostics_and_callers() {
+        log::set_logger(&TestLogger).expect("failed to install test logger");
+        let error = anyhow::anyhow!("root failure")
+            .context("inner context")
+            .context("outer context");
+        let display = "outer context: inner context: root failure";
+        let debug = format!("{error:?}");
+        let line = line!() + 1;
+        assert_eq!(Err::<(), _>(&error).log_err(), None);
+        assert_logged(line, display);
+        let line = line!() + 1;
+        assert_eq!(Err::<(), _>(&error).log_err_with_backtrace(), None);
+        assert_logged(line, &debug);
+        let mut context = Context::from_waker(Waker::noop());
+        let line = line!() + 1;
+        let mut future = pin!(ready(Err::<(), _>(&error)).log_err());
+        assert_eq!(future.as_mut().poll(&mut context), Poll::Ready(None));
+        assert_logged(line, display);
+        let line = line!() + 1;
+        let mut future = pin!(ready(Err::<(), _>(&error)).log_err_with_backtrace());
+        assert_eq!(future.as_mut().poll(&mut context), Poll::Ready(None));
+        assert_logged(line, &debug);
+    }
+
+    thread_local! {
+        static RECORDS: RefCell<Vec<(Option<u32>, String)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    struct TestLogger;
+
+    impl Log for TestLogger {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            assert_eq!(record.target(), "gpui_util::lib");
+            assert_eq!(record.module_path(), Some("crates/gpui_util/src/lib.rs"));
+            assert_eq!(record.file(), Some(file!()));
+            assert_eq!(record.level(), Level::Error);
+            RECORDS.with_borrow_mut(|records| {
+                records.push((record.line(), record.args().to_string()));
+            });
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn assert_logged(line: u32, message: &str) {
+        assert_eq!(RECORDS.take(), [(Some(line), message.to_owned())]);
+    }
 }

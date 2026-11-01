@@ -1,7 +1,15 @@
-# Termux ~/storage curated symlinks
+# ~/storage curated symlinks
 
 **Status:** Active
+**Files:** `crates/gpui_android/src/storage.rs` (`setup_user_symlinks`)
 
-At first launch (idempotent), gpui_android::storage::setup_user_symlinks creates ~/storage/{shared,downloads,dcim,documents,movies,music,pictures,podcasts} pointing at the corresponding /storage/emulated/0/<dir>. Plus ~/storage/external-N for SD card / OTG drives. Mirrors what termux-setup-storage does in stock Termux.
+At every launch (idempotent), `gpui_android::storage::setup_user_symlinks`
+creates `storage/{shared,downloads,dcim,documents,movies,music,pictures,podcasts}`
+in the app's home folder (`<data>/files/home`), pointing at the
+corresponding `/storage/emulated/0/<dir>`, plus `storage/external-N` for SD
+cards and OTG drives, as Termux's `termux-setup-storage` does. The folder is
+the runtime's home too, so `cd ~/storage/downloads` works in the terminal.
 
-**Detailed writeup: TODO.** Stub created so the index links resolve.
+`/storage/emulated/0` is FUSE-mounted noexec, so these are for opening and
+editing files, never a workspace root; see
+[android-noexec-mount.md](android-noexec-mount.md).

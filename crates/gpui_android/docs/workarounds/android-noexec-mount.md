@@ -49,8 +49,8 @@ land on the noexec mount in the first place:
 
 - Workspaces live in `~/projects/` (= `$HOME/projects/`, app-private,
   exec-allowed).
-- `/storage/emulated/0` is exposed for browse/edit-single-file via Termux-
-  style `~/storage/*` symlinks but never as a workspace root.
+- `/storage/emulated/0` is exposed for browse/edit-single-file via the
+  `~/storage/*` symlinks but never as a workspace root.
 - SAF picks become a one-shot recursive copy into `~/projects/<basename>` —
   see [projects-workspace-import.md](projects-workspace-import.md).
 - If a user opens a project from /sdcard anyway, the title bar shows a
@@ -72,13 +72,10 @@ too (`mmap(PROT_EXEC)` is EPERM there), which is why the banner stays.
   doesn't trigger the banner = silent EACCES on first build.
 - A policy change that drops `app_data_file:file execute` for untrusted
   apps would stop the loader from mapping guest binaries anywhere under
-  app data; nothing in-app can route around that (the targetSdk 28 era
-  depended on the narrower `execute_no_trans` instead, see
-  [targetsdk-28-execve.md](targetsdk-28-execve.md)).
+  app data; nothing in-app can route around that.
 
 ## See also
 
 - [projects-workspace-import.md](projects-workspace-import.md)
 - [noexec-banner-move.md](noexec-banner-move.md)
-- [deferred-tier2-root-storage.md](deferred-tier2-root-storage.md)
-- [targetsdk-28-execve.md](targetsdk-28-execve.md)
+- [extract-native-libs-loader.md](extract-native-libs-loader.md)
