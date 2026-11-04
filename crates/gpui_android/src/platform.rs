@@ -14,10 +14,10 @@ use futures::channel::{mpsc, oneshot};
 use gpui::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds,
     ClipboardItem, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, GestureTuning, Keymap,
-    Menu, MenuItem, PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformGestures,
-    PlatformInput, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PriorityQueueReceiver, RunnableVariant, ScrollPhysics, Task, ThermalState,
-    TouchPhase, WindowAppearance, WindowParams, px,
+    Menu, MenuItem, OperatingSystem, PathPromptOptions, Pixels, Platform, PlatformDisplay,
+    PlatformGestures, PlatformInfo, PlatformInput, PlatformKeyboardLayout, PlatformKeyboardMapper,
+    PlatformTarget, PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, RunnableVariant,
+    ScrollPhysics, Task, ThermalState, TouchPhase, WindowAppearance, WindowParams, px,
 };
 use gpui_wgpu::GpuContext;
 use ndk::configuration::UiModeNight;
@@ -1510,6 +1510,13 @@ impl AndroidPlatform {
 }
 
 impl Platform for AndroidPlatform {
+    fn platform_info(&self) -> PlatformInfo {
+        PlatformInfo {
+            os: OperatingSystem::Android,
+            target: PlatformTarget::Native,
+        }
+    }
+
     fn background_executor(&self) -> BackgroundExecutor {
         self.common.borrow().background_executor.clone()
     }
