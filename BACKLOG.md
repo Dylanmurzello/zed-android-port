@@ -39,6 +39,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - Drag a scrollbar thumb with a finger, and press its track: the thumb jumps there and follows the finger. Resize a dock by dragging its edge with a finger.
 - Turn Battery Saver on from the quick settings with Zdroid open: Zed.log shows `power_mode: Battery Saver on`, and the agent panel's spinner keeps turning while a reply streams. Start Zdroid with it already on, and the line shows at startup.
 - Open an SSH project from a new connection: Zed downloads the 1.27.0 remote server, and the terminal and an agent thread start on the remote.
+- Open Settings in its own window and close it: Zed 1.27 now removes a closed window one run-loop pass later, so check that the window goes and Zed.log doesn't repeat `window not found`.
 
 ## 0.10.0 follow-up checks
 
