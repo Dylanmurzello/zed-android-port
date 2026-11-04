@@ -247,8 +247,11 @@ copilot_chat = { opt-level = "z" }
 copilot_ui = { opt-level = "z" }
 credentials_provider = { opt-level = "z" }
 dap = { opt-level = "z" }
+dap_adapters = { opt-level = "z" }
 db = { opt-level = "z" }
 debug_adapter_extension = { opt-level = "z" }
+debugger_tools = { opt-level = "z" }
+debugger_ui = { opt-level = "z" }
 deepseek = { opt-level = "z" }
 derive_refineable = { opt-level = "z" }
 dev_container = { opt-level = "z" }
@@ -298,6 +301,7 @@ language_model = { opt-level = "z" }
 language_model_core = { opt-level = "z" }
 language_models = { opt-level = "z" }
 language_models_cloud = { opt-level = "z" }
+language_onboarding = { opt-level = "z" }
 language_selector = { opt-level = "z" }
 language_tools = { opt-level = "z" }
 languages = { opt-level = "z" }
