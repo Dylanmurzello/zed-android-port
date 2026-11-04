@@ -14,10 +14,11 @@ use futures::channel::{mpsc, oneshot};
 use gpui::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, Bounds,
     ClipboardItem, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, GestureTuning, Keymap,
-    Menu, MenuItem, PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformGestures,
-    PlatformInput, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PriorityQueueReceiver, RunnableVariant, ScrollPhysics, Task, ThermalState,
-    TouchPhase, WindowAppearance, WindowParams, px,
+    Menu, MenuItem, OperatingSystem, PathPromptOptions, Pixels, Platform, PlatformDisplay,
+    PlatformGestures, PlatformInfo, PlatformInput, PlatformKeyboardLayout, PlatformKeyboardMapper,
+    PlatformTarget, PlatformTextSystem, PlatformWindow, PowerMode, PriorityQueueReceiver,
+    RunnableVariant, ScrollPhysics, Task, ThermalState, TouchPhase, WindowAppearance, WindowParams,
+    px,
 };
 use gpui_wgpu::GpuContext;
 use ndk::configuration::UiModeNight;
@@ -201,6 +202,7 @@ pub(crate) struct PlatformHandlers {
     pub(crate) app_lifecycle: Option<Box<dyn FnMut(AppLifecyclePhase)>>,
     pub(crate) memory_warning: Option<Box<dyn FnMut()>>,
     pub(crate) thermal_state_change: Option<Box<dyn FnMut()>>,
+    pub(crate) power_mode_change: Option<Box<dyn FnMut()>>,
 }
 
 pub(crate) struct AndroidCommon {
@@ -1353,6 +1355,17 @@ impl AndroidPlatform {
         }
     }
 
+    fn deliver_power_mode_change(&self) {
+        if !crate::power_mode::take_changed() {
+            return;
+        }
+        let callback = self.common.borrow_mut().callbacks.power_mode_change.take();
+        if let Some(mut callback) = callback {
+            callback();
+            self.common.borrow_mut().callbacks.power_mode_change = Some(callback);
+        }
+    }
+
     fn notify_memory_warning(&self) {
         let callback = self.common.borrow_mut().callbacks.memory_warning.take();
         if let Some(mut callback) = callback {
@@ -1510,6 +1523,13 @@ impl AndroidPlatform {
 }
 
 impl Platform for AndroidPlatform {
+    fn platform_info(&self) -> PlatformInfo {
+        PlatformInfo {
+            os: OperatingSystem::Android,
+            target: PlatformTarget::Native,
+        }
+    }
+
     fn background_executor(&self) -> BackgroundExecutor {
         self.common.borrow().background_executor.clone()
     }
@@ -1589,6 +1609,7 @@ impl Platform for AndroidPlatform {
 
             self.deliver_open_urls();
             self.deliver_thermal_state_change();
+            self.deliver_power_mode_change();
 
             self.apply_window_insets();
 
@@ -1883,6 +1904,12 @@ impl Platform for AndroidPlatform {
     }
     fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.thermal_state_change = Some(callback);
+    }
+    fn power_mode(&self) -> PowerMode {
+        crate::power_mode::mode()
+    }
+    fn on_power_mode_change(&self, callback: Box<dyn FnMut()>) {
+        self.common.borrow_mut().callbacks.power_mode_change = Some(callback);
     }
     /// Keeps the screen on while the app is in front, Android's equivalent:
     /// Zed asks for this while an agent works. Counted, so overlapping

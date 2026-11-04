@@ -5,11 +5,13 @@ import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
@@ -180,6 +182,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         installSplashOverlay()
         ZdRuntimeService.startIfBackgroundMode(this)
         watchDnsServers()
+        watchPowerSaveMode()
         // Reopening from Recents brings back the intent that started the
         // task, which may be an earlier "Open with".
         val relaunched = savedInstanceState != null ||
@@ -655,6 +658,32 @@ class MainActivity : GameActivity(), ZdroidWindow {
         }
     }
 
+    private var powerSaveReceiver: BroadcastReceiver? = null
+
+    /// Reports Battery Saver to Rust now and whenever it changes; gpui caps
+    /// animations at 30 frames a second while it's on. The broadcast isn't
+    /// sticky, so registering doesn't report the current state.
+    private fun watchPowerSaveMode() {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                reportPowerSaveMode()
+            }
+        }
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        powerSaveReceiver = receiver
+        reportPowerSaveMode()
+    }
+
+    private fun reportPowerSaveMode() {
+        val power = getSystemService(PowerManager::class.java) ?: return
+        NativeBridge.nativePowerSaveModeChanged(power.isPowerSaveMode)
+    }
+
     /// Returns the running app's versionName (e.g. "0.2.0"). The in-app
     /// updater compares this against GitHub's `releases/latest` tag
     /// (e.g. "v0.2.1" with the `v` stripped) to decide whether to
@@ -879,6 +908,8 @@ class MainActivity : GameActivity(), ZdroidWindow {
             getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(callback)
         }
         dnsCallback = null
+        powerSaveReceiver?.let { receiver -> unregisterReceiver(receiver) }
+        powerSaveReceiver = null
         getSystemService(InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)

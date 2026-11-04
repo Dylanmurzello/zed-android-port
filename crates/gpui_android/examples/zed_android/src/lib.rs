@@ -377,6 +377,49 @@ fn load_embedded_fonts(cx: &App) {
         .unwrap();
 }
 
+fn prewarm_fonts(cx: &mut App) {
+    let theme_settings = theme::theme_settings(cx);
+    let ui_font = theme_settings.ui_font(cx).clone();
+    let buffer_font = theme_settings.buffer_font(cx).clone();
+    let mut fonts = vec![ui_font.clone(), buffer_font.clone()];
+    let mut add_variant = |base_font: &gpui::Font, weight, style| {
+        let mut font = base_font.clone();
+        font.weight = weight;
+        font.style = style;
+        fonts.push(font);
+    };
+
+    for weight in [
+        gpui::FontWeight::MEDIUM,
+        gpui::FontWeight::SEMIBOLD,
+        gpui::FontWeight::BOLD,
+    ] {
+        add_variant(&ui_font, weight, gpui::FontStyle::Normal);
+    }
+    add_variant(&ui_font, gpui::FontWeight::NORMAL, gpui::FontStyle::Italic);
+    add_variant(
+        &buffer_font,
+        gpui::FontWeight::BOLD,
+        gpui::FontStyle::Normal,
+    );
+    add_variant(
+        &buffer_font,
+        gpui::FontWeight::NORMAL,
+        gpui::FontStyle::Italic,
+    );
+    add_variant(
+        &buffer_font,
+        gpui::FontWeight::BOLD,
+        gpui::FontStyle::Italic,
+    );
+
+    let text_system = cx.text_system().clone();
+    cx.background_spawn(async move {
+        text_system.prewarm_fonts(&fonts);
+    })
+    .detach();
+}
+
 /// Spawns a background task to load the user themes from the themes directory.
 fn load_user_themes_in_background(fs: Arc<dyn fs::Fs>, cx: &mut App) {
     cx.spawn({
@@ -824,7 +867,7 @@ fn boot(
         node_options_tx.send(Some(options)).log_err();
     })
     .detach();
-    ui::on_new_scrollbars::<SettingsStore>(cx);
+    ui::observe_scrollbar_settings::<SettingsStore>(cx);
     let node_runtime = NodeRuntime::new(client.http_client(), None, node_options_rx);
     info!("zed_android: RealFs + NodeRuntime constructed (PATH lookup + managed download)");
 
@@ -844,6 +887,11 @@ fn boot(
     info!("zed_android: android_input atomics observer registered");
 
     load_embedded_fonts(cx);
+    // Zed does this on Linux, its desktop platform whose text system is
+    // cosmic-text. Android's is too, with every font in /system/fonts loaded,
+    // so the first match for each font style would otherwise scan them all
+    // while painting.
+    prewarm_fonts(cx);
 
     let mut language_registry = language::LanguageRegistry::new(cx.background_executor().clone());
     language_registry.set_language_server_download_dir(paths::languages_dir().clone());

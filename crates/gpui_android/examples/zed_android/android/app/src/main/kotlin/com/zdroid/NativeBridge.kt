@@ -209,6 +209,10 @@ object NativeBridge {
     /// `/etc/resolv.conf`.
     external fun nativeDnsServersChanged(servers: String)
 
+    /// Called by `MainActivity` when it starts and whenever Battery Saver
+    /// turns on or off. Implemented in `gpui_android::power_mode`.
+    external fun nativePowerSaveModeChanged(powerSave: Boolean)
+
     /// Called by `OpenedFiles` with a `file://` URL for a file another app
     /// opened with Zdroid. Implemented in `gpui_android::open_files`, which
     /// queues it until the editor opens it.
