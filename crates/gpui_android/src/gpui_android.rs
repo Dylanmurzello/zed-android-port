@@ -18,6 +18,7 @@ mod multi_window;
 mod open_files;
 mod platform;
 pub mod pointer_authentication;
+mod power_mode;
 pub mod process_hygiene;
 pub mod project_import;
 pub mod runtime_links;
