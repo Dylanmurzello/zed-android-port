@@ -1045,9 +1045,20 @@ impl SshRemoteConnection {
             ReleaseChannel::Dev => "build".to_string(),
             _ => version.to_string(),
         };
+        // Android fetches a stable release's server (see `wanted_version`) and
+        // names it as one: the server removes older binaries of its own
+        // channel when it starts, so under a `dev` name every version stayed.
+        // A server from a preview release takes the stable name without a
+        // clash, since Zed never reuses a version number across channels.
+        let channel_name = if cfg!(target_os = "android") && release_channel == ReleaseChannel::Dev
+        {
+            ReleaseChannel::Stable.dev_name()
+        } else {
+            release_channel.dev_name()
+        };
         let binary_name = format!(
             "zed-remote-server-{}-{}{}",
-            release_channel.dev_name(),
+            channel_name,
             version_str,
             if self.ssh_platform.os.is_windows() {
                 ".exe"
