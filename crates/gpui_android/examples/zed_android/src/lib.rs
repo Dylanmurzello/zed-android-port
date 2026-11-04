@@ -881,7 +881,7 @@ fn boot(
         node_options_tx.send(Some(options)).log_err();
     })
     .detach();
-    ui::on_new_scrollbars::<SettingsStore>(cx);
+    ui::observe_scrollbar_settings::<SettingsStore>(cx);
     let node_runtime = NodeRuntime::new(client.http_client(), None, node_options_rx);
     info!("zed_android: RealFs + NodeRuntime constructed (PATH lookup + managed download)");
 
