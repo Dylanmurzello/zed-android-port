@@ -7,6 +7,9 @@
 //
 // Changes lists the `Release Notes:` bullets of every pull request merged
 // into zdroid since the previous release, each linked to its pull request.
+// Pre-releases don't count as previous releases: the in-app updater skips
+// them, and one that fails its smoke checks stays a pre-release, so the
+// release that replaces it lists its changes too.
 // The bullets are parsed by script/lib/release-notes.js, as Zed's
 // script/draft-release-notes does. Zed squash-merges, so its notes come from
 // commit messages; this fork merges pull requests with merge commits, so
@@ -14,7 +17,8 @@
 //
 // Usage: zdroid-release-notes.js <tag> --version <X.Y.Z> [--previous <tag>]
 //   [--highlights <file>]
-// --previous defaults to the release published before <tag>.
+// --previous defaults to the last release before <tag> that isn't a
+// pre-release.
 // Environment: GITHUB_REPOSITORY (owner/name); GH_TOKEN, optional.
 
 const fs = require("fs");
@@ -78,7 +82,9 @@ async function previousRelease(tag) {
   const releases = await api("/releases?per_page=30");
   const index = releases.findIndex((release) => release.tag_name === tag);
   const older = index >= 0 ? releases.slice(index + 1) : releases;
-  const previous = older.find((release) => !release.draft && release.tag_name !== tag);
+  const previous = older.find(
+    (release) => !release.draft && !release.prerelease && release.tag_name !== tag,
+  );
   if (!previous) {
     throw new Error(`No release before ${tag}`);
   }

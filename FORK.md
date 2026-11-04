@@ -170,7 +170,7 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
 2. Tag the release. The workflow writes the whole release body, in this order:
    - **Install** from `.github/release/install.md`, with the version filled in.
    - **Highlights**, an optional paragraph: the annotated tag's message after its subject line (`Zdroid X.Y.Z`). Leave it out for most releases.
-   - **Changes**: the `Release Notes:` bullets of the pull requests merged into `zdroid` since the previous release, each linked to its pull request, the way Zed builds its notes. `N/A` entries are left out, so write these bullets for users.
+   - **Changes**: the `Release Notes:` bullets of the pull requests merged into `zdroid` since the previous release, each linked to its pull request, the way Zed builds its notes. `N/A` entries are left out, so write these bullets for users. Pre-releases don't count as previous releases, so when a pre-release fails its checks (step 5), the release that replaces it lists its changes too. A fix committed straight to `zdroid` has no pull request, so describe it in the Highlights.
    - **Caveats** from `.github/release/caveats.md`. Pull requests keep it current: one that fixes a listed limitation removes its line, and one that adds a limitation adds one.
    - **Verification**: APK and certificate SHA-256, commit, provenance.
 
