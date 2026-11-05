@@ -21,6 +21,10 @@ come from it: Snapdragon 8 Gen 2, Adreno 740 GPU, 120 Hz adaptive-refresh
 panel, ~336 dpi, Android 16 with One UI 8, and the Book Cover Keyboard's
 trackpad, in both tablet mode and DeX.
 
+Writeups about older CPUs and kernels also use a second device, a Samsung
+Galaxy S21 Ultra (SM-G998B): Exynos 2100 (Cortex-X1, A78 and A55 cores),
+Mali-G78 GPU, Android 15 with One UI 7 on Linux 5.4, without a keyboard.
+
 ## How to read this
 
 | Status | Meaning |
@@ -124,7 +128,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | [audio + livekit + call cfg-gates](android-cfg-gates.md) | Active | These crates don't compile against bionic; mock fallbacks already exist |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
-| [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off. Armv9 cores shipped with Android 12, hence minSdk 31 |
+| [Build for Armv8.2 CPUs](reference-cpu-build.md) | Active | The default target is Armv8.0, whose atomics are retry loops; Armv8.2 with RCpc has single-instruction ones. Armv9's further instructions measured no faster on the reference hardware, so release builds stopped requiring them in 0.15.0 |
 | [Loader in `nativeLibraryDir` via extractNativeLibs](extract-native-libs-loader.md) | Active | The engine loader is exec'd by path from the APK's lib dir; AGP 8 keeps libs un-extracted by default |
 
 ## Adding a new workaround

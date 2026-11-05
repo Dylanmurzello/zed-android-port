@@ -9,7 +9,7 @@ Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilker
 > [!IMPORTANT]
 > - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the runtime and its home folder.
 > - Zdroid 0.10 doesn't open the data of 0.9.x and earlier, which ran Bootstrap or a Kali chroot: its first launch asks to clear Zdroid's data. Copy what you want to keep from the home folder first (**Open Files** in that dialog).
-> - Release builds need Android 12 or later and are compiled for Armv9-class CPUs: Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later. Older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
+> - Release builds need Android 12 or later and a CPU whose cores are all Cortex-A55, A75 or newer (Armv8.2 with dot product), as in the Snapdragon 8 series from the 845 on and every Tensor. They're tested on the Galaxy Tab S9 Ultra and the Exynos Galaxy S21 Ultra. CPUs with older cores, such as Cortex-A53, crash at launch. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
 
 Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
 
@@ -292,7 +292,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 ## <img src="https://api.iconify.design/lucide:tablet-smartphone.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Tested on
 
-Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver, and release builds are compiled for its CPU. Other high-end devices from 2022 on should run them too (Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later), but older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Android 9+ and Vulkan 1.1 are required too, and only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
+Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver. A Galaxy S21 Ultra (Exynos 2100 / Mali-G78, Android 15, One UI 7, Linux 5.4) checks older CPUs and kernels and a Mali GPU, where text is anti-aliased in grayscale. Release builds need Android 12 or later, Vulkan 1.1, and Cortex-A55, A75 or newer cores (Armv8.2 with dot product); older CPUs, such as Cortex-A53 ones, crash at launch. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Xclipse GPUs haven't been tried.
 
 A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized.
 
