@@ -123,7 +123,14 @@ fn add_items(
                 let dispatch_via = focus.clone();
                 let handler_action = action.boxed_clone();
                 menu.entry(name, Some(action), move |window, cx| match &dispatch_via {
-                    Some(handle) => handle.dispatch_action(handler_action.as_ref(), window, cx),
+                    // Focus moves there first, as upstream's menu entries do:
+                    // the command palette opens for the element focused when
+                    // it's toggled and later sends its pick there, so with
+                    // the closing menu focused that pick went nowhere.
+                    Some(handle) => {
+                        window.focus(handle, cx);
+                        handle.dispatch_action(handler_action.as_ref(), window, cx)
+                    }
                     None => window.dispatch_action(handler_action.boxed_clone(), cx),
                 })
             }
