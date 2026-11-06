@@ -254,6 +254,58 @@ fn search_guest_path(name: &[u8]) -> bool {
     false
 }
 
+/// Closes every descriptor above 2. `close_range` needs Linux 5.9; on older
+/// kernels, such as the 5.4 kernel seen with Android 15 and One UI 7, it
+/// fails with ENOSYS, and the descriptors `/proc/self/fd` lists are closed
+/// one by one, as glibc's `closefrom` does there. Closing every number up
+/// to the descriptor limit instead would cost tens of thousands of system
+/// calls for each program the editor starts. See
+/// crates/gpui_android/docs/workarounds/close-range-before-linux-5-9.md.
+fn close_inherited_descriptors() -> Result<(), i32> {
+    match sys::close_range(3, u32::MAX, 0) {
+        Err(sys::ENOSYS) => {}
+        result => return result,
+    }
+    let directory = sys::openat(
+        sys::AT_FDCWD,
+        c"/proc/self/fd".as_ptr().cast(),
+        sys::O_RDONLY | sys::O_DIRECTORY | sys::O_CLOEXEC,
+        0,
+    )?;
+    // A linux_dirent64 is d_ino (8 bytes), d_off (8), d_reclen (2), d_type
+    // (1), then the NUL-terminated name. Directory positions in
+    // /proc/self/fd follow descriptor numbers, so closing listed entries
+    // while reading doesn't skip any.
+    let mut buffer = [0u8; 2048];
+    let result = loop {
+        let length = match sys::getdents64(directory, &mut buffer) {
+            Ok(0) => break Ok(()),
+            Ok(length) => length.min(buffer.len()),
+            Err(errno) => break Err(errno),
+        };
+        let mut offset = 0;
+        while let Some(header) = buffer[..length].get(offset..offset + 19) {
+            let record_length = usize::from(u16::from_ne_bytes([header[16], header[17]]));
+            let Some(record) = buffer[..length].get(offset..offset + record_length) else {
+                break;
+            };
+            if record_length <= 19 {
+                break;
+            }
+            let name = &record[19..];
+            let name = &name[..name.iter().position(|&byte| byte == 0).unwrap_or(name.len())];
+            if let Some(fd) = config::descriptor(name)
+                && fd > 2
+                && fd != directory
+                && let Err(_errno) = sys::close(fd)
+            {}
+            offset += record_length;
+        }
+    };
+    if let Err(_errno) = sys::close(directory) {}
+    result
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn zd_main(sp: *const u64) -> ! {
     // SAFETY: `_start` passes the kernel's initial stack pointer.
@@ -275,9 +327,9 @@ pub extern "C" fn zd_main(sp: *const u64) -> ! {
     }
     let mut invocation = resolve_invocation(&stack);
     if config::get().close_fds
-        && let Err(errno) = sys::close_range(3, u32::MAX, 0)
+        && let Err(errno) = close_inherited_descriptors()
     {
-        abort!("close_range failed: errno {errno}");
+        abort!("closing inherited descriptors failed: errno {errno}");
     }
 
     let filter = match handler::ensure_filter() {
