@@ -89,6 +89,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeDnsServersChanged<'loc
     if servers.is_empty() {
         return;
     }
+    zdroid_runtime::set_nameservers(servers.clone());
     let runtime = zdroid_runtime::Runtime::new(&zdroid_runtime::data_path());
     // The first launch seeds the file when it installs the rootfs.
     if !runtime.is_installed() {

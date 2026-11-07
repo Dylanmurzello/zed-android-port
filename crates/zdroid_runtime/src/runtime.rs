@@ -116,12 +116,19 @@ impl Runtime {
         })
     }
 
-    /// The user's home folder: the guest's `$HOME`, the Files app's
-    /// Zdroid root, and where projects live (`projects/`). It's outside the
-    /// rootfs, so a reset leaves it alone, and at a path the editor and the
-    /// tools spell the same.
+    /// The app's home folder: where projects live (`projects/`), the
+    /// `~/storage` links and the Files app's Zdroid root. Outside the
+    /// rootfs, so a reset leaves it alone; the guest reaches it through
+    /// links in its own home (`install::link_home`).
     pub fn workspace_root(&self) -> PathBuf {
         self.data_path.join("home")
+    }
+
+    /// The guest's home, the rootfs's `/root`, in the host's spelling. The
+    /// editor's `HOME` points here too, so `~` is one folder to the editor
+    /// and to the tools; the engine reports it back to them as `/root`.
+    pub fn guest_home(&self) -> PathBuf {
+        self.rootfs_dir().join("root")
     }
 
     /// Link target, relative to `<data>/files/zd-runtime/`, for every entry
@@ -172,13 +179,12 @@ impl Runtime {
 
     /// Variables applied to the guest environment only.
     pub fn guest_env_spec(&self) -> String {
-        let home = self.workspace_root();
         [
-            &format!("HOME={}", home.display()),
+            "HOME=/root",
             "USER=root",
             "LOGNAME=root",
             &format!("SHELL={}", self.login_shell()),
-            &format!("PATH={}", self.guest_path()),
+            &format!("PATH={DEFAULT_GUEST_PATH}"),
             "LANG=C.UTF-8",
             // The host's `<data>/tmp` is the guest's `/tmp` (bound), so the
             // guest spelling keeps temp paths short and native-looking.
@@ -217,11 +223,11 @@ impl Runtime {
 
     /// Mutations to apply to the Zed process env at boot. Zed's own
     /// process keeps the host shape (PATH with the farm first) and the
-    /// guest's home; the engine block rides along so every child spawned
-    /// from it, through the farm or the bridge, reaches the loader
-    /// configured.
+    /// guest's home in the host's spelling; the engine block rides along so
+    /// every child spawned from it, through the farm or the bridge, reaches
+    /// the loader configured.
     pub fn env_for_zed_process(&self) -> Vec<(String, EnvOp)> {
-        let mut ops = crate::env::baseline_env(&self.data_path, &self.workspace_root());
+        let mut ops = crate::env::baseline_env(&self.data_path, &self.guest_home());
         for (key, value) in self.engine_env() {
             ops.push((key, EnvOp::Set(value)));
         }
@@ -270,35 +276,20 @@ impl Runtime {
         }
     }
 
-    /// The engine's default guest PATH with the home's tool directories
-    /// (rustup's, pip's and npm's per-user installs) in place of `/root`'s.
-    fn guest_path(&self) -> String {
-        let home = self.workspace_root();
-        let mut entries = vec![
-            home.join(".cargo/bin").display().to_string(),
-            home.join(".local/bin").display().to_string(),
-        ];
-        entries.extend(
-            DEFAULT_GUEST_PATH
-                .split(':')
-                .filter(|entry| !entry.starts_with("/root/"))
-                .map(str::to_string),
-        );
-        entries.join(":")
-    }
-
     /// The host directories holding the guest's programs, the ones on the
     /// guest's PATH.
     pub fn binary_dirs(&self) -> Vec<PathBuf> {
         let rootfs = self.rootfs_dir();
-        let home = self.workspace_root();
-        vec![
-            rootfs.join("usr/bin"),
-            rootfs.join("usr/local/bin"),
-            rootfs.join("usr/sbin"),
-            home.join(".cargo/bin"),
-            home.join(".local/bin"),
+        [
+            "usr/bin",
+            "usr/local/bin",
+            "usr/sbin",
+            "root/.cargo/bin",
+            "root/.local/bin",
         ]
+        .into_iter()
+        .map(|dir| rootfs.join(dir))
+        .collect()
     }
 
     /// Names of the programs the guest's standard directories hold; the
@@ -452,24 +443,18 @@ mod tests {
     }
 
     #[test]
-    fn the_guest_home_is_the_app_home_folder() {
+    fn the_guest_home_is_root() {
         let runtime = Runtime::new(std::path::Path::new("/data/user/0/com.zdroid/files"));
         let spec = runtime.guest_env_spec();
-        assert!(
-            spec.contains("HOME=/data/user/0/com.zdroid/files/home;"),
-            "{spec}"
-        );
+        assert!(spec.contains("HOME=/root;"), "{spec}");
         let path = spec
             .split(';')
             .find_map(|item| item.strip_prefix("PATH="))
             .unwrap();
         assert!(
-            path.starts_with(
-                "/data/user/0/com.zdroid/files/home/.cargo/bin:/data/user/0/com.zdroid/files/home/.local/bin:"
-            ),
+            path.starts_with("/root/.cargo/bin:/root/.local/bin:"),
             "{path}"
         );
-        assert!(!path.contains("/root"), "{path}");
         assert!(path.ends_with(":/usr/bin:/sbin:/bin"), "{path}");
     }
 
@@ -481,7 +466,7 @@ mod tests {
         std::fs::create_dir_all(&etc).expect("create etc");
         std::fs::write(
             etc.join("passwd"),
-            "root:x:0:0:root:/data/user/0/com.zdroid/files/home:/usr/bin/zsh\n\
+            "root:x:0:0:root:/root:/usr/bin/zsh\n\
              daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n",
         )
         .expect("write passwd");
@@ -501,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_and_the_guest_share_the_home_folder() {
+    fn the_editor_home_is_the_guest_home_in_the_hosts_spelling() {
         let runtime = Runtime::new(std::path::Path::new("/data/user/0/com.zdroid/files"));
         let home = runtime
             .env_for_zed_process()
@@ -512,7 +497,9 @@ mod tests {
             });
         assert_eq!(
             home.as_deref(),
-            Some(std::ffi::OsStr::new("/data/user/0/com.zdroid/files/home"))
+            Some(std::ffi::OsStr::new(
+                "/data/user/0/com.zdroid/files/rootfs/root"
+            ))
         );
     }
 }

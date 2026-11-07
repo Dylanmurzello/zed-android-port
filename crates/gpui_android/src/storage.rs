@@ -30,18 +30,6 @@ pub fn request_all_files_access() -> Result<bool> {
     crate::jni_env::call_main_activity_bool("requestAllFilesAccess")
 }
 
-/// Android's own Clear storage for this app: deletes all of its data and ends
-/// the process. Backs the clean start an install from before 0.10 needs.
-pub fn clear_app_data() -> Result<bool> {
-    crate::jni_env::call_main_activity_bool("clearAppData")
-}
-
-/// Opens the home folder in Android's Files app. Returns `false` when no app
-/// opens the documents provider's root.
-pub fn open_home_in_files() -> Result<bool> {
-    crate::jni_env::call_main_activity_bool("openHomeInFiles")
-}
-
 /// `storage/` symlinks into shared storage, in the app's home folder.
 ///
 /// Like Termux's `termux-setup-storage`: makes the common /storage/emulated/0
