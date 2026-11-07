@@ -28,6 +28,13 @@ pub(crate) const CLASSIFICATION_NONE: i32 = 0;
 /// `MotionEvent.CLASSIFICATION_TWO_FINGER_SWIPE`.
 pub(crate) const CLASSIFICATION_TWO_FINGER_SWIPE: i32 = 3;
 
+/// `InputDevice.SOURCE_TOUCHSCREEN` and `SOURCE_MOUSE`: a class bit set plus a
+/// device bit. An event's source is a union of these (an S Pen on the screen
+/// reports `SOURCE_TOUCHSCREEN | SOURCE_STYLUS`), so a source is tested by its
+/// bits, never by equality.
+const SOURCE_TOUCHSCREEN: u32 = 0x1002;
+const SOURCE_MOUSE: u32 = 0x2002;
+
 /// One Android `MotionEvent`, from android-activity's input queue in the main
 /// window and over JNI otherwise, whose Java object can't become an
 /// `android_activity::input::MotionEvent`.
@@ -95,13 +102,17 @@ impl Motion {
     /// two-finger scroll or a pinch, and reports it with fake fingers. The
     /// classifications of a touchscreen's events have that source instead.
     fn is_trackpad_gesture(&self) -> bool {
-        self.source == Source::Mouse && self.classification != CLASSIFICATION_NONE
+        self.has_source(SOURCE_MOUSE) && self.classification != CLASSIFICATION_NONE
+    }
+
+    fn has_source(&self, source: u32) -> bool {
+        u32::from(self.source) & source == source
     }
 
     /// Whether this is a finger on the touchscreen. A trackpad's presses report a
     /// finger as their tool too, with the mouse's source.
     fn is_touchscreen_finger(&self) -> bool {
-        self.source == Source::Touchscreen
+        self.has_source(SOURCE_TOUCHSCREEN)
             && self.pointers.first().is_some_and(|pointer| {
                 !matches!(
                     pointer.tool,

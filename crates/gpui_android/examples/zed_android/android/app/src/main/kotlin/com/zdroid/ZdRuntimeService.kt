@@ -183,6 +183,14 @@ class ZdRuntimeService : Service() {
             return update(context)
         }
 
+        /// Stops the service whatever Keep Running in Background says: the app
+        /// is exiting, and a start intent Android hasn't delivered yet would
+        /// outlive it as a service with no app behind it.
+        fun stop(context: Context) {
+            childrenActive = false
+            context.stopService(Intent(context, ZdRuntimeService::class.java))
+        }
+
         /// Starts the service when Keep Running in Background is on; called
         /// at launch.
         fun startIfBackgroundMode(context: Context) {

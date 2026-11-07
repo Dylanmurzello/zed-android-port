@@ -382,51 +382,17 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
 
 fn show_software_emulation_warning_if_needed(
     specs: gpui::GpuSpecs,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
+    _window: &mut Window,
+    _cx: &mut Context<Workspace>,
 ) {
-    if specs.is_software_emulated && std::env::var("ZED_ALLOW_EMULATED_GPU").is_err() {
-        let (graphics_api, docs_url, open_url) = if cfg!(target_os = "windows") {
-            (
-                "DirectX",
-                "https://zed.dev/docs/windows",
-                "https://zed.dev/docs/windows",
-            )
-        } else {
-            (
-                "Vulkan",
-                "https://zed.dev/docs/linux",
-                "https://zed.dev/docs/linux#zed-fails-to-open-windows",
-            )
-        };
-        let message = format!(
-            db::indoc! {r#"
-            Zed uses {} for rendering and requires a compatible GPU.
-
-            Currently you are using a software emulated GPU ({}) which
-            will result in awful performance.
-
-            For troubleshooting see: {}
-            Set ZED_ALLOW_EMULATED_GPU=1 env var to permanently override.
-            "#},
-            graphics_api, specs.device_name, docs_url
+    // Desktop Zed's prompt points at Linux or Windows troubleshooting and
+    // offers to quit; on Android a software adapter (the emulator) is a
+    // development case, so it is logged and the editor runs.
+    if specs.is_software_emulated {
+        log::warn!(
+            "zed_android: software emulated GPU {}; rendering will be slow",
+            specs.device_name
         );
-        let prompt = window.prompt(
-            PromptLevel::Critical,
-            "Unsupported GPU",
-            Some(&message),
-            &["Skip", "Troubleshoot and Quit"],
-            cx,
-        );
-        cx.spawn(async move |_, cx| {
-            if prompt.await == Ok(1) {
-                cx.update(|cx| {
-                    cx.open_url(open_url);
-                    cx.quit();
-                });
-            }
-        })
-        .detach()
     }
 }
 

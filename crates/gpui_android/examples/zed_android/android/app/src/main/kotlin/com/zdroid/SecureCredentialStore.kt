@@ -44,21 +44,23 @@ internal object SecureCredentialStore {
         }.getOrDefault(false)
     }
 
+    /// The entry for `url`, or null when there is none. An entry that is there
+    /// but can't be read (a Keystore key that changed under it, a damaged
+    /// record) throws, so the caller can tell "absent" from "unreadable"
+    /// instead of treating a stored credential as missing.
     fun read(context: Context, url: String): ByteArray? {
-        return runCatching {
-            val encoded = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(preferenceKey(url), null) ?: return null
-            val packed = ByteBuffer.wrap(Base64.decode(encoded, Base64.NO_WRAP))
-            val ivLength = packed.int
-            require(ivLength in 12..32 && packed.remaining() > ivLength)
-            val iv = ByteArray(ivLength).also(packed::get)
-            val encrypted = ByteArray(packed.remaining()).also(packed::get)
+        val encoded = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(preferenceKey(url), null) ?: return null
+        val packed = ByteBuffer.wrap(Base64.decode(encoded, Base64.NO_WRAP))
+        val ivLength = packed.int
+        require(ivLength in 12..32 && packed.remaining() > ivLength) { "damaged credential record" }
+        val iv = ByteArray(ivLength).also(packed::get)
+        val encrypted = ByteArray(packed.remaining()).also(packed::get)
 
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
-            cipher.updateAAD(url.toByteArray(Charsets.UTF_8))
-            cipher.doFinal(encrypted)
-        }.getOrNull()
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
+        cipher.updateAAD(url.toByteArray(Charsets.UTF_8))
+        return cipher.doFinal(encrypted)
     }
 
     fun delete(context: Context, url: String): Boolean {
