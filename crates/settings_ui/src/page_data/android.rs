@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use gpui::App;
+use gpui::{App, PromptLevel};
 
 use crate::{ActionLink, SettingField, SettingItem, SettingsPage, SettingsPageItem, USER};
 
@@ -21,6 +21,7 @@ fn dispatch_app_action(name: &'static str, cx: &mut App) {
 pub(super) fn android_page() -> SettingsPage {
     let runtime = zdroid_runtime::Runtime::new(&zdroid_runtime::data_path());
     let installed = runtime.installed_image();
+    let runtime_installed = installed.is_some();
     let runtime_description = match &installed {
         Some(image) => format!(
             "Installed from {}. Resetting extracts the bundled image again and removes what \
@@ -49,8 +50,30 @@ pub(super) fn android_page() -> SettingsPage {
                     "Install"
                 }
                 .into(),
-                on_click: Arc::new(|_settings_window, _window, cx| {
-                    dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
+                on_click: Arc::new(move |_settings_window, window, cx| {
+                    if !runtime_installed {
+                        dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
+                        return;
+                    }
+                    // Asked in the window the button is in: the workspace's
+                    // window, where the action would ask, can sit behind it.
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        zdroid_runtime::RESET_PROMPT_TITLE,
+                        Some(zdroid_runtime::RESET_PROMPT_DETAIL),
+                        &zdroid_runtime::RESET_PROMPT_BUTTONS,
+                        cx,
+                    );
+                    window
+                        .spawn(cx, async move |cx| {
+                            if answer.await == Ok(zdroid_runtime::RESET_PROMPT_CONFIRM) {
+                                cx.update(|_window, cx| {
+                                    dispatch_app_action("zdroid_runtime::ResetRuntimeConfirmed", cx)
+                                })
+                                .ok();
+                            }
+                        })
+                        .detach();
                 }),
                 files: USER,
             }),

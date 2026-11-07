@@ -27,6 +27,9 @@ actions!(
         /// Extract the bundled Ubuntu image again, replacing everything
         /// installed inside the runtime.
         ResetRuntime,
+        /// Reset the runtime without asking again: the Settings page, which
+        /// asks in its own window, dispatches this. Hidden from the palette.
+        ResetRuntimeConfirmed,
         /// Install git, the SSH client and CA certificates into the runtime with apt.
         InstallEssentials,
     ]
@@ -140,6 +143,7 @@ pub fn register(boot: BootSetup, cx: &mut App) {
     cx.observe_new(
         move |workspace: &mut Workspace, _window, cx: &mut Context<Workspace>| {
             workspace.register_action(reset_runtime);
+            workspace.register_action(reset_runtime_confirmed);
             workspace.register_action(install_essentials);
             static BOOT_HANDLED: AtomicBool = AtomicBool::new(false);
             if BOOT_HANDLED.swap(true, Ordering::AcqRel) {
@@ -171,19 +175,13 @@ fn reset_runtime(
     }
     let answer = window.prompt(
         PromptLevel::Warning,
-        "Reset the Ubuntu runtime?",
-        Some(
-            "Everything installed inside it with apt is removed and the base image is \
-             extracted again. Your home folder (dotfiles, SSH keys, toolchains), your \
-             projects and the editor settings are kept. Running terminals and language \
-             servers are stopped.",
-        ),
-        // Cancel first: Enter answers the first button.
-        &["Cancel", "Reset"],
+        zdroid_runtime::RESET_PROMPT_TITLE,
+        Some(zdroid_runtime::RESET_PROMPT_DETAIL),
+        &zdroid_runtime::RESET_PROMPT_BUTTONS,
         cx,
     );
     cx.spawn_in(window, async move |workspace, cx| {
-        if answer.await != Ok(1) {
+        if answer.await != Ok(zdroid_runtime::RESET_PROMPT_CONFIRM) {
             return;
         }
         workspace
@@ -193,6 +191,23 @@ fn reset_runtime(
             .ok();
     })
     .detach();
+}
+
+fn reset_runtime_confirmed(
+    workspace: &mut Workspace,
+    _: &ResetRuntimeConfirmed,
+    _window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    start_job(workspace, Job::Install, cx);
+}
+
+/// Keeps the no-prompt reset out of the command palette. Runs after
+/// `command_palette::init`, which creates the filter.
+pub fn hide_confirmed_actions(cx: &mut App) {
+    command_palette_hooks::CommandPaletteFilter::update_global(cx, |filter, _| {
+        filter.hide_action_types(&[std::any::TypeId::of::<ResetRuntimeConfirmed>()]);
+    });
 }
 
 fn install_essentials(
