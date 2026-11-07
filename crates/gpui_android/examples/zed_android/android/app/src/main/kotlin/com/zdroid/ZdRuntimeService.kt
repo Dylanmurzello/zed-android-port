@@ -37,6 +37,7 @@ class ZdRuntimeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ensureChannel()
     }
 
@@ -63,6 +64,7 @@ class ZdRuntimeService : Service() {
 
     override fun onDestroy() {
         releaseWakeLock()
+        instance = null
         super.onDestroy()
     }
 
@@ -159,6 +161,7 @@ class ZdRuntimeService : Service() {
 
         @Volatile private var childrenActive = false
         @Volatile private var keepAwake = false
+        @Volatile private var instance: ZdRuntimeService? = null
 
         fun isBackgroundModeEnabled(context: Context): Boolean =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -185,9 +188,15 @@ class ZdRuntimeService : Service() {
 
         /// Stops the service whatever Keep Running in Background says: the app
         /// is exiting, and a start intent Android hasn't delivered yet would
-        /// outlive it as a service with no app behind it.
+        /// outlive it as a service with no app behind it. The notification
+        /// comes down here, in a call that returns only once it is gone, so
+        /// the process exit that follows doesn't race the one-way stop
+        /// request.
         fun stop(context: Context) {
             childrenActive = false
+            instance?.let { ServiceCompat.stopForeground(it, ServiceCompat.STOP_FOREGROUND_REMOVE) }
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .cancel(NOTIFICATION_ID)
             context.stopService(Intent(context, ZdRuntimeService::class.java))
         }
 

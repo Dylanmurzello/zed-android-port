@@ -934,7 +934,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         } catch (t: Throwable) {
             Log.w(TAG_RUNTIME, "nativeBeforeProcessExit failed", t)
         }
-        stopService(Intent(this, ZdRuntimeService::class.java))
+        ZdRuntimeService.stop(this)
         super.onDestroy()
         Process.killProcess(Process.myPid())
     }
