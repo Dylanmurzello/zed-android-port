@@ -1352,12 +1352,14 @@ mod element {
             };
 
             // Touch has no hover, so a finger gets a wider area around the
-            // divider than the mouse does: a hitbox of its own, so the hit
-            // test still ranks it under whatever is drawn over the divider,
-            // and `Normal`, so it takes no presses from the content beside it.
+            // divider than the mouse does (24 px each side: with the handle
+            // that is Android's 48 dp touch target): a hitbox of its own, so
+            // the hit test still ranks it under whatever is drawn over the
+            // divider, and `Normal`, so it takes no presses from the content
+            // beside it.
             let touch_hitbox =
                 (cfg!(target_os = "android") && window.last_input_was_touch()).then(|| {
-                    window.insert_hitbox(handle_bounds.dilate(px(16.0)), HitboxBehavior::Normal)
+                    window.insert_hitbox(handle_bounds.dilate(px(24.0)), HitboxBehavior::Normal)
                 });
             PaneAxisHandleLayout {
                 hitbox: window.insert_hitbox(handle_bounds, HitboxBehavior::BlockMouse),
