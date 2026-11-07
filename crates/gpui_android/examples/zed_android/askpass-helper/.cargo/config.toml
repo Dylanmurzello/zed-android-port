@@ -1,11 +1,11 @@
 # Static-link the askpass helper against bionic's libc.a so the binary
-# has no dynamic-linker dependency. Required because ssh inside the
-# Kali chroot can't resolve `/system/bin/linker64` (lives outside the
-# chroot fs); a dynamically-linked bionic binary fails exec with the
-# shell's misleading "not found".
+# has no dynamic-linker dependency. ssh runs it from the Ubuntu runtime,
+# where the engine loader maps programs into the rootfs and the dynamic
+# linker it finds is glibc's, not bionic's `/system/bin/linker64`; a
+# dynamically-linked bionic binary fails exec with the shell's misleading
+# "not found".
 #
 # The build pulls in NDK's static libc and zero runtime deps, so the
-# resulting ELF runs unchanged on bionic host, inside chroot, and
-# anywhere else a kernel can exec aarch64.
+# resulting ELF runs unchanged on the Android host and in the runtime.
 [target.aarch64-linux-android]
 rustflags = ["-C", "target-feature=+crt-static"]

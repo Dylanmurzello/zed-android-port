@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
-use jni::{JavaVM, objects::JObject, objects::JString};
+use jni::objects::JString;
 
 /// The bundled Ubuntu base image, as a stream out of the APK. Gradle's
 /// `fetchRootfsImage` task verified its checksum at build time and the
@@ -45,9 +45,6 @@ pub fn bundled_rootfs_image(android_app: &AndroidApp) -> Result<ndk::asset::Asse
 ///   - Non-symlink entries (file, dir) are left alone; we don't touch
 ///     what we didn't create.
 ///   - Names in `binaries` that don't yet exist are created.
-///
-/// Entries written by earlier releases pointed at `../bin/zd-exec`; they
-/// are ours to sweep too.
 pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String], target: &Path) -> Result<()> {
     let runtime_dir = data_path.join("zd-runtime");
     fs::create_dir_all(&runtime_dir)
@@ -57,7 +54,7 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String], target: &P
             && link_target
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name == zd_engine_core::LOADER_LINK_NAME || name == "zd-exec")
+                .is_some_and(|name| name == zd_engine_core::LOADER_LINK_NAME)
     };
 
     let wanted: std::collections::HashSet<&str> = binaries.iter().map(String::as_str).collect();
@@ -132,22 +129,20 @@ pub fn ensure_runtime_symlinks(data_path: &Path, binaries: &[String], target: &P
 /// (`/data/app/~~<random>/com.zdroid-<random>/lib/arm64`), so nothing
 /// persistent may embed it; look it up at boot.
 pub fn native_library_dir(android_app: &AndroidApp) -> Result<PathBuf> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm
-        .attach_current_thread()
-        .context("attach_current_thread for nativeLibraryDir")?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-    let value = env
-        .call_method(&activity, "nativeLibraryDir", "()Ljava/lang/String;", &[])
-        .context("MainActivity.nativeLibraryDir")?;
-    let jstr: JString = value
-        .l()
-        .context("nativeLibraryDir returned non-object")?
-        .into();
-    let dir: String = env
-        .get_string(&jstr)
-        .context("decode nativeLibraryDir")?
-        .into();
+    let dir = crate::jni_env::with_activity(android_app, |env, activity| {
+        let value = env
+            .call_method(activity, "nativeLibraryDir", "()Ljava/lang/String;", &[])
+            .context("MainActivity.nativeLibraryDir")?;
+        let jstr: JString = value
+            .l()
+            .context("nativeLibraryDir returned non-object")?
+            .into();
+        let dir: String = env
+            .get_string(&jstr)
+            .context("decode nativeLibraryDir")?
+            .into();
+        Ok(dir)
+    })?;
     anyhow::ensure!(!dir.is_empty(), "nativeLibraryDir is empty");
     Ok(PathBuf::from(dir))
 }

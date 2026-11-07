@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunk 2
-**Files:** `crates/util/src/util.rs::runtime_os`, `crates/dap_adapters/src/{codelldb,go}.rs`, `crates/languages/src/{c,json,python,rust}.rs`, `crates/copilot/src/copilot.rs`, `crates/extension/src/extension_builder.rs`, `crates/extension_host/src/wasm_host/wit/since_v0_8_0.rs`, `crates/node_runtime/src/node_runtime.rs`, `crates/prompt_store/src/prompts.rs`
+**Files:** `crates/util/src/util.rs::runtime_os`, `crates/dap_adapters/src/{codelldb,go}.rs`, `crates/languages/src/{c,json,python,rust}.rs`, `crates/copilot/src/copilot.rs`, `crates/extension/src/extension_builder.rs`, `crates/extension_host/src/wasm_host/wit/since_v0_8_0.rs`, `crates/node_runtime/src/node_runtime.rs`, `crates/prompt_store/src/prompts.rs`, `crates/project/src/{agent_registry_store,agent_server_store}.rs`
 
 ## Problem
 
@@ -30,7 +30,9 @@ site asks it instead of `consts::OS`: the asset name, the archive type
 (`tar.gz` vs `zip`) and the extension host's `current_platform` (so
 extensions pick their `linux-aarch64` release from their own tables).
 Compile-time platform blocks that cannot call a function (`RustLspAdapter`,
-`TyLspAdapter`, `RuffLspAdapter`, `WASI_SDK_ASSET_NAME`) carry
+`TyLspAdapter`, `RuffLspAdapter`, `PyreflyLspAdapter`, `WASI_SDK_PLATFORM`)
+and the `cfg!` chains that pick an ACP agent's binary build (the registry's
+platform key and the binary agent servers) carry
 `any(target_os = "linux", target_os = "android")` instead of a duplicated
 Android block. The Rust adapter's libc probe (`ldd --version`) runs in the
 rootfs too and reports glibc, which selects the `-gnu` asset as on any

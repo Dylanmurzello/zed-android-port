@@ -35,7 +35,6 @@ use gpui::{
 use insert::{NormalBefore, TemporaryNormal};
 use language::{CursorShape, Point, Selection, SelectionGoal, TransactionId};
 pub use mode_indicator::ModeIndicator;
-pub use state::Mode;
 use motion::Motion;
 use multi_buffer::ToPoint as _;
 use normal::search::SearchSubmit;
@@ -48,7 +47,7 @@ pub use settings::{
     ModeContent, Settings, SettingsStore, UseSystemClipboard, update_settings_file,
 };
 use state::{
-    HelixJumpBehaviour, HelixJumpLabel, Operator, RecordedSelection, SearchState, VimGlobals,
+    HelixJumpBehaviour, HelixJumpLabel, Mode, Operator, RecordedSelection, SearchState, VimGlobals,
 };
 use std::{mem, ops::Range, sync::Arc};
 use surrounds::SurroundsType;
@@ -514,7 +513,7 @@ impl editor::Addon for VimAddon {
 }
 
 /// The state pertaining to Vim mode.
-pub struct Vim {
+pub(crate) struct Vim {
     pub(crate) mode: Mode,
     pub last_mode: Mode,
     pub temp_mode: bool,
@@ -559,7 +558,7 @@ impl Render for Vim {
     }
 }
 
-pub enum VimEvent {
+enum VimEvent {
     Focused,
 }
 impl EventEmitter<VimEvent> for Vim {}
@@ -567,16 +566,6 @@ impl EventEmitter<VimEvent> for Vim {}
 impl Vim {
     /// The namespace for Vim actions.
     const NAMESPACE: &'static str = "vim";
-
-    /// The editor's current vim mode. Read-only accessor over the
-    /// `pub(crate)` field so out-of-crate consumers can observe it,
-    /// specifically the Android IME bridge, which must deliver soft-
-    /// keyboard input as key events while in a command mode so vim's
-    /// keymap sees `j`/`d`/`w` as commands. Inert on desktop, which
-    /// never receives soft-keyboard input.
-    pub fn mode(&self) -> Mode {
-        self.mode
-    }
 
     pub fn new(window: &mut Window, cx: &mut Context<Editor>) -> Entity<Self> {
         let editor = cx.entity();
@@ -1549,6 +1538,12 @@ impl Vim {
         {
             context.add("VimControl");
         }
+        // `vim_mode` is replaced by "operator"/"waiting" while an operator is
+        // pending, so expose helix-ness separately to allow Helix-specific
+        // bindings in those states (e.g. text objects after `mi`/`ma`).
+        if self.mode.is_helix() {
+            context.add("helix_mode");
+        }
         context.set("vim_mode", mode);
         context.set("vim_operator", operator_id);
     }
@@ -2026,7 +2021,7 @@ impl Vim {
             return;
         }
 
-        let newest = editor.read(cx).selections.newest_anchor().clone();
+        let newest = *editor.read(cx).selections.newest_anchor();
         let is_multicursor = editor.read(cx).selections.count() > 1;
         if self.mode == Mode::Insert && self.current_tx.is_some() {
             if let Some(current_anchor) = &self.current_anchor {

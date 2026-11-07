@@ -9,6 +9,7 @@ This repo's diff against upstream Zed is the **Android-specific** delta:
 - `crates/gpui_android/` (whole crate, our platform backend)
 - `crates/gpui_platform/` (cfg-gated arm)
 - `crates/zdroid_runtime/` (the Ubuntu runtime: bundled-image install, environment, health)
+- `crates/zdroid_hooks/` (the Android code Zed's crates call from small `cfg(target_os = "android")` blocks)
 - `crates/zd_engine_core/` and `crates/zd_loader/` (the userland chroot engine: path translation core and the static loader; MIT)
 - `crates/onboarding/` (Android input section on the basics page)
 - `crates/zed_android/` (example binary + Android Gradle project)
@@ -19,7 +20,7 @@ Anything outside that scope (a bug in `editor`, `project_panel`, `terminal`, the
 
 ## Filing issues
 
-Use the issue templates: **Report a bug (Zdroid)** or **Report a crash (Zdroid)**. Include APK version, rootfs version (`cat ~/rootfs/.rootfs-version` from the Zdroid terminal reads the files dir), device + Android version, and logcat. Blank issues are also fine if your concern doesn't fit a template.
+Use the issue templates: **Report a bug (Zdroid)** or **Report a crash (Zdroid)**. Include APK version, rootfs version (`cat /data/user/0/com.zdroid/files/rootfs/.rootfs-version` in the Zdroid terminal), device + Android version, and logcat. Blank issues are also fine if your concern doesn't fit a template.
 
 ## PRs
 

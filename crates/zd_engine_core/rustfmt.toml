@@ -1,0 +1,3 @@
+# Dylan Murzello maintains this crate, unformatted, in Dylanmurzello/zed-android-port.
+# Formatting it here would make every later merge of his changes conflict.
+disable_all_formatting = true

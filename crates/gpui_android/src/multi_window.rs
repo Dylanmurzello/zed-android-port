@@ -10,8 +10,9 @@
 //! Threading: `create_extra_window_blocking` runs on the gpui main (game)
 //! thread inside `AndroidPlatform::open_window`. It posts the Activity launch
 //! via JNI `startActivity`, then blocks the game thread on a `oneshot` until
-//! the Activity's first `surfaceCreated` callback fires. A 500ms hard timeout
-//! guards against ANR-class freezes if Android is slow to launch the Activity.
+//! the Activity's first `surfaceCreated` callback fires. A hard timeout
+//! (`ACTIVITY_LAUNCH_TIMEOUT`) guards against ANR-class freezes if Android is
+//! slow to launch the Activity.
 //!
 //! Touch + ongoing-lifecycle events arrive on the UI thread (via
 //! `NativeBridge` JNI hooks) and are forwarded to the game thread through an
@@ -28,34 +29,32 @@
 //!   `finishAndRemoveTask` on the stored ref.
 //! - `nativeOnExtraActivityDestroyed` removes the ref (drops the `GlobalRef`)
 //!   AND posts `OsClosed` so the gpui-side window can be reaped.
-//!
-//! **Thread constraint:** map mutations (insert + remove) must happen from
-//! the gpui main thread only. The `jni` crate calls `DeleteGlobalRef` via
-//! whatever `JNIEnv` the dropping thread can attach via
-//! `JavaVM::attach_current_thread`. Drops on a non-attachable thread (e.g. a
-//! tokio worker after its `AttachGuard` has been released) silently leak.
-//! The gpui main thread stays attached for the App's lifetime; doing all map
-//! work from the drain handler is the safe choice.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use anyhow::{Context as _, Result, bail};
 use android_activity::AndroidApp;
+use android_activity::input::{MetaState, MotionAction, Source, ToolType};
+use anyhow::{Context as _, Result, bail};
 use futures::channel::{mpsc, oneshot};
-use jni::JavaVM;
 use jni::objects::{GlobalRef, JFloatArray, JIntArray, JObject, JValue};
 use ndk::native_window::NativeWindow;
 
+use crate::events::{Motion, MotionPointer};
+
 /// Hard cap on how long `create_extra_window_blocking` will wait for the
-/// Activity's `surfaceCreated` callback. Cold Activity start on a Snapdragon
-/// 8 Gen 2 in DeX desktop windowing is ~530-700ms; the budget covers that
-/// plus headroom. If exceeded we return Err and gpui surfaces the failure to
-/// the caller (UX: "couldn't open, try again") instead of freezing the
-/// Workspace forever. Yes 2s is long; warm reopens are sub-100ms because
-/// the Activity stays alive in Recents.
+/// Activity's `surfaceCreated` callback. Cold Activity start in DeX desktop
+/// windowing is ~530-700ms; the budget covers that plus headroom (see
+/// `docs/workarounds/activity-launch-cold-timeout.md`). If exceeded we
+/// return Err and gpui surfaces the failure to the caller (UX: "couldn't
+/// open, try again") instead of freezing the Workspace forever. Yes 4s is
+/// long; warm reopens are sub-100ms because the Activity stays alive in
+/// Recents.
 const ACTIVITY_LAUNCH_TIMEOUT: Duration = Duration::from_millis(4000);
+
+/// How long `surfaceDestroyed` waits for the game thread to stop drawing.
+const SURFACE_DETACH_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Events from the JNI side (UI thread) that the gpui main thread needs to
 /// process. Sent via `EVENT_TX`, drained in the platform's main loop.
@@ -66,28 +65,28 @@ pub(crate) enum ExtraWindowEvent {
         width: u32,
         height: u32,
     },
-    /// `surfaceDestroyed` — Vulkan surface should be torn down.
-    SurfaceDestroyed { window_id: u64 },
+    /// `surfaceDestroyed`. The surface may only be used until that callback
+    /// returns, and it waits for `detached` to send or drop.
+    SurfaceDestroyed {
+        window_id: u64,
+        detached: std::sync::mpsc::Sender<()>,
+    },
+    /// A `surfaceCreated` after the first, once the Activity was stopped
+    /// (screen off, minimized, covered) and started again.
+    SurfaceCreated {
+        window_id: u64,
+        native_window: NativeWindow,
+    },
     /// OS-initiated Activity destruction (user clicked the chrome X, or
     /// system swiped the task off Recents). The drain handler must invoke
     /// the gpui-registered `on_close` callback to drive `remove_window`,
     /// then reap our maps. The `GlobalRef` for the Activity has already been
     /// dropped from `EXTRA_ACTIVITY_REFS` by the time this event fires.
     OsClosed { window_id: u64 },
-    /// Touch / pointer event on the extra `SurfaceView`. Raw fields from the
-    /// Java `MotionEvent`; the platform translates them on the game thread to
-    /// avoid touching the JNI env from a non-UI thread.
-    Motion {
-        window_id: u64,
-        action_masked: i32,
-        action_index: i32,
-        meta_state: i32,
-        button_state: i32,
-        event_time_millis: i64,
-        vscroll: f32,
-        hscroll: f32,
-        positions: Vec<(f32, f32, i32)>,
-    },
+    /// A touch or pointer event from Java: any on an extra window's `SurfaceView`,
+    /// and the main window's trackpad gestures. The platform translates it on the
+    /// game thread.
+    Motion { window_id: u64, motion: Motion },
     /// Hardware key event on the extra window. Raw fields from the Java
     /// `KeyEvent`; same off-thread translation policy as `Motion`. Without
     /// this routing the Editor in any extra window (Settings is the
@@ -97,10 +96,13 @@ pub(crate) enum ExtraWindowEvent {
     Key {
         window_id: u64,
         action: i32,
+        device_id: i32,
         keycode: u32,
         meta_state: u32,
         repeat_count: i32,
     },
+    /// `onWindowFocusChanged` on the extra window's Activity.
+    FocusChanged { window_id: u64, focused: bool },
 }
 
 /// Senders for the first `surfaceCreated` of each extra window. The receiver
@@ -129,47 +131,40 @@ static EXTRA_ACTIVITY_REFS: Mutex<Option<HashMap<u64, GlobalRef>>> = Mutex::new(
 /// it can't be the source of truth.
 static REGISTERED_WINDOWS: Mutex<Option<std::collections::HashSet<u64>>> = Mutex::new(None);
 
-/// Sender side of the ongoing event channel. Replaced each time
-/// `AndroidPlatform::new` calls [`init_event_channel`]. Cloned per JNI
-/// callback for thread-safe sends.
-///
-/// We use a Mutex (not a OnceLock) because Android may recreate the
-/// hosting Activity within the same OS process — e.g. after a
-/// configuration change, an OOM-recovery kill that didn't actually
-/// free the .so, or DeX windowing-mode flips. Each Activity recreation
-/// re-enters `android_main`, which constructs a fresh AndroidPlatform
-/// and expects a fresh receiver. Panicking on the second init is the
-/// "activity-recreation-idempotency" trap our docs warn about.
+/// Sender side of the event channel, set by [`init_event_channel`].
 static EVENT_TX: Mutex<Option<mpsc::UnboundedSender<ExtraWindowEvent>>> = Mutex::new(None);
 
-/// Set up the ongoing event channel. Safe to call multiple times: each
-/// invocation creates a fresh sender/receiver pair. Any previous sender
-/// is dropped (which closes its receiver in the prior platform instance,
-/// but that platform is being torn down anyway). Returns the new
-/// receiver, which the current platform drains each iteration of its
-/// event loop.
+/// Sets up the event channel and returns the receiver the platform's run
+/// loop drains.
 pub(crate) fn init_event_channel() -> mpsc::UnboundedReceiver<ExtraWindowEvent> {
     let (tx, rx) = mpsc::unbounded();
-    *EVENT_TX.lock().unwrap() = Some(tx);
+    *EVENT_TX.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
     rx
 }
 
 fn pending_table()
 -> std::sync::MutexGuard<'static, Option<HashMap<u64, oneshot::Sender<NativeWindow>>>> {
-    SURFACE_CREATED_TX.lock().unwrap()
+    SURFACE_CREATED_TX
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 fn refs_table() -> std::sync::MutexGuard<'static, Option<HashMap<u64, GlobalRef>>> {
-    EXTRA_ACTIVITY_REFS.lock().unwrap()
+    EXTRA_ACTIVITY_REFS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Clone the `GlobalRef` for the `ExtraWindowActivity` with this
 /// `window_id`. Returns `None` if the Activity isn't registered
 /// (already destroyed, or never created). Callers that need to call
-/// Kotlin methods on a specific extra Activity (cursor sprite for
-/// trackpad mode, per-window IME mode, etc.) go through this.
+/// Kotlin methods on a specific extra Activity (per-window IME mode,
+/// etc.) go through this.
 pub(crate) fn extra_activity_for(window_id: u64) -> Option<GlobalRef> {
-    refs_table().as_ref().and_then(|m| m.get(&window_id)).cloned()
+    refs_table()
+        .as_ref()
+        .and_then(|m| m.get(&window_id))
+        .cloned()
 }
 
 /// Snapshot every registered extra-window id so callers can fan a
@@ -183,9 +178,10 @@ pub(crate) fn extra_activity_ids() -> Vec<u64> {
         .unwrap_or_default()
 }
 
-fn registered_set()
--> std::sync::MutexGuard<'static, Option<std::collections::HashSet<u64>>> {
-    REGISTERED_WINDOWS.lock().unwrap()
+fn registered_set() -> std::sync::MutexGuard<'static, Option<std::collections::HashSet<u64>>> {
+    REGISTERED_WINDOWS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Called by `AndroidPlatform::open_extra_window` after `attach_surface`
@@ -225,10 +221,19 @@ pub(crate) struct LaunchBounds {
 /// responsible for subsequently creating an `AndroidWindow` and registering
 /// it with [`crate::platform::AndroidPlatform`] so future
 /// `ExtraWindowEvent`s for this id route correctly.
+///
+/// `wait` runs between checks, for at most the given time, and returns
+/// whether to keep waiting. It must handle the main Activity's lifecycle
+/// commands: when the new Activity covers the main one, Android pauses the
+/// main Activity first, and GameActivity holds the UI thread until this
+/// thread acknowledges the pause. The new Activity starts on that same UI
+/// thread, so without the acknowledgement its surface only arrives once
+/// GameActivity gives up, after 2 seconds.
 pub(crate) fn create_extra_window_blocking(
     android_app: &AndroidApp,
     window_id: u64,
     bounds: Option<LaunchBounds>,
+    mut wait: impl FnMut(Duration) -> bool,
 ) -> Result<NativeWindow> {
     let (tx, rx) = oneshot::channel();
     {
@@ -245,8 +250,7 @@ pub(crate) fn create_extra_window_blocking(
     }
     // `oneshot::Receiver` is a `Future`. Drive it to completion synchronously
     // with a hard timeout so a stalled Activity launch can't lock the game
-    // thread forever (cold Activity start is normally 200-400ms; cap at
-    // 500ms — see `ACTIVITY_LAUNCH_TIMEOUT`).
+    // thread forever (see `ACTIVITY_LAUNCH_TIMEOUT`).
     //
     // `try_recv` returns: `Ok(Some(v))` value received; `Ok(None)` not sent
     // yet, channel still open; `Err(Canceled)` sender dropped without sending.
@@ -263,135 +267,57 @@ pub(crate) fn create_extra_window_blocking(
                 bail!("extra surface creation channel dropped (sender canceled)");
             }
         }
-        if std::time::Instant::now() >= deadline {
+        let timed_out = std::time::Instant::now() >= deadline;
+        if timed_out || !wait(Duration::from_millis(8)) {
             pending_table().as_mut().and_then(|m| m.remove(&window_id));
-            bail!(
-                "ExtraWindowActivity startup exceeded {}ms",
-                ACTIVITY_LAUNCH_TIMEOUT.as_millis()
-            );
+            // Closing makes a send from now on fail, so the UI thread hands
+            // the surface to `drain_extra_window_events` instead; one that
+            // arrived since the check above is still here.
+            rx.close();
+            if let Ok(Some(native_window)) = rx.try_recv() {
+                return Ok(native_window);
+            }
+            // Otherwise the Activity may still start later, with no window
+            // to draw; `drain_extra_window_events` finishes it then.
+            if timed_out {
+                bail!(
+                    "ExtraWindowActivity startup exceeded {}ms",
+                    ACTIVITY_LAUNCH_TIMEOUT.as_millis()
+                );
+            }
+            bail!("the app is shutting down");
         }
-        // Yield briefly. We can't park the future cleanly without an executor,
-        // so a short sleep is the simplest correct choice.
-        std::thread::sleep(Duration::from_millis(8));
     }
 }
 
-/// Bring the `ExtraWindowActivity` for `window_id` to the foreground.
-/// Routes to `ActivityManager.AppTask.moveToFront()` for the Activity's
-/// own task — that's the official self-only API that doesn't need the
-/// `REORDER_TASKS` permission. Best-effort; silently no-ops if the
-/// windowId isn't registered (Activity already destroyed) or the task
-/// isn't found in the app's own task list (system reaped it).
-///
-/// Without this, gpui's `Window::activate_window()` is a no-op on Android.
-/// settings_ui's existing-window dedup at `settings_ui.rs:622` calls
-/// `window.activate_window()` after finding an open `SettingsWindow`,
-/// expecting the OS to surface that window — on Android we have to
-/// implement that surfacing ourselves.
+/// Brings the window's Activity to the front, for gpui's `activate_window`:
+/// Zed uses it to surface an open Settings window instead of opening another.
 pub(crate) fn activate_extra_activity(android_app: &AndroidApp, window_id: u64) {
-    let result = (|| -> Result<()> {
-        let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-        let mut env = vm.attach_current_thread()?;
-        let activity_ref = match refs_table().as_ref().and_then(|m| m.get(&window_id)).cloned() {
-            Some(ar) => ar,
-            None => return Ok(()),
-        };
-
-        // taskId of the ExtraWindowActivity. With `documentLaunchMode="always"`
-        // each Activity is in its own task so taskId uniquely identifies it.
-        let task_id = env
-            .call_method(activity_ref.as_obj(), "getTaskId", "()I", &[])?
-            .i()?;
-
-        // Get ActivityManager — `Activity.getSystemService(Context.ACTIVITY_SERVICE)`
-        let activity_service = env.new_string("activity")?;
-        let activity_manager = env
-            .call_method(
-                activity_ref.as_obj(),
-                "getSystemService",
-                "(Ljava/lang/String;)Ljava/lang/Object;",
-                &[JValue::Object(&activity_service)],
-            )?
-            .l()?;
-
-        // List<AppTask> tasks = activityManager.getAppTasks();
-        let app_tasks = env
-            .call_method(&activity_manager, "getAppTasks", "()Ljava/util/List;", &[])?
-            .l()?;
-        let size = env.call_method(&app_tasks, "size", "()I", &[])?.i()?;
-        for i in 0..size {
-            let app_task = env
-                .call_method(
-                    &app_tasks,
-                    "get",
-                    "(I)Ljava/lang/Object;",
-                    &[JValue::Int(i)],
-                )?
-                .l()?;
-            // ActivityManager.AppTask.getTaskInfo() returns ActivityManager.RecentTaskInfo,
-            // which extends TaskInfo. The taskId field is `id` on RecentTaskInfo
-            // (deprecated since API 29, still populated) and `taskId` on
-            // TaskInfo (API 29+). Try the modern field first.
-            let task_info = env
-                .call_method(
-                    &app_task,
-                    "getTaskInfo",
-                    "()Landroid/app/ActivityManager$RecentTaskInfo;",
-                    &[],
-                )?
-                .l()?;
-            let id = match env.get_field(&task_info, "taskId", "I") {
-                Ok(v) => v.i()?,
-                Err(_) => {
-                    if env.exception_check().unwrap_or(false) {
-                        let _ = env.exception_clear();
-                    }
-                    env.get_field(&task_info, "id", "I")?.i()?
-                }
-            };
-            if id == task_id {
-                env.call_method(&app_task, "moveToFront", "()V", &[])?;
-                break;
-            }
-        }
-
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
-        Ok(())
-    })();
+    let result = crate::jni_env::call_window_method(
+        android_app,
+        Some(window_id),
+        "moveOwnTaskToFront",
+        "()V",
+        &[],
+    );
     if let Err(err) = result {
         log::warn!("multi_window: activate_extra_activity({window_id}): {err:#}");
     }
 }
 
-/// Set the title on the `ExtraWindowActivity` for `window_id`. Shows up in
-/// the OS chrome's drag bar (in freeform/desktop windowing) and in Recents.
-/// Best-effort — silently no-ops if the windowId isn't registered (e.g.
-/// gpui called set_title before the Activity finished launching, or after
-/// it closed).
+/// Set the title on the `ExtraWindowActivity` for `window_id`. Shows up in the
+/// OS chrome's drag bar (in freeform/desktop windowing) and in Recents.
 pub(crate) fn set_extra_activity_title(android_app: &AndroidApp, window_id: u64, title: &str) {
-    let result = (|| -> Result<()> {
-        let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-        let mut env = vm.attach_current_thread()?;
-        let activity_ref = match refs_table().as_ref().and_then(|m| m.get(&window_id)).cloned() {
-            Some(ar) => ar,
-            None => return Ok(()),
-        };
-        let title_jstr = env.new_string(title)?;
-        env.call_method(
-            activity_ref.as_obj(),
-            "setTitle",
-            "(Ljava/lang/CharSequence;)V",
-            &[JValue::Object(&title_jstr)],
-        )?;
-        // CharSequence subtype check passes for String — JVM dispatches to
-        // setTitle(CharSequence) which delegates to the Activity's window.
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
-        Ok(())
-    })();
+    let result = crate::jni_env::with_env(android_app, |env| {
+        let title = env.new_string(title)?;
+        crate::jni_env::call_window_method(
+            android_app,
+            Some(window_id),
+            "setWindowTitle",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&title)],
+        )
+    });
     if let Err(err) = result {
         log::warn!("multi_window: set_extra_activity_title({window_id}): {err:#}");
     }
@@ -419,126 +345,38 @@ fn launch_extra_activity(
     window_id: u64,
     bounds: Option<LaunchBounds>,
 ) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let result = launch_extra_activity_inner(&mut env, android_app, window_id, bounds);
-    // The jni crate's `?`-propagation surfaces a Rust error but leaves the
-    // JNI env with a *pending* Java exception. Subsequent JNI calls (e.g.
-    // any logger that touches JNI on cleanup) trip
-    // "JNI GetObjectClass called with pending exception" → process abort.
-    // Always clear before returning.
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_clear();
-    }
-    result
-}
-
-fn launch_extra_activity_inner(
-    env: &mut jni::AttachGuard<'_>,
-    android_app: &AndroidApp,
-    window_id: u64,
-    bounds: Option<LaunchBounds>,
-) -> Result<()> {
-    let main_activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-
-    // Resolve `ExtraWindowActivity` via MainActivity's ClassLoader. Android
-    // splits classloaders per app — the system classloader doesn't see app
-    // classes, so `Class.forName(name)` fails with ClassNotFoundException.
-    // The standard pattern is to grab the Activity's ClassLoader (which
-    // knows about /data/app/<pkg>/base.apk's classes) and use that.
-    let main_class = env.get_object_class(&main_activity)?;
-    let class_loader = env
-        .call_method(&main_class, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
-        .l()?;
-    let class_name = env.new_string("com.zdroid.ExtraWindowActivity")?;
-    let extra_class = env
-        .call_method(
-            &class_loader,
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&class_name)],
-        )?
-        .l()?;
-
-    let intent_class = env.find_class("android/content/Intent")?;
-    let intent = env.new_object(
-        &intent_class,
-        "(Landroid/content/Context;Ljava/lang/Class;)V",
-        &[JValue::Object(&main_activity), JValue::Object(&extra_class)],
-    )?;
-
-    let extra_key = env.new_string("com.zdroid.window_id")?;
-    env.call_method(
-        &intent,
-        "putExtra",
-        "(Ljava/lang/String;J)Landroid/content/Intent;",
-        &[JValue::Object(&extra_key), JValue::Long(window_id as i64)],
-    )?;
-
-    // `documentLaunchMode="always"` on the manifest already implies
-    // FLAG_ACTIVITY_NEW_DOCUMENT | FLAG_ACTIVITY_MULTIPLE_TASK, so we don't
-    // set them here — setting them additionally was causing MainActivity
-    // to be backgrounded under DeX freeform windowing.
-    if let Some(rect) = bounds {
-        // Build ActivityOptions.makeBasic().setLaunchBounds(Rect) and pass
-        // its Bundle to startActivity. Lets us request an initial freeform
-        // window rect (size + position) instead of letting the OS pick.
-        let rect_class = env.find_class("android/graphics/Rect")?;
-        let rect_obj = env.new_object(
-            &rect_class,
-            "(IIII)V",
+    let bounds = bounds.unwrap_or(LaunchBounds {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    });
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        env.call_method(
+            activity,
+            "launchExtraWindow",
+            "(JIIII)V",
             &[
-                JValue::Int(rect.left),
-                JValue::Int(rect.top),
-                JValue::Int(rect.right),
-                JValue::Int(rect.bottom),
+                JValue::Long(window_id as i64),
+                JValue::Int(bounds.left),
+                JValue::Int(bounds.top),
+                JValue::Int(bounds.right),
+                JValue::Int(bounds.bottom),
             ],
         )?;
-        let activity_options_class = env.find_class("android/app/ActivityOptions")?;
-        let opts = env
-            .call_static_method(
-                &activity_options_class,
-                "makeBasic",
-                "()Landroid/app/ActivityOptions;",
-                &[],
-            )?
-            .l()?;
-        env.call_method(
-            &opts,
-            "setLaunchBounds",
-            "(Landroid/graphics/Rect;)Landroid/app/ActivityOptions;",
-            &[JValue::Object(&rect_obj)],
-        )?;
-        let bundle = env
-            .call_method(&opts, "toBundle", "()Landroid/os/Bundle;", &[])?
-            .l()?;
-        env.call_method(
-            &main_activity,
-            "startActivity",
-            "(Landroid/content/Intent;Landroid/os/Bundle;)V",
-            &[JValue::Object(&intent), JValue::Object(&bundle)],
-        )?;
-    } else {
-        env.call_method(
-            &main_activity,
-            "startActivity",
-            "(Landroid/content/Intent;)V",
-            &[JValue::Object(&intent)],
-        )?;
-    }
-
-    Ok(())
+        Ok(())
+    })
 }
 
-fn call_finish_and_remove_task(_android_app: &AndroidApp, activity: &GlobalRef) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(_android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    env.call_method(activity.as_obj(), "finishAndRemoveTask", "()V", &[])?;
-    Ok(())
+fn call_finish_and_remove_task(android_app: &AndroidApp, activity: &GlobalRef) -> Result<()> {
+    crate::jni_env::with_env(android_app, |env| {
+        env.call_method(activity.as_obj(), "finishAndRemoveTask", "()V", &[])?;
+        Ok(())
+    })
 }
 
 fn dispatch_event(event: ExtraWindowEvent) {
-    let guard = EVENT_TX.lock().unwrap();
+    let guard = EVENT_TX.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(tx) = guard.as_ref() else {
         log::warn!("multi_window: event arrived before init_event_channel");
         return;
@@ -546,6 +384,7 @@ fn dispatch_event(event: ExtraWindowEvent) {
     if let Err(err) = tx.unbounded_send(event) {
         log::warn!("multi_window: dispatch_event: {err:#}");
     }
+    crate::platform::wake_run_loop();
 }
 
 /// Process-death recovery probe. Called by `ExtraWindowActivity.onCreate`
@@ -556,9 +395,7 @@ fn dispatch_event(event: ExtraWindowEvent) {
 /// but the process was killed and restarted, so gpui has no record).
 /// Activity uses the result to decide whether to proceed or `finish()`.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeIsExtraWindowKnown<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeIsExtraWindowKnown<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -573,9 +410,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeIsExtraWindowKnown<
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -583,13 +418,6 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated
 ) {
     let window_id = window_id as u64;
     log::info!("multi_window: nativeOnExtraActivityCreated windowId={window_id}");
-    // Note on threading: this fires on the JVM thread that called the
-    // external fn — typically the Android UI thread. We need a JNIEnv to
-    // create the GlobalRef, so we use the supplied `env` here. The actual
-    // map mutation (insert) is fine on this thread because GlobalRef
-    // creation is symmetric — only `DeleteGlobalRef` (i.e. drop) must be
-    // attentive to thread attachment, and we drop in `finish_extra_activity`
-    // on the gpui main thread.
     let global_ref = match env.new_global_ref(activity) {
         Ok(r) => r,
         Err(err) => {
@@ -599,71 +427,28 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityCreated
             return;
         }
     };
-    let mut table = refs_table();
-    let map = table.get_or_insert_with(HashMap::new);
-    map.insert(window_id, global_ref.clone());
-    drop(table); // release the mutex before the JNI call below
-
-    // If trackpad mode is currently on, push the active state to
-    // this newly-created activity so its cursor sprite appears the
-    // moment its surface is ready. Without this, opening an extra
-    // window while trackpad mode is on leaves it without a cursor
-    // until the user toggles trackpad mode off-and-on again.
-    let mut env = env;
-    if crate::ime::trackpad_mode_enabled()
-        && let Err(err) = env.call_method(
-            global_ref.as_obj(),
-            "setTrackpadModeActive",
-            "(Z)V",
-            &[true.into()],
-        )
-    {
-        log::warn!(
-            "multi_window: failed to push trackpad-mode state to new extra activity {window_id}: {err:#}"
-        );
-    }
-
-    // Also push the current cursor style. The `set_pointer_icon`
-    // cache short-circuits the per-event JNI fan-out when gpui's
-    // cursor style hasn't changed since the last push, so a
-    // newly-spawned activity could otherwise sit at its default
-    // arrow sprite while the rest of the app is on (say) IBeam
-    // because the cursor was over a text input when the window
-    // was opened.
-    if let Some(icon_type) = crate::cursor::last_pushed_icon_type()
-        && let Err(err) = env.call_method(
-            global_ref.as_obj(),
-            "setCapturedCursorStyle",
-            "(I)V",
-            &[icon_type.into()],
-        )
-    {
-        log::warn!(
-            "multi_window: failed to push cursor style to new extra activity {window_id}: {err:#}"
-        );
-    }
+    refs_table()
+        .get_or_insert_with(HashMap::new)
+        .insert(window_id, global_ref);
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityDestroyed<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraActivityDestroyed<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
 ) {
     let window_id = window_id as u64;
     log::info!("multi_window: nativeOnExtraActivityDestroyed windowId={window_id}");
-    // Drop the GlobalRef from the JVM thread (which is attached). The
-    // OsClosed event then triggers gpui-side teardown on the game thread.
-    let _ = refs_table().as_mut().and_then(|m| m.remove(&window_id));
+    // Dropped here, on a JVM thread. The OsClosed event then tears the window
+    // down on the game thread.
+    drop(refs_table().as_mut().and_then(|m| m.remove(&window_id)));
+    crate::insets::forget(window_id);
     dispatch_event(ExtraWindowEvent::OsClosed { window_id });
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<'local>(
     env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -679,25 +464,26 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceCreated<
         return;
     };
     let pending = pending_table().as_mut().and_then(|m| m.remove(&window_id));
-    if let Some(tx) = pending {
-        let _ = tx.send(native_window);
-    } else {
-        // Re-create after a config-change recreation should NOT happen with
-        // the exhaustive `configChanges` declared on `ExtraWindowActivity`,
-        // so this branch is a safety net only. Drop the NativeWindow; future
-        // re-attach support lives in L7c.
-        log::warn!(
-            "multi_window: surfaceCreated re-arrived for windowId={window_id} \
-             with no pending sender — config-change recreation? dropping surface"
-        );
-        drop(native_window);
+    match pending {
+        Some(tx) => {
+            // The wait timed out between taking the sender and sending;
+            // the run loop finishes the Activity of an unknown window.
+            if let Err(native_window) = tx.send(native_window) {
+                dispatch_event(ExtraWindowEvent::SurfaceCreated {
+                    window_id,
+                    native_window,
+                });
+            }
+        }
+        None => dispatch_event(ExtraWindowEvent::SurfaceCreated {
+            window_id,
+            native_window,
+        }),
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
@@ -707,7 +493,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<
     height: i32,
 ) {
     let window_id = window_id as u64;
-    log::info!("multi_window: nativeOnExtraSurfaceChanged windowId={window_id} {width}x{height}");
+    log::debug!("multi_window: nativeOnExtraSurfaceChanged windowId={window_id} {width}x{height}");
     dispatch_event(ExtraWindowEvent::Resized {
         window_id,
         width: width.max(1) as u32,
@@ -716,40 +502,63 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceChanged<
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceDestroyed<
-    'local,
->(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraSurfaceDestroyed<'local>(
     _env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
 ) {
     let window_id = window_id as u64;
     log::info!("multi_window: nativeOnExtraSurfaceDestroyed windowId={window_id}");
-    dispatch_event(ExtraWindowEvent::SurfaceDestroyed { window_id });
+    let (detached, wait) = std::sync::mpsc::channel();
+    dispatch_event(ExtraWindowEvent::SurfaceDestroyed {
+        window_id,
+        detached,
+    });
+    // The game thread may be opening a window, which waits for this UI thread,
+    // or in a long frame, so the wait is short and Android gets its callback
+    // back regardless.
+    if wait.recv_timeout(SURFACE_DETACH_TIMEOUT) == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    {
+        log::warn!("multi_window: window {window_id} didn't stop drawing in time");
+    }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'local>(
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraFocusChanged<'local>(
+    _env: jni::JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    window_id: i64,
+    has_focus: jni::sys::jboolean,
+) {
+    let window_id = window_id as u64;
+    let focused = has_focus != 0;
+    log::debug!("multi_window: nativeOnExtraFocusChanged windowId={window_id} focused={focused}");
+    dispatch_event(ExtraWindowEvent::FocusChanged { window_id, focused });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnMotionEvent<'local>(
     mut env: jni::JNIEnv<'local>,
     _bridge: JObject<'local>,
     window_id: i64,
     action_masked: i32,
     action_index: i32,
-    meta_state: i32,
+    source: i32,
     button_state: i32,
-    event_time_millis: i64,
+    meta_state: i32,
+    flags: i32,
+    classification: i32,
     vscroll: f32,
     hscroll: f32,
     xs: JFloatArray<'local>,
     ys: JFloatArray<'local>,
     pointer_ids: JIntArray<'local>,
+    tool_types: JIntArray<'local>,
 ) {
     let window_id = window_id as u64;
-    log::info!(
-        "multi_window: nativeOnExtraTouchEvent windowId={window_id} action={action_masked}"
-    );
-    let positions = match read_pointers(&mut env, &xs, &ys, &pointer_ids) {
-        Ok(v) => v,
+    log::debug!("multi_window: nativeOnMotionEvent windowId={window_id} action={action_masked}");
+    let pointers = match read_pointers(&mut env, &xs, &ys, &pointer_ids, &tool_types) {
+        Ok(pointers) => pointers,
         Err(err) => {
             log::warn!("multi_window: failed to read pointers: {err:#}");
             return;
@@ -757,14 +566,18 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraTouchEvent<'loc
     };
     dispatch_event(ExtraWindowEvent::Motion {
         window_id,
-        action_masked,
-        action_index,
-        meta_state,
-        button_state,
-        event_time_millis,
-        vscroll,
-        hscroll,
-        positions,
+        motion: Motion {
+            action: MotionAction::from(action_masked as u32),
+            action_index: action_index.max(0) as usize,
+            source: Source::from(source as u32),
+            meta_state: MetaState(meta_state as u32),
+            button_state: button_state as u32,
+            canceled: flags as u32 & crate::events::FLAG_CANCELED != 0,
+            classification,
+            vscroll,
+            hscroll,
+            pointers,
+        },
     });
 }
 
@@ -781,6 +594,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraKeyEvent<'local
     _bridge: JObject<'local>,
     window_id: i64,
     action: i32,
+    device_id: i32,
     keycode: i32,
     meta_state: i32,
     repeat_count: i32,
@@ -793,6 +607,7 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeOnExtraKeyEvent<'local
     dispatch_event(ExtraWindowEvent::Key {
         window_id,
         action,
+        device_id,
         keycode: keycode as u32,
         meta_state: meta_state as u32,
         repeat_count,
@@ -804,7 +619,8 @@ fn read_pointers(
     xs: &JFloatArray,
     ys: &JFloatArray,
     pointer_ids: &JIntArray,
-) -> Result<Vec<(f32, f32, i32)>> {
+    tool_types: &JIntArray,
+) -> Result<Vec<MotionPointer>> {
     let count = env.get_array_length(xs).context("xs length")? as usize;
     if count == 0 {
         return Ok(Vec::new());
@@ -812,23 +628,24 @@ fn read_pointers(
     let mut x_buf = vec![0f32; count];
     let mut y_buf = vec![0f32; count];
     let mut id_buf = vec![0i32; count];
+    let mut tool_type_buf = vec![0i32; count];
     env.get_float_array_region(xs, 0, &mut x_buf)
         .context("xs region")?;
     env.get_float_array_region(ys, 0, &mut y_buf)
         .context("ys region")?;
     env.get_int_array_region(pointer_ids, 0, &mut id_buf)
         .context("pointer_ids region")?;
+    env.get_int_array_region(tool_types, 0, &mut tool_type_buf)
+        .context("tool_types region")?;
     Ok(x_buf
         .into_iter()
         .zip(y_buf)
         .zip(id_buf)
-        .map(|((x, y), id)| (x, y, id))
-        .collect::<Vec<_>>())
-}
-
-#[allow(dead_code)]
-fn _trait_check() {
-    fn assert_send<T: Send>() {}
-    assert_send::<NativeWindow>();
-    assert_send::<ExtraWindowEvent>();
+        .zip(tool_type_buf)
+        .map(|(((x, y), id), tool)| MotionPointer {
+            id,
+            position: gpui::point(gpui::px(x), gpui::px(y)),
+            tool: ToolType::from(tool as u32),
+        })
+        .collect())
 }

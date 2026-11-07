@@ -1,19 +1,16 @@
-//! Android title bar — sits below `menu_bar` and shows the
-//! Restricted Mode trust badge (when applicable), the project name,
-//! and the settings/menu chevron whose tap toggles the menu bar
-//! above and whose right-click / two-finger-tap opens the same
-//! dropdown production puts in its application_menu (Settings,
-//! Keymap, Themes, Icon Themes, Extensions).
-//!
-//! We render this inside the workspace's single `titlebar_item` slot
-//! by stacking on top of the menu bar — see `header.rs`.
+//! Android's title bar, below `menu_bar` in the workspace's `titlebar_item`
+//! slot (see `header.rs`). It has what Zed's `title_bar` crate shows without
+//! calls and sign-in: Restricted Mode, the shared storage warning, the remote
+//! connection, the project name, and the update button from `app_updater`.
+//! The chevron toggles the menu bar; right-click or a two-finger tap on it
+//! opens Settings, Keymap, Themes, Icon Themes and Extensions.
 
 use std::path::PathBuf;
 
 use gpui::{
-    Action, Anchor, AnyElement, App, AppContext, Context, DismissEvent, Entity, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
-    Pixels, Point, Render, SharedString, Styled, WeakEntity, Window, anchored, deferred, div,
+    Action, Anchor, AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
+    Render, SharedString, Styled, WeakEntity, Window, anchored, deferred, div,
     prelude::FluentBuilder,
 };
 use log::error;
@@ -26,22 +23,19 @@ use ui::{
     IconName, IconSize, IconWithIndicator, Indicator, Label, LabelCommon, LabelSize, PopoverMenu,
     SelectableButton, TintColor, Tooltip, h_flex,
 };
+use util::ResultExt as _;
 use workspace::Workspace;
 use zed_actions::OpenRemote;
 
+use crate::app_updater::{self, AppUpdater};
 use crate::menu_bar::MenuBar;
 use crate::noexec_modal::NoexecMoveModal;
 
 pub struct TitleBar {
     workspace: WeakEntity<Workspace>,
     menu_bar: WeakEntity<MenuBar>,
-    /// When the chevron is right-clicked / two-finger-tapped, we
-    /// build a ContextMenu, anchor it at the click position, and
-    /// keep the entity alive in this slot until it dismisses. Same
-    /// lifecycle pattern as `project_panel`'s `context_menu`. The
-    /// `gpui::Subscription` field cannot be Clone'd, so we never
-    /// `.cloned()` this whole tuple — only the menu+position pair
-    /// when rendering, holding the subscription by reference.
+    /// The chevron's context menu while it's open, as `project_panel` keeps
+    /// its own.
     settings_menu: Option<(Entity<ContextMenu>, Point<Pixels>, gpui::Subscription)>,
     focus_handle: FocusHandle,
 }
@@ -52,6 +46,9 @@ impl TitleBar {
         menu_bar: WeakEntity<MenuBar>,
         cx: &mut Context<Self>,
     ) -> Self {
+        if let Some(updater) = AppUpdater::global(cx) {
+            cx.observe(&updater, |_, _, cx| cx.notify()).detach();
+        }
         Self {
             workspace,
             menu_bar,
@@ -60,9 +57,6 @@ impl TitleBar {
         }
     }
 
-    /// Worktree root path, if a single visible worktree is open. Used by the
-    /// noexec banner to statvfs the actual filesystem and decide whether to
-    /// nag the user about builds-won't-run.
     fn worktree_abs_path(&self, cx: &Context<Self>) -> Option<PathBuf> {
         let workspace = self.workspace.upgrade()?;
         let project = workspace.read(cx).project().read(cx);
@@ -80,10 +74,11 @@ impl TitleBar {
             return None;
         }
         let basename = abs_path.file_name()?.to_string_lossy().to_string();
-        let tooltip_text =
-            format!("Project lives on shared storage (FUSE noexec) — \
+        let tooltip_text = format!(
+            "Project lives on shared storage (FUSE noexec) — \
                     cargo / go / make / native build tools will EACCES on run. \
-                    Tap to copy into ~/projects/{basename} or suppress this warning.");
+                    Tap to copy into ~/projects/{basename} or suppress this warning."
+        );
         let click_path = abs_path.clone();
         Some(
             Button::new("zed-android-noexec-banner", "Builds won't run · Move")
@@ -103,9 +98,7 @@ impl TitleBar {
                         return;
                     };
                     workspace.update(cx, |workspace, cx| {
-                        workspace.toggle_modal(window, cx, |_, cx| {
-                            NoexecMoveModal::new(path, cx)
-                        });
+                        workspace.toggle_modal(window, cx, |_, cx| NoexecMoveModal::new(path, cx));
                     });
                 }))
                 .into_any_element(),
@@ -138,42 +131,22 @@ impl TitleBar {
                         .color(Color::Warning),
                 )
                 .tooltip(|_, cx| {
-                    Tooltip::simple(
-                        "You're in Restricted Mode — tap to trust this project",
-                        cx,
-                    )
+                    Tooltip::simple("You're in Restricted Mode — tap to trust this project", cx)
                 })
                 .on_click(move |_, window, cx| {
-                    let _ = workspace_for_click.update(cx, |workspace, cx| {
-                        workspace.show_worktree_trust_security_modal(true, window, cx)
-                    });
+                    workspace_for_click
+                        .update(cx, |workspace, cx| {
+                            workspace.show_worktree_trust_security_modal(true, window, cx)
+                        })
+                        .log_err();
                 })
                 .into_any_element(),
         )
     }
 
-    /// SSH / remote connection pill — mirrors production
-    /// `crates/title_bar/src/title_bar.rs::render_remote_project_connection`
-    /// (lines 513–608 in production). Only renders when the active project
-    /// IS a remote one (`Project::remote_connection_options(cx)` returns
-    /// Some). On local projects, returns None and the pill is hidden.
-    ///
-    /// Trigger: a small icon-with-indicator-dot button + the server's host
-    /// or nickname. Indicator color tracks `remote::ConnectionState`
-    /// (Connected = green, Reconnecting/HeartbeatMissed = yellow,
-    /// Disconnected = red).
-    ///
-    /// Tap opens a `PopoverMenu` whose body is
-    /// `recent_projects::RemoteServerProjects::popover` — the exact same
-    /// dropdown production uses, listing saved SSH connections,
-    /// `+ Connect SSH Server`, and per-server `Open Folder` /
-    /// `View Server Options`. Persistence is handled by the shared
-    /// `settings::RemoteSettings.ssh_connections` array — same one
-    /// production reads.
-    fn render_remote_project_connection(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    /// A copy of `render_remote_project_connection` in
+    /// `crates/title_bar/src/title_bar.rs`.
+    fn render_remote_project_connection(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let workspace = self.workspace.upgrade()?;
         let project = workspace.read(cx).project().clone();
 
@@ -188,8 +161,6 @@ impl TitleBar {
             ),
             RemoteConnectionOptions::Wsl(_) => (None, "Remote Project", IconName::Linux),
             RemoteConnectionOptions::Docker(_) => (None, "Dev Container", IconName::Box),
-            #[cfg(any(test, feature = "test-support"))]
-            RemoteConnectionOptions::Mock(_) => (None, "Mock Remote Project", IconName::Server),
         };
 
         let nickname = nickname.unwrap_or_else(|| host.clone());
@@ -273,10 +244,11 @@ impl TitleBar {
         let project = workspace.read(cx).project().read(cx);
         let mut visible = project.visible_worktrees(cx);
         let first = visible.next()?;
-        // RelPath has no Display; production calls `.display(path_style)`
-        // which returns a Cow<str>. We pass the worktree's own path style.
         let worktree = first.read(cx);
-        let root = worktree.root_name().display(worktree.path_style()).to_string();
+        let root = worktree
+            .root_name()
+            .display(worktree.path_style())
+            .to_string();
         Some(
             Label::new(root)
                 .size(LabelSize::Small)
@@ -288,10 +260,9 @@ impl TitleBar {
     fn render_chevron(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let menu_bar_for_toggle = self.menu_bar.clone();
         let toggle_click = move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
-            let _ = menu_bar_for_toggle.update(cx, |bar, cx| {
-                bar.hidden = !bar.hidden;
-                cx.notify();
-            });
+            menu_bar_for_toggle
+                .update(cx, |bar, cx| bar.toggle(cx))
+                .log_err();
         };
 
         let secondary = cx.listener(
@@ -364,6 +335,7 @@ impl Render for TitleBar {
         let noexec = self.render_noexec_banner(cx);
         let remote_pill = self.render_remote_project_connection(cx);
         let project_name = self.render_project_name(cx);
+        let update_button = app_updater::render_update_button(cx);
         let chevron = self.render_chevron(cx);
 
         h_flex()
@@ -378,6 +350,7 @@ impl Render for TitleBar {
             .children(remote_pill)
             .children(project_name)
             .child(div().flex_1())
+            .children(update_button)
             .child(chevron)
             .when_some(
                 self.settings_menu

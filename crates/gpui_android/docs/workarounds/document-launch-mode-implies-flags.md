@@ -4,7 +4,7 @@
 **Phase / Commit:** L7
 **Files:**
 - `crates/gpui_android/examples/zed_android/android/app/src/main/AndroidManifest.xml`
-- `crates/gpui_android/src/multi_window.rs` (`launch_extra_activity_inner`)
+- `MainActivity.launchExtraWindow`
 
 ## Problem
 

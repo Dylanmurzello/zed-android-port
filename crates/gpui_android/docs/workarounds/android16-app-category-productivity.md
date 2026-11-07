@@ -21,9 +21,8 @@ fullscreen instead.
 
 The games heuristic at higher `targetSdk` values picks up on cues like
 `extends GameActivity`, the `<meta-data android:name="android.app.lib_name">`
-hint, and the `compileSdk` level. This was found at `targetSdk=28` (then
-pinned for Termux execve, see [`targetSdk-28-execve`](targetsdk-28-execve.md));
-the explicit category below does not depend on the level and holds at 35.
+hint, and the `compileSdk` level. The explicit category below does not
+depend on the `targetSdk` level.
 
 There's no API to "opt out of games classification." But there is an
 explicit category override.
@@ -65,4 +64,3 @@ fit for an editor.
 ## See also
 
 - [Multi-Activity OS-chromed extra windows](multi-activity-os-chrome.md)
-- [`targetSdk=28` for execve](targetsdk-28-execve.md): the pin that held the level when this was found (reverted since)

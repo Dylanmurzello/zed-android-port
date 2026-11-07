@@ -1,58 +1,9 @@
-use gpui::{App, Context, DismissEvent, WeakEntity, Window};
+use gpui::{App, Context, WeakEntity, Window};
 use notifications::status_toast::StatusToast;
-use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use ui::{Color, Icon, IconName, IconSize, SharedString};
 use util::ResultExt;
 use workspace::{self, Workspace};
-
-/// Outcome of a single `git clone` invocation.
-enum CloneOutcome {
-    Completed,
-    Cancelled,
-}
-
-/// Spawns `git clone --progress <url>` in `cwd`, polls for exit or
-/// cancellation. On cancel, sends `kill()` (SIGKILL on Unix) and waits
-/// so we don't leave a zombie. The caller is responsible for
-/// `remove_dir_all` of the cloned destination on the `Cancelled`
-/// branch — git creates `<cwd>/<repo_name>` as it works, partially
-/// populated until the operation finishes.
-fn run_git_clone(
-    url: &str,
-    cwd: &Path,
-    cancel: &AtomicBool,
-) -> anyhow::Result<CloneOutcome> {
-    let mut child = Command::new("git")
-        .arg("clone")
-        .arg("--progress")
-        .arg(url)
-        .current_dir(cwd)
-        .spawn()
-        .map_err(|err| anyhow::anyhow!("spawn git clone for {url}: {err}"))?;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(CloneOutcome::Cancelled);
-        }
-        match child.try_wait()? {
-            Some(status) if status.success() => return Ok(CloneOutcome::Completed),
-            Some(status) => anyhow::bail!("git clone exited with {status}"),
-            None => {
-                // Block one background-pool thread for ~200ms between
-                // polls. background_spawn pool is sized for blocking
-                // workloads; using std::thread::sleep here avoids
-                // pulling in a runtime-specific async timer for what's
-                // a small per-iteration cost.
-                std::thread::sleep(Duration::from_millis(200));
-            }
-        }
-    }
-}
 
 pub fn clone_and_open(
     repo_url: SharedString,
@@ -82,92 +33,32 @@ pub fn clone_and_open(
                 .unwrap_or("repository")
                 .to_owned();
 
-            // Cancel flag wired from the progress toast's Cancel action
-            // through to `run_git_clone`'s per-poll check. Replaces the
-            // previous silent `fs.git_clone(...).await` so the user gets
-            // visual feedback during long clones and can actually abort
-            // (vs. clicking the welcome button repeatedly thinking it
-            // didn't fire). On cancel we `child.kill()` + remove the
-            // partially-cloned destination — `<destination_dir>/<repo_name>`
-            // is freshly created by git itself during this call, so
-            // `remove_dir_all` only ever touches files we just produced.
-            let cancel = Arc::new(AtomicBool::new(false));
-            let cancel_for_button = cancel.clone();
-
-            let progress_toast = workspace
+            let clone_task = workspace
                 .update(cx, |workspace, cx| {
-                    let toast = StatusToast::new(
-                        format!("Cloning {repo_name}…"),
-                        cx,
-                        move |this, _cx| {
-                            let cancel_clone = cancel_for_button.clone();
-                            this.icon(
-                                Icon::new(IconName::CloudDownload)
-                                    .size(IconSize::Small)
-                                    .color(Color::Info),
-                            )
-                            .auto_dismiss(false)
-                            .action("Cancel", move |_, _| {
-                                cancel_clone.store(true, Ordering::Relaxed);
-                            })
-                        },
-                    );
-                    workspace.toggle_status_toast(toast.clone(), cx);
-                    toast
+                    let fs = workspace.app_state().fs.clone();
+                    let destination_dir = destination_dir.clone();
+                    let repo_url = repo_url.clone();
+                    cx.spawn(async move |_workspace, _cx| {
+                        fs.git_clone(destination_dir.as_path(), &repo_url).await
+                    })
                 })
                 .ok()?;
 
-            let clone_outcome = {
-                let url_for_worker = repo_url.to_string();
-                let cwd_for_worker = destination_dir.clone();
-                let cancel_for_worker = cancel.clone();
-                cx.background_executor()
-                    .spawn(async move {
-                        run_git_clone(&url_for_worker, &cwd_for_worker, &cancel_for_worker)
+            if let Err(error) = clone_task.await {
+                workspace
+                    .update(cx, |workspace, cx| {
+                        let toast = StatusToast::new(error.to_string(), cx, |this, _| {
+                            this.icon(
+                                Icon::new(IconName::XCircle)
+                                    .size(IconSize::Small)
+                                    .color(Color::Error),
+                            )
+                            .dismiss_button(true)
+                        });
+                        workspace.toggle_status_toast(toast, cx);
                     })
-                    .await
-            };
-
-            // Always dismiss the progress toast — completion, cancel, or error.
-            let _ = progress_toast.update(cx, |_, cx| cx.emit(DismissEvent));
-
-            match clone_outcome {
-                Ok(CloneOutcome::Completed) => {
-                    // Fall through to the existing post-clone prompt.
-                }
-                Ok(CloneOutcome::Cancelled) => {
-                    let cloned_dir = destination_dir.join(&repo_name);
-                    if let Err(err) = std::fs::remove_dir_all(&cloned_dir) {
-                        log::warn!(
-                            "git clone cancel: cleanup of {} failed: {err:#}",
-                            cloned_dir.display()
-                        );
-                    }
-                    return None;
-                }
-                Err(error) => {
-                    let cloned_dir = destination_dir.join(&repo_name);
-                    if let Err(err) = std::fs::remove_dir_all(&cloned_dir) {
-                        log::warn!(
-                            "git clone failure cleanup of {} skipped: {err:#}",
-                            cloned_dir.display()
-                        );
-                    }
-                    workspace
-                        .update(cx, |workspace, cx| {
-                            let toast = StatusToast::new(error.to_string(), cx, |this, _| {
-                                this.icon(
-                                    Icon::new(IconName::XCircle)
-                                        .size(IconSize::Small)
-                                        .color(Color::Error),
-                                )
-                                .dismiss_button(true)
-                            });
-                            workspace.toggle_status_toast(toast, cx);
-                        })
-                        .log_err();
-                    return None;
-                }
+                    .log_err();
+                return None;
             }
 
             let has_worktrees = workspace

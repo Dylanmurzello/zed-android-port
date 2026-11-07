@@ -21,26 +21,18 @@ link to, never prompt for.
 
 ## Solution
 
-`MainActivity.requestStoragePermissions`, called once per process from
-`storage::request_once` at boot, branches on the API level: on 11+ it
-checks `Environment.isExternalStorageManager()` and opens the toggle screen
-once per install (a shared preference remembers the ask); below 11 it
-requests the two runtime permissions as before. `requestAllFilesAccess`
-opens the screen again from Settings > Android Runtime > Allow access to
-/sdcard. The manifest keeps `READ_EXTERNAL_STORAGE` to API 32 and
-`WRITE_EXTERNAL_STORAGE` to API 29, declares `MANAGE_EXTERNAL_STORAGE`,
-and sets `requestLegacyExternalStorage` (Android 10) and
-`preserveLegacyExternalStorage` (the upgrade from the targetSdk 28
-releases on Android 11).
+`MainActivity.requestStoragePermissions`, called from
+`storage::request_once` at boot, checks
+`Environment.isExternalStorageManager()` and opens the toggle screen once per
+install (a shared preference remembers the ask). `requestAllFilesAccess` opens
+the screen again from Settings > Android > Allow Access to /sdcard. The manifest declares `MANAGE_EXTERNAL_STORAGE`.
 
 ## Failure mode
 
-`EACCES` on `/sdcard` paths with the toggle off: open Settings > Android
-Runtime > Allow access to /sdcard. The SAF picker and projects under
-`~/projects` work either way.
+`EACCES` on `/sdcard` paths with the toggle off: open Settings > Android >
+Allow Access to /sdcard. Projects under `~/projects` work either way.
 
 ## See also
 
 - `android-noexec-mount.md`: why builds cannot run from `/sdcard` even
   with access
-- `targetsdk-28-execve.md`

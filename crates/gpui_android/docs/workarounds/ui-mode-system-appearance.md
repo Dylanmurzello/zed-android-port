@@ -45,5 +45,4 @@ Two reads:
 
 ## See also
 
-- [activity-recreation-idempotency.md](activity-recreation-idempotency.md)
-  — ConfigChanged often triggers activity recreation
+- [android16-config-changes-resize.md](android16-config-changes-resize.md)

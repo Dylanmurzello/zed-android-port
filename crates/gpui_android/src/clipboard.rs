@@ -1,274 +1,160 @@
-//! Bridge between gpui's `ClipboardItem` and Android's
-//! `android.content.ClipboardManager`.
+//! Android's clipboard, through `MainActivity`'s clipboard methods.
 //!
-//! gpui's stubbed implementations meant Cut/Copy never wrote anything and
-//! Paste always saw an empty clipboard. We hop through JNI to call
-//! `ClipboardManager.setPrimaryClip(ClipData.newPlainText(...))` and
-//! `getPrimaryClip()` so editor copy/cut/paste actions interoperate with
-//! the rest of Android.
-//!
-//! Plain text only — `ClipboardItem` can carry images and structured
-//! entries but our editor only round-trips text through it.
+//! `ClipboardItem` can carry images and structured entries. Text round-trips
+//! here, and images can be pasted in, as Zed's agent does; copying an image out
+//! isn't wired up, since nothing in Zed needs it. Zed reads the clipboard often,
+//! such as to enable Paste in menus, and each read is a binder call, so a read
+//! within [`CACHE_TTL`] of the last one reuses it. An image is only read once
+//! per copy, for as long as `clipboardImageTimestamp` stays the same.
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use android_activity::AndroidApp;
-use anyhow::Result;
-use gpui::ClipboardItem;
-use jni::{JavaVM, objects::{JObject, JValue}};
-
-const SERVICE_CLIPBOARD: &str = "clipboard";
-
-// gpui calls `cx.read_from_clipboard()` opportunistically during render —
-// e.g., to gate the Paste menu item's enabled state. Each call is a JNI
-// round-trip into `ClipboardManager.getPrimaryClip()`, which on Android
-// goes through Binder IPC to system_server. At 60fps this allocates Java
-// stack frames faster than the JVM can recycle them, eventually
-// overflowing the 988KB android_main thread stack and aborting the
-// process via CheckJNI's "pending exception" guard.
-//
-// 50ms cache TTL is short enough that pasted content from another app
-// shows up "instantly" by human standards while keeping the JNI rate
-// at <20 calls/sec instead of 60+/sec.
-static READ_CACHE: Mutex<Option<(Instant, Option<String>)>> =
-    Mutex::new(None);
-
-// Belt-and-braces against re-entry: if read() is somehow called from a
-// callback fired during another read (shouldn't happen but defends
-// against gpui evolution), the second caller bails instead of stacking.
-static READ_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-static WRITE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+use anyhow::{Context as _, Result};
+use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat};
+use jni::JNIEnv;
+use jni::objects::{JByteArray, JObject, JString};
 
 const CACHE_TTL: Duration = Duration::from_millis(50);
 
+struct CachedImage {
+    timestamp: i64,
+    image: Option<Image>,
+}
+
+thread_local! {
+    static READ_CACHE: RefCell<Option<(Instant, Option<ClipboardItem>)>> =
+        const { RefCell::new(None) };
+    static IMAGE_CACHE: RefCell<Option<CachedImage>> = const { RefCell::new(None) };
+}
+
 pub(crate) fn read(android_app: &AndroidApp) -> Option<ClipboardItem> {
-    if let Some(cached) = read_cached() {
-        return cached.map(ClipboardItem::new_string);
-    }
-    if READ_IN_FLIGHT.swap(true, Ordering::AcqRel) {
-        log::debug!("clipboard: read re-entered; returning None");
-        return None;
-    }
-    let result = match read_inner(android_app) {
-        Ok(text) => text,
-        Err(err) => {
-            log::warn!("clipboard: read failed: {err:#}");
+    let cached = READ_CACHE.with_borrow(|cache| {
+        cache
+            .as_ref()
+            .filter(|(read_at, _)| read_at.elapsed() < CACHE_TTL)
+            .map(|(_, item)| item.clone())
+    });
+    cached.unwrap_or_else(|| {
+        let text = read_text(android_app).unwrap_or_else(|error| {
+            log::warn!("clipboard: read failed: {error:#}");
             None
-        }
-    };
-    // Belt-and-braces: drain any pending Java exception before returning
-    // control. CheckJNI SIGABRTs the whole app on the next foreign JNI
-    // call (cursor, saf, storage, …) if state is left behind.
-    drain_pending_exception(android_app);
-    READ_IN_FLIGHT.store(false, Ordering::Release);
-
-    if let Ok(mut guard) = READ_CACHE.lock() {
-        *guard = Some((Instant::now(), result.clone()));
-    }
-
-    result.map(ClipboardItem::new_string)
-}
-
-fn read_cached() -> Option<Option<String>> {
-    let guard = READ_CACHE.lock().ok()?;
-    let (when, value) = guard.as_ref()?;
-    (when.elapsed() < CACHE_TTL).then(|| value.clone())
-}
-
-pub(crate) fn write(android_app: &AndroidApp, item: ClipboardItem) {
-    let Some(text) = primary_text(&item) else {
-        log::info!("clipboard: write skipped — no text in ClipboardItem");
-        return;
-    };
-    log::info!("clipboard: write called with {} bytes", text.len());
-    if WRITE_IN_FLIGHT.swap(true, Ordering::AcqRel) {
-        log::debug!("clipboard: write re-entered; skipping");
-        return;
-    }
-    // The JNI chain (attach_current_thread → getSystemService →
-    // ClipData.newPlainText → setPrimaryClip) eats a few hundred KB of
-    // Java stack, and the gpui render/dispatch thread that calls us
-    // already runs at ~70-90% of the 988KB android_main stack on Tab S9.
-    // Calling JNI from here trips StackOverflowError on the JVM side
-    // (mid-printStackTrace, no less — the linker can't even tell us
-    // what failed). Same class of bug as the read-path 60fps cascade.
-    //
-    // Fix: fire-and-forget on a fresh thread with 2MB stack. AndroidApp
-    // doesn't expose a Clone; we extract the raw JavaVM* and Activity*
-    // (process-global, stable for the app's lifetime) and rebuild
-    // jni::JavaVM on the worker.
-    let vm_ptr = android_app.vm_as_ptr() as usize;
-    let activity_ptr = android_app.activity_as_ptr() as usize;
-
-    let spawned = std::thread::Builder::new()
-        .name("zed-clipboard-write".into())
-        .stack_size(2 * 1024 * 1024)
-        .spawn(move || {
-            let outcome = write_on_worker(vm_ptr, activity_ptr, &text);
-            WRITE_IN_FLIGHT.store(false, Ordering::Release);
-            if let Err(err) = outcome {
-                log::warn!("clipboard: write failed: {err:#}");
-                return;
-            }
-            // Invalidate the read cache — an external observer of our
-            // clipboard would see this fresh write, so subsequent reads
-            // should round-trip.
-            if let Ok(mut guard) = READ_CACHE.lock() {
-                *guard = None;
-            }
         });
-
-    // If thread spawn itself fails, release the latch so we don't get
-    // wedged in an infinite "in-flight" state.
-    if spawned.is_err() {
-        WRITE_IN_FLIGHT.store(false, Ordering::Release);
-        log::warn!("clipboard: write thread spawn failed");
-    }
-}
-
-fn write_on_worker(vm_ptr: usize, activity_ptr: usize, text: &str) -> Result<()> {
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as *mut _)? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(activity_ptr as _) };
-
-    let _ = clear_pending_exception(&mut env);
-
-    let manager = clipboard_manager(&mut env, &activity)?;
-    let label = env.new_string("")?;
-    let payload = env.new_string(text)?;
-    let clip_data_class = env.find_class("android/content/ClipData")?;
-    let clip = env
-        .call_static_method(
-            &clip_data_class,
-            "newPlainText",
-            "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;",
-            &[(&label).into(), (&payload).into()],
-        )?
-        .l()?;
-    env.call_method(
-        &manager,
-        "setPrimaryClip",
-        "(Landroid/content/ClipData;)V",
-        &[(&clip).into()],
-    )?;
-    let _ = clear_pending_exception(&mut env);
-    Ok(())
-}
-
-fn primary_text(item: &ClipboardItem) -> Option<String> {
-    item.entries().iter().find_map(|entry| match entry {
-        gpui::ClipboardEntry::String(s) => Some(s.text().to_owned()),
-        _ => None,
+        let item = clipboard_item(android_app, text);
+        READ_CACHE.set(Some((Instant::now(), item.clone())));
+        item
     })
 }
 
-fn read_inner(android_app: &AndroidApp) -> Result<Option<String>> {
-    let vm = unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast())? };
-    let mut env = vm.attach_current_thread()?;
-    let activity = unsafe { JObject::from_raw(android_app.activity_as_ptr() as _) };
-
-    // Defensively clear any pending exception before doing JNI work.
-    // jni-rs's `?` does clear JavaException for known-failed call_methods,
-    // but error paths that don't reach a Java call (WrongJValueType,
-    // attach failures, etc.) can still leave state. CheckJNI SIGABRTs
-    // on the next call if anything is pending — we've crashed twice on
-    // exactly this with Pending StackOverflowError after a clipboard
-    // failure on Android 14+.
-    let _ = clear_pending_exception(&mut env);
-
-    let manager = clipboard_manager(&mut env, &activity)?;
-    let has_clip = env
-        .call_method(&manager, "hasPrimaryClip", "()Z", &[])?
-        .z()?;
-    if !has_clip {
-        return Ok(None);
+/// A clip with text is that text. An item with both would make vim's registers,
+/// which only take a lone text entry, paste nothing.
+fn clipboard_item(android_app: &AndroidApp, text: Option<String>) -> Option<ClipboardItem> {
+    if let Some(text) = text.filter(|text| !text.is_empty()) {
+        IMAGE_CACHE.set(None);
+        return Some(ClipboardItem::new_string(text));
     }
-    let clip = env
+    let image = read_image(android_app).unwrap_or_else(|error| {
+        log::warn!("clipboard: reading an image failed: {error:#}");
+        None
+    })?;
+    Some(ClipboardItem::new_image(&image))
+}
+
+pub(crate) fn write(android_app: &AndroidApp, item: ClipboardItem) {
+    let Some(text) = item.entries().iter().find_map(|entry| match entry {
+        ClipboardEntry::String(string) => Some(string.text().to_owned()),
+        _ => None,
+    }) else {
+        return;
+    };
+    let result = crate::jni_env::with_activity(android_app, |env, activity| {
+        let text = env.new_string(&text)?;
+        env.call_method(
+            activity,
+            "writeClipboardText",
+            "(Ljava/lang/String;)V",
+            &[(&text).into()],
+        )?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        log::warn!("clipboard: write failed: {error:#}");
+    }
+    // Android applies the write later, on its UI thread.
+    READ_CACHE.set(Some((
+        Instant::now(),
+        Some(ClipboardItem::new_string(text)),
+    )));
+}
+
+fn read_text(android_app: &AndroidApp) -> Result<Option<String>> {
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let text = env
+            .call_method(activity, "readClipboardText", "()Ljava/lang/String;", &[])?
+            .l()?;
+        if text.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(env.get_string(&JString::from(text))?.into()))
+    })
+}
+
+fn read_image(android_app: &AndroidApp) -> Result<Option<Image>> {
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        let timestamp = env
+            .call_method(activity, "clipboardImageTimestamp", "()J", &[])?
+            .j()?;
+        if timestamp == 0 {
+            IMAGE_CACHE.set(None);
+            return Ok(None);
+        }
+        let cached = IMAGE_CACHE.with_borrow(|cache| {
+            cache
+                .as_ref()
+                .filter(|cached| cached.timestamp == timestamp)
+                .map(|cached| cached.image.clone())
+        });
+        if let Some(image) = cached {
+            return Ok(image);
+        }
+        // Cached even when it failed, so that a clip that can't be read doesn't
+        // block drawing on every later read.
+        let image = load_image(env, activity).unwrap_or_else(|error| {
+            log::warn!("clipboard: couldn't load an image: {error:#}");
+            None
+        });
+        IMAGE_CACHE.set(Some(CachedImage {
+            timestamp,
+            image: image.clone(),
+        }));
+        Ok(image)
+    })
+}
+
+fn load_image(env: &mut JNIEnv<'_>, activity: &JObject<'_>) -> Result<Option<Image>> {
+    let image = env
         .call_method(
-            &manager,
-            "getPrimaryClip",
-            "()Landroid/content/ClipData;",
+            activity,
+            "readClipboardImage",
+            "()Lcom/zdroid/ClipboardImage;",
             &[],
         )?
         .l()?;
-    if clip.is_null() {
+    if image.is_null() {
         return Ok(None);
     }
-    let count = env.call_method(&clip, "getItemCount", "()I", &[])?.i()?;
-    if count <= 0 {
-        return Ok(None);
-    }
-    let item = env
-        .call_method(
-            &clip,
-            "getItemAt",
-            "(I)Landroid/content/ClipData$Item;",
-            &[JValue::Int(0)],
-        )?
+    let mime_type = env
+        .get_field(&image, "mimeType", "Ljava/lang/String;")?
         .l()?;
-    if item.is_null() {
+    let mime_type: String = env.get_string(&JString::from(mime_type))?.into();
+    let Some(format) = ImageFormat::from_mime_type(&mime_type) else {
+        log::info!("clipboard: gpui has no image format for {mime_type}");
         return Ok(None);
-    }
-    let text = env
-        .call_method(&item, "getText", "()Ljava/lang/CharSequence;", &[])?
-        .l()?;
-    if text.is_null() {
-        return Ok(None);
-    }
-    let text_str = env
-        .call_method(&text, "toString", "()Ljava/lang/String;", &[])?
-        .l()?;
-    let s: String = env.get_string(&text_str.into())?.into();
-    Ok(Some(s))
-}
-
-/// Drain any Java exception currently flagged on this thread. Logs the
-/// exception class+message so we can diagnose, then clears so subsequent
-/// JNI calls don't hit CheckJNI's pending-exception abort.
-fn clear_pending_exception(env: &mut jni::JNIEnv) -> Result<()> {
-    if !env.exception_check()? {
-        return Ok(());
-    }
-    // exception_describe writes to logcat via Android's default uncaught
-    // handler — useful breadcrumb for which call generated the exception.
-    let _ = env.exception_describe();
-    env.exception_clear()?;
-    log::warn!("clipboard: cleared pending Java exception");
-    Ok(())
-}
-
-/// Public-level safety net: re-attach to the JVM and drain any pending
-/// exception. Cheap when there's nothing to clear (just an exception_check
-/// call). Called from `read`/`write` AFTER the inner work returns to make
-/// sure no exception leaks into other JNI paths (cursor, saf, storage).
-fn drain_pending_exception(android_app: &AndroidApp) {
-    let Ok(vm) = (unsafe { JavaVM::from_raw(android_app.vm_as_ptr().cast()) }) else {
-        return;
     };
-    let Ok(mut env) = vm.attach_current_thread() else {
-        return;
-    };
-    let _ = clear_pending_exception(&mut env);
+    let bytes = env.get_field(&image, "bytes", "[B")?.l()?;
+    let bytes = env
+        .convert_byte_array(JByteArray::from(bytes))
+        .context("copy the image's bytes")?;
+    Ok(Some(Image::from_bytes(format, bytes)))
 }
-
-fn clipboard_manager<'a>(
-    env: &mut jni::JNIEnv<'a>,
-    activity: &JObject<'a>,
-) -> Result<JObject<'a>> {
-    let service_name = env.new_string(SERVICE_CLIPBOARD)?;
-    let manager = env
-        .call_method(
-            activity,
-            "getSystemService",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
-            &[(&service_name).into()],
-        )?
-        .l()?;
-    if manager.is_null() {
-        anyhow::bail!("getSystemService(CLIPBOARD_SERVICE) returned null");
-    }
-    Ok(manager)
-}
-

@@ -21,7 +21,7 @@ calloop = "0.14.3"
 futures.workspace = true
 libc.workspace = true
 log.workspace = true
-ndk = { version = "0.9", features = ["nativewindow", "api-level-26"] }
+ndk = { version = "0.9", features = ["nativewindow", "api-level-31"] }
 raw-window-handle = "0.6"
 serde_json.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
@@ -29,3 +29,12 @@ util.workspace = true
 uuid.workspace = true
 zd_engine_core.workspace = true
 zdroid_runtime = { path = "../zdroid_runtime" }
+
+# The importer has no Android APIs, so exercise file safety on the host too.
+[[test]]
+name = "project_import"
+path = "src/project_import.rs"
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true

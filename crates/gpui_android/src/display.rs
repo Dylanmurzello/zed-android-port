@@ -1,5 +1,6 @@
 use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay, point, px, size};
 use std::fmt;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub(crate) struct AndroidDisplay;
@@ -20,9 +21,13 @@ impl PlatformDisplay for AndroidDisplay {
     }
 
     fn bounds(&self) -> Bounds<Pixels> {
-        // Real bounds populated from ANativeWindow size in Phase 7.4. For now return a
-        // landscape-tablet-sized default so windowing math doesn't divide by zero.
+        // A nominal size: gpui only uses it to center new windows, and
+        // `compute_launch_bounds` centers extra windows itself.
         Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)))
+    }
+
+    fn refresh_interval(&self) -> Option<Duration> {
+        None
     }
 }
 

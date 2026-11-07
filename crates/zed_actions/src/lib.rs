@@ -47,16 +47,12 @@ actions!(
         /// Opens project-specific settings.
         #[action(deprecated_aliases = ["zed_actions::OpenProjectSettings"])]
         OpenProjectSettings,
-        /// Opens the project-specific settings JSON file.
-        OpenProjectSettingsFile,
         /// Opens the project tasks configuration.
         OpenProjectTasks,
         /// Opens the project tasks configuration with worktree setup guidance.
         OpenWorktreeSetupTasks,
         /// Opens the default keymap file.
         OpenDefaultKeymap,
-        /// Opens the default settings file (read-only).
-        OpenDefaultSettings,
         /// Opens the user keymap file.
         #[action(deprecated_aliases = ["zed_actions::OpenKeymap"])]
         OpenKeymapFile,
@@ -252,7 +248,15 @@ pub mod dev {
         dev,
         [
             /// Toggles the developer inspector for debugging UI elements.
-            ToggleInspector
+            ToggleInspector,
+            /// Cycles the debug frame-time overlay between hidden, current
+            /// frame-time, and detailed frame-time statistics.
+            ToggleFpsOverlay,
+            /// Resets the debug frame-time overlay's statistics, except for the
+            /// total frame count.
+            ResetFrameOverlayStats,
+            /// Opens the key context view for debugging keybindings.
+            OpenKeyContextView
         ]
     );
 }
@@ -814,6 +818,10 @@ actions!(
         OpenGitIntegrationOnboarding
     ]
 );
+actions!(
+    call_hierarchy,
+    [ShowIncomingCalls, ShowOutgoingCalls, ToggleDirection]
+);
 
 pub mod debug_panel {
     use gpui::actions;
@@ -858,7 +866,8 @@ pub struct WslConnectionOptions {
     pub user: Option<String>,
 }
 
-#[cfg(target_os = "windows")]
+// `debug_assertions` makes the actions visible for the docs preprocessor
+#[cfg(any(debug_assertions, target_os = "windows"))]
 pub mod wsl_actions {
     use gpui::Action;
     use schemars::JsonSchema;

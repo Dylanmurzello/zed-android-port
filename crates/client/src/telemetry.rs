@@ -184,9 +184,8 @@ pub fn os_version() -> String {
                "unknown".to_string()
            }
        }
+       // The app doesn't start Zed's telemetry; this only has to compile.
        target_os = "android" => {
-           // TODO: read ro.build.version.release via android-system-properties or JNI.
-           // For now, emit "unknown" so telemetry compiles.
            "unknown".to_string()
        }
     }

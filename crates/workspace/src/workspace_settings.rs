@@ -25,6 +25,7 @@ pub struct WorkspaceSettings {
     pub cli_default_open_behavior: settings::CliDefaultOpenBehavior,
     pub default_open_behavior: settings::DefaultOpenBehavior,
     pub restore_on_file_reopen: bool,
+    pub reveal_if_open: bool,
     pub drop_target_size: f32,
     pub use_system_path_prompts: bool,
     pub use_system_prompts: bool,
@@ -32,15 +33,32 @@ pub struct WorkspaceSettings {
     pub command_aliases: HashMap<String, CommandAliasTarget>,
     pub max_tabs: Option<NonZeroUsize>,
     pub when_closing_with_no_tabs: settings::CloseWindowWhenNoItems,
+    pub on_new_window: settings::OnNewWindow,
     pub on_last_window_closed: settings::OnLastWindowClosed,
     pub text_rendering_mode: settings::TextRenderingMode,
+    pub use_display_p3: bool,
     pub resize_all_panels_in_dock: Vec<DockPosition>,
     pub close_on_file_delete: bool,
     pub close_panel_on_toggle: bool,
+    pub window_title_format: String,
+    pub window_title_separator: String,
     pub use_system_window_tabs: bool,
+    pub fullscreen_mode: settings::FullscreenMode,
     pub zoomed_padding: bool,
     pub window_decorations: settings::WindowDecorations,
     pub focus_follows_mouse: FocusFollowsMouse,
+}
+
+#[cfg(target_os = "macos")]
+pub fn closing_last_window_quits_app(cx: &App) -> bool {
+    WorkspaceSettings::get_global(cx)
+        .on_last_window_closed
+        .is_quit_app()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn closing_last_window_quits_app(_cx: &App) -> bool {
+    true
 }
 
 #[derive(Copy, Clone, Deserialize)]
@@ -76,22 +94,13 @@ pub struct TabBarSettings {
     pub show_pinned_tabs_in_separate_row: bool,
 }
 
-#[derive(Deserialize, RegisterSetting)]
-pub struct AndroidInputSettings {
-    pub on_screen_keyboard: bool,
-    pub trackpad_mode: bool,
-    pub trackpad_mode_active: bool,
-    pub programming_extras_row: bool,
-    pub invert_scroll: bool,
-}
-
 impl Settings for WorkspaceSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let workspace = &content.workspace;
         Self {
             active_pane_modifiers: ActivePanelModifiers {
                 border_size: Some(
-                    workspace
+                    *workspace
                         .active_pane_modifiers
                         .unwrap()
                         .border_size
@@ -116,6 +125,7 @@ impl Settings for WorkspaceSettings {
             cli_default_open_behavior: workspace.cli_default_open_behavior.unwrap(),
             default_open_behavior: workspace.default_open_behavior.unwrap(),
             restore_on_file_reopen: workspace.restore_on_file_reopen.unwrap(),
+            reveal_if_open: workspace.reveal_if_open.unwrap(),
             drop_target_size: workspace.drop_target_size.unwrap(),
             use_system_path_prompts: workspace.use_system_path_prompts.unwrap(),
             use_system_prompts: workspace.use_system_prompts.unwrap(),
@@ -123,8 +133,10 @@ impl Settings for WorkspaceSettings {
             command_aliases: workspace.command_aliases.clone(),
             max_tabs: workspace.max_tabs,
             when_closing_with_no_tabs: workspace.when_closing_with_no_tabs.unwrap(),
+            on_new_window: workspace.on_new_window.unwrap(),
             on_last_window_closed: workspace.on_last_window_closed.unwrap(),
             text_rendering_mode: workspace.text_rendering_mode.unwrap(),
+            use_display_p3: workspace.use_display_p3.unwrap(),
             resize_all_panels_in_dock: workspace
                 .resize_all_panels_in_dock
                 .clone()
@@ -134,7 +146,10 @@ impl Settings for WorkspaceSettings {
                 .collect(),
             close_on_file_delete: workspace.close_on_file_delete.unwrap(),
             close_panel_on_toggle: workspace.close_panel_on_toggle.unwrap(),
+            window_title_format: workspace.window_title_format.clone().unwrap(),
+            window_title_separator: workspace.window_title_separator.clone().unwrap(),
             use_system_window_tabs: workspace.use_system_window_tabs.unwrap(),
+            fullscreen_mode: workspace.fullscreen_mode.unwrap(),
             zoomed_padding: workspace.zoomed_padding.unwrap(),
             window_decorations: workspace.window_decorations.unwrap(),
             focus_follows_mouse: FocusFollowsMouse {
@@ -200,42 +215,6 @@ impl Settings for TabBarSettings {
     }
 }
 
-impl Settings for AndroidInputSettings {
-    fn from_settings(content: &settings::SettingsContent) -> Self {
-        let android_input = content.android_input.clone().unwrap_or_default();
-        AndroidInputSettings {
-            // All Android Input features default to OFF. The
-            // onboarding card surfaces all three switches on first
-            // launch (Soft Keyboard, Programming Keys Row, Virtual
-            // Trackpad), and the Settings panel exposes the same row
-            // under "Android Input" with search. Off-by-default also
-            // sidesteps the boot-time race between Kotlin's field
-            // initialization and the Rust→Kotlin push (an unexpected
-            // "row appears while setting is off" was the original
-            // symptom that drove this choice).
-            on_screen_keyboard: android_input.on_screen_keyboard.unwrap_or(false),
-            trackpad_mode: android_input.trackpad_mode.unwrap_or(false),
-            trackpad_mode_active: android_input.trackpad_mode_active.unwrap_or(false),
-            programming_extras_row: android_input.programming_extras_row.unwrap_or(false),
-            invert_scroll: android_input.invert_scroll.unwrap_or(false),
-        }
-    }
-}
-
-#[derive(Deserialize, RegisterSetting)]
-pub struct AndroidRuntimeSettings {
-    pub keep_awake: bool,
-}
-
-impl Settings for AndroidRuntimeSettings {
-    fn from_settings(content: &settings::SettingsContent) -> Self {
-        let android_runtime = content.android_runtime.clone().unwrap_or_default();
-        AndroidRuntimeSettings {
-            keep_awake: android_runtime.keep_awake.unwrap_or(false),
-        }
-    }
-}
-
 #[derive(Deserialize, RegisterSetting)]
 pub struct StatusBarSettings {
     pub show: bool,
@@ -244,6 +223,7 @@ pub struct StatusBarSettings {
     pub cursor_position_button: bool,
     pub line_endings_button: bool,
     pub active_encoding_button: EncodingDisplayOptions,
+    pub pending_keystrokes_indicator: bool,
 }
 
 impl Settings for StatusBarSettings {
@@ -256,6 +236,7 @@ impl Settings for StatusBarSettings {
             cursor_position_button: status_bar.cursor_position_button.unwrap(),
             line_endings_button: status_bar.line_endings_button.unwrap(),
             active_encoding_button: status_bar.active_encoding_button.unwrap(),
+            pending_keystrokes_indicator: status_bar.pending_keystrokes_indicator.unwrap(),
         }
     }
 }

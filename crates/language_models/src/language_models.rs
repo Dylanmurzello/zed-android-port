@@ -1,3 +1,6 @@
+// Android leaves out some providers in `register_language_model_providers`.
+#![cfg_attr(target_os = "android", allow(unused_imports, unused_variables))]
+
 use std::sync::Arc;
 
 use ::settings::{Settings, SettingsStore};
@@ -31,6 +34,7 @@ use crate::provider::openai_subscribed::OpenAiSubscribedProvider;
 use crate::provider::opencode::OpenCodeLanguageModelProvider;
 use crate::provider::vercel_ai_gateway::VercelAiGatewayLanguageModelProvider;
 use crate::provider::x_ai::XAiLanguageModelProvider;
+use crate::provider::x_ai_subscribed::XAiSubscribedProvider;
 pub use crate::settings::*;
 
 pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
@@ -220,6 +224,8 @@ fn register_language_model_providers(
     credentials_provider: Arc<dyn CredentialsProvider>,
     cx: &mut Context<LanguageModelRegistry>,
 ) {
+    // Android uses direct providers without Zed accounts or hosted models.
+    #[cfg(not(target_os = "android"))]
     registry.register_provider(
         Arc::new(CloudLanguageModelProvider::new(
             user_store,
@@ -244,6 +250,9 @@ fn register_language_model_providers(
         )),
         cx,
     );
+    // Android leaves out the local model servers (Ollama, LM Studio,
+    // llama.cpp). A remote one can be added as an OpenAI-compatible provider.
+    #[cfg(not(target_os = "android"))]
     registry.register_provider(
         Arc::new(OllamaLanguageModelProvider::new(
             client.http_client(),
@@ -252,6 +261,7 @@ fn register_language_model_providers(
         )),
         cx,
     );
+    #[cfg(not(target_os = "android"))]
     registry.register_provider(
         Arc::new(LmStudioLanguageModelProvider::new(
             client.http_client(),
@@ -260,6 +270,7 @@ fn register_language_model_providers(
         )),
         cx,
     );
+    #[cfg(not(target_os = "android"))]
     registry.register_provider(
         Arc::new(LlamaCppLanguageModelProvider::new(
             client.http_client(),
@@ -318,6 +329,14 @@ fn register_language_model_providers(
     );
     registry.register_provider(
         Arc::new(XAiLanguageModelProvider::new(
+            client.http_client(),
+            credentials_provider.clone(),
+            cx,
+        )),
+        cx,
+    );
+    registry.register_provider(
+        Arc::new(XAiSubscribedProvider::new(
             client.http_client(),
             credentials_provider.clone(),
             cx,

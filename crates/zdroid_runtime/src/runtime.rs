@@ -1,5 +1,5 @@
-//! The runtime handle: where the rootfs and the loader live, the
-//! environment the editor and its children run with, and a health probe.
+//! The runtime handle: where the rootfs and the loader live, and the
+//! environment the editor and its children run with.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -8,10 +8,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use util::env::EnvOp;
 use zd_engine_core::{DEFAULT_GUEST_PATH, LIST_SEPARATOR, LOADER_LINK_NAME, env as engine_env};
 
-use crate::progress::HealthStatus;
+use crate::env::EnvOp;
 
 /// Name of the per-install sentinel the installer writes last:
 /// `<image name>\n<sha256>\n`.
@@ -24,6 +23,10 @@ pub const LOG_TOGGLE_FILE: &str = "etc/zd-engine-log";
 /// The node name `uname` reports in the guest; the installer seeds the
 /// same into `etc/hostname`.
 pub const HOSTNAME: &str = "zdroid";
+
+/// The shell the guest gets when root's login shell isn't installed; also
+/// the loader's own default (`zd_loader`'s `DEFAULT_SHELL`).
+const DEFAULT_SHELL: &str = "/bin/bash";
 
 /// What the integrated terminal execs: a program plus the arguments
 /// that turn it into the user's shell.
@@ -113,8 +116,10 @@ impl Runtime {
         })
     }
 
-    /// Where the user's projects live; the recent-projects UI groups
-    /// paths under it as "Workspace".
+    /// The user's home folder: the guest's `$HOME`, the Files app's
+    /// Zdroid root, and where projects live (`projects/`). It's outside the
+    /// rootfs, so a reset leaves it alone, and at a path the editor and the
+    /// tools spell the same.
     pub fn workspace_root(&self) -> PathBuf {
         self.data_path.join("home")
     }
@@ -167,12 +172,13 @@ impl Runtime {
 
     /// Variables applied to the guest environment only.
     pub fn guest_env_spec(&self) -> String {
+        let home = self.workspace_root();
         [
-            "HOME=/root",
+            &format!("HOME={}", home.display()),
             "USER=root",
             "LOGNAME=root",
-            "SHELL=/bin/bash",
-            &format!("PATH={DEFAULT_GUEST_PATH}"),
+            &format!("SHELL={}", self.login_shell()),
+            &format!("PATH={}", self.guest_path()),
             "LANG=C.UTF-8",
             // The host's `<data>/tmp` is the guest's `/tmp` (bound), so the
             // guest spelling keeps temp paths short and native-looking.
@@ -210,11 +216,12 @@ impl Runtime {
     }
 
     /// Mutations to apply to the Zed process env at boot. Zed's own
-    /// process keeps the host shape (HOME, PATH with the farm first); the
-    /// engine block rides along so every child spawned from it, through
-    /// the farm or the bridge, reaches the loader configured.
+    /// process keeps the host shape (PATH with the farm first) and the
+    /// guest's home; the engine block rides along so every child spawned
+    /// from it, through the farm or the bridge, reaches the loader
+    /// configured.
     pub fn env_for_zed_process(&self) -> Vec<(String, EnvOp)> {
-        let mut ops = crate::env::baseline_env(&self.data_path);
+        let mut ops = crate::env::baseline_env(&self.data_path, &self.workspace_root());
         for (key, value) in self.engine_env() {
             ops.push((key, EnvOp::Set(value)));
         }
@@ -225,36 +232,81 @@ impl Runtime {
         ops
     }
 
-    /// Mutations to overlay on the integrated terminal's env at spawn
-    /// time, on top of the process env. The engine block is already in
-    /// the process env, so nothing more is needed.
-    pub fn env_for_terminal(&self) -> Vec<(String, EnvOp)> {
-        Vec::new()
-    }
-
-    /// The loader under its own name with a leading flag runs the
-    /// default shell with that flag: `/bin/bash -l`.
+    /// The loader running root's login shell as a login shell, such as
+    /// `/usr/bin/zsh -l`.
     pub fn terminal_shell(&self) -> TerminalShell {
         TerminalShell {
             program: self.loader_path(),
-            args: vec!["-l".to_string()],
+            args: vec![self.login_shell(), "-l".to_string()],
         }
     }
 
+    /// Root's shell in the rootfs's `/etc/passwd`, which `chsh` and
+    /// `usermod -s` change, while it's installed. Bash otherwise, so the
+    /// terminal still opens after the shell's package is removed or the
+    /// runtime is reset.
+    pub fn login_shell(&self) -> String {
+        let rootfs = self.rootfs_dir();
+        let configured = std::fs::read_to_string(rootfs.join("etc/passwd"))
+            .ok()
+            .and_then(|passwd| {
+                passwd.lines().find_map(|line| {
+                    let fields: Vec<&str> = line.split(':').collect();
+                    (fields.len() == 7 && fields[0] == "root").then(|| fields[6].to_string())
+                })
+            });
+        match configured {
+            Some(shell)
+                if shell.starts_with('/')
+                    && rootfs.join(shell.trim_start_matches('/')).is_file() =>
+            {
+                shell
+            }
+            Some(shell) if shell != DEFAULT_SHELL => {
+                log::warn!("runtime: root's shell {shell} isn't installed; using {DEFAULT_SHELL}");
+                DEFAULT_SHELL.to_string()
+            }
+            _ => DEFAULT_SHELL.to_string(),
+        }
+    }
+
+    /// The engine's default guest PATH with the home's tool directories
+    /// (rustup's, pip's and npm's per-user installs) in place of `/root`'s.
+    fn guest_path(&self) -> String {
+        let home = self.workspace_root();
+        let mut entries = vec![
+            home.join(".cargo/bin").display().to_string(),
+            home.join(".local/bin").display().to_string(),
+        ];
+        entries.extend(
+            DEFAULT_GUEST_PATH
+                .split(':')
+                .filter(|entry| !entry.starts_with("/root/"))
+                .map(str::to_string),
+        );
+        entries.join(":")
+    }
+
+    /// The host directories holding the guest's programs, the ones on the
+    /// guest's PATH.
+    pub fn binary_dirs(&self) -> Vec<PathBuf> {
+        let rootfs = self.rootfs_dir();
+        let home = self.workspace_root();
+        vec![
+            rootfs.join("usr/bin"),
+            rootfs.join("usr/local/bin"),
+            rootfs.join("usr/sbin"),
+            home.join(".cargo/bin"),
+            home.join(".local/bin"),
+        ]
+    }
+
     /// Names of the programs the guest's standard directories hold; the
-    /// symlink farm mirrors them so Zed's PATH lookup finds them.
+    /// symlink farm mirrors them so Zed's PATH lookup finds them. `bin`
+    /// and `sbin` are links to their `usr/` directories in Ubuntu.
     pub fn list_binaries(&self) -> Vec<String> {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for sub in [
-            "usr/bin",
-            "usr/local/bin",
-            "usr/sbin",
-            "bin",
-            "sbin",
-            "root/.cargo/bin",
-            "root/.local/bin",
-        ] {
-            let dir = self.rootfs_dir().join(sub);
+        for dir in self.binary_dirs() {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };
@@ -284,7 +336,7 @@ impl Runtime {
     }
 
     /// Run a guest program to completion with a deadline, capturing its
-    /// output. Used by the health check and the self-test.
+    /// output. Used by the engine self-test.
     // The runtime is the loader's spawner itself and is only called from
     // background threads; the smol wrapper would route back through the
     // spawn bridge.
@@ -342,39 +394,6 @@ impl Runtime {
             stderr: stderr_reader.join().unwrap_or_default(),
         })
     }
-
-    /// Quick feasibility check: the loader and the rootfs are there and a
-    /// guest program runs. Under three seconds either way.
-    pub fn health_check(&self) -> HealthStatus {
-        let loader = self.loader_path();
-        if !loader.exists() {
-            return HealthStatus::Failed {
-                error: format!(
-                    "engine loader missing at {} (reinstall the app)",
-                    loader.display()
-                ),
-            };
-        }
-        if !self.is_installed() {
-            return HealthStatus::NotInstalled;
-        }
-        match self.run_captured("/bin/true", &[], None, Duration::from_secs(3)) {
-            Ok(run) if run.succeeded() => HealthStatus::Healthy,
-            Ok(run) if run.timed_out => HealthStatus::Failed {
-                error: "/bin/true did not exit within 3 s".to_string(),
-            },
-            Ok(run) => HealthStatus::Failed {
-                error: format!(
-                    "/bin/true exited with {:?}: {}",
-                    run.code,
-                    run.stderr_text().trim()
-                ),
-            },
-            Err(error) => HealthStatus::Failed {
-                error: format!("{error:#}"),
-            },
-        }
-    }
 }
 
 fn read_all<R: Read>(reader: Option<R>) -> Vec<u8> {
@@ -430,5 +449,70 @@ mod tests {
         assert_eq!(entries[3], format!("/data/data/com.zdroid/files:{host}"));
         assert!(entries.contains(&format!("{}:{host}", given.to_string_lossy()).as_str()));
         assert!(!spec.contains(&format!(":{}/", given.to_string_lossy())) || given == canonical);
+    }
+
+    #[test]
+    fn the_guest_home_is_the_app_home_folder() {
+        let runtime = Runtime::new(std::path::Path::new("/data/user/0/com.zdroid/files"));
+        let spec = runtime.guest_env_spec();
+        assert!(
+            spec.contains("HOME=/data/user/0/com.zdroid/files/home;"),
+            "{spec}"
+        );
+        let path = spec
+            .split(';')
+            .find_map(|item| item.strip_prefix("PATH="))
+            .unwrap();
+        assert!(
+            path.starts_with(
+                "/data/user/0/com.zdroid/files/home/.cargo/bin:/data/user/0/com.zdroid/files/home/.local/bin:"
+            ),
+            "{path}"
+        );
+        assert!(!path.contains("/root"), "{path}");
+        assert!(path.ends_with(":/usr/bin:/sbin:/bin"), "{path}");
+    }
+
+    #[test]
+    fn the_terminal_runs_roots_login_shell_while_it_is_installed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let runtime = Runtime::new(temp.path());
+        let etc = runtime.rootfs_dir().join("etc");
+        std::fs::create_dir_all(&etc).expect("create etc");
+        std::fs::write(
+            etc.join("passwd"),
+            "root:x:0:0:root:/data/user/0/com.zdroid/files/home:/usr/bin/zsh\n\
+             daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n",
+        )
+        .expect("write passwd");
+
+        assert_eq!(runtime.login_shell(), "/bin/bash");
+        assert_eq!(runtime.terminal_shell().args, ["/bin/bash", "-l"]);
+
+        let bin = runtime.rootfs_dir().join("usr/bin");
+        std::fs::create_dir_all(&bin).expect("create usr/bin");
+        std::fs::write(bin.join("zsh"), "").expect("write zsh");
+        assert_eq!(runtime.terminal_shell().args, ["/usr/bin/zsh", "-l"]);
+        assert!(
+            runtime.guest_env_spec().contains(";SHELL=/usr/bin/zsh;"),
+            "{}",
+            runtime.guest_env_spec()
+        );
+    }
+
+    #[test]
+    fn the_editor_and_the_guest_share_the_home_folder() {
+        let runtime = Runtime::new(std::path::Path::new("/data/user/0/com.zdroid/files"));
+        let home = runtime
+            .env_for_zed_process()
+            .into_iter()
+            .find_map(|(key, op)| match op {
+                crate::env::EnvOp::Set(value) if key == "HOME" => Some(value),
+                _ => None,
+            });
+        assert_eq!(
+            home.as_deref(),
+            Some(std::ffi::OsStr::new("/data/user/0/com.zdroid/files/home"))
+        );
     }
 }

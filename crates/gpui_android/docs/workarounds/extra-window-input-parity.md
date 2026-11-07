@@ -5,8 +5,8 @@
 **Files:**
 - `crates/gpui_android/examples/zed_android/android/app/src/main/kotlin/com/zdroid/ExtraWindowActivity.kt`
 - `crates/gpui_android/examples/zed_android/android/app/src/main/kotlin/com/zdroid/NativeBridge.kt`
-- `crates/gpui_android/src/events.rs` (`translate_extra_motion_event`)
-- `crates/gpui_android/src/multi_window.rs` (`Java_..._nativeOnExtraTouchEvent` + `ExtraWindowEvent::Motion`)
+- `crates/gpui_android/src/events.rs` (`translate_motion`)
+- `crates/gpui_android/src/multi_window.rs` (`Java_..._nativeOnMotionEvent` + `ExtraWindowEvent::Motion`)
 - `crates/gpui_android/src/platform.rs` (Motion drain arm)
 
 ## Symptom
@@ -38,20 +38,8 @@ Two-layer gap:
    `setOnGenericMotionListener`. Neither was wired, so the system never
    delivered them to our forwarder.
 
-2. **`translate_extra_motion_event` was deliberately a stub** — only
-   handled `ACTION_DOWN`, `ACTION_UP`, `ACTION_MOVE`. The dropped cases
-   are documented in the source comment: "Intentionally simpler than the
-   primary translator… secondary gpui windows aren't yet wired."
-   The primary translator at `events.rs:83` already handles hover,
-   scroll, and `BUTTON_SECONDARY`, so the editor / terminal / project
-   panel — all hosted by MainActivity / GameActivity — work fine.
-
-The extra-window event pipeline (Java MotionEvent → JNI marshaling →
-`ExtraWindowEvent::Motion` → drain on game thread →
-`translate_extra_motion_event` → `state.handle_input(...)`) is otherwise
-identical to the primary path; the only delta is that the extra path
-re-builds `MotionEvent`-shaped data from raw fields because we can't
-share a Java `MotionEvent` reference across the JNI boundary.
+2. **The extra windows' translator was deliberately a stub**, handling only
+   `ACTION_DOWN`, `ACTION_UP` and `ACTION_MOVE`.
 
 ## Fix
 
@@ -73,43 +61,27 @@ chrome (drag handle, freeform resize edges) doesn't try to re-route it.
 `ACTION_SCROLL` carries its delta in `event.getAxisValue(AXIS_VSCROLL)`
 / `AXIS_HSCROLL` — `getX/Y` return the pointer position, NOT the scroll
 amount. The Kotlin side reads both axes unconditionally; they're zero
-on non-scroll events. Rust-side `Java_..._nativeOnExtraTouchEvent` and
+on non-scroll events. Rust-side `Java_..._nativeOnMotionEvent` and
 `ExtraWindowEvent::Motion` carry them through.
 
-### 3. Mirror primary-translator action arms in `translate_extra_motion_event`
+### 3. One translator
 
-Added `JAVA_ACTION_HOVER_MOVE` (7) → `MouseMove { pressed_button: None }`
-and `JAVA_ACTION_SCROLL` (8) → `ScrollWheelEvent { delta: Lines(point(hscroll, -vscroll)) }`.
-Honored `button_state & BUTTON_SECONDARY` on Down/Move/Up so
-mouse / trackpad right-click maps to `MouseButton::Right`.
-
-What's NOT mirrored: two-finger-tap → right-click synthesis (the
-PointerDown branch at `events.rs:142-180`). Settings / Keymap / Themes
-don't surface a context menu, so the gesture would have nowhere to go.
-Add when we ship a secondary window that actually needs it.
-
-## Why we don't (yet) merge the two translators
-
-The primary translator consumes `android_activity::input::MotionEvent`
-(NDK-backed, gives access to private MotionAction constructor + axis
-helpers). The extra translator consumes raw fields marshaled across
-JNI from a Java `MotionEvent` (the Kotlin side reads + arrays them up
-because we can't share a `jobject` across the C++/Rust boundary
-safely on the gpui main thread). They could be unified behind a
-shared trait if we end up adding more input-vocabulary cases —
-right-click synthesis, drag-to-scroll, fling momentum — but for now
-~30 lines of duplication beat the abstraction cost.
+The Kotlin side marshals the Java `MotionEvent`'s fields, because a `jobject`
+can't be shared with the gpui main thread, and Rust builds the same
+`events::Motion` from them that the main window builds from
+`android_activity::input::MotionEvent`. Both go through `translate_motion`, so an
+extra window treats a mouse, a stylus and a finger as the main window does.
 
 ## Failure mode if regressed
 
 - New listener removed from `ExtraWindowActivity.kt` → hover / scroll /
   buttons silently no-op in extra windows again. Editor / terminal in
-  MainActivity stay working (different translator), masking the bug.
+  MainActivity stay working (a different input path), masking the bug.
 - `event.getAxisValue(AXIS_VSCROLL)` not extracted on the Kotlin side
   → mouse wheel returns zero delta, scroll fires but moves nothing.
   Subtle: action arm runs, no panic, just a no-op.
-- New extern fn signature in `nativeOnExtraTouchEvent` not matched on
-  the Kotlin `external fun nativeOnExtraTouchEvent(...)` side → JNI
+- New extern fn signature in `nativeOnMotionEvent` not matched on
+  the Kotlin `external fun nativeOnMotionEvent(...)` side → JNI
   signature mismatch crash on first touch event in any extra window.
   `UnsatisfiedLinkError` at the call site, not at load time.
 
@@ -117,6 +89,3 @@ right-click synthesis, drag-to-scroll, fling momentum — but for now
 
 - [activate-extra-activity-move-to-front.md](activate-extra-activity-move-to-front.md)
   — how secondary windows get focused for `cx.windows()` dedup
-- [touch-input-polish.md](touch-input-polish.md) — primary-translator
-  scroll wheel handling we mirrored here (if that doc exists; otherwise
-  this is the first writeup of the equivalent work for extras)

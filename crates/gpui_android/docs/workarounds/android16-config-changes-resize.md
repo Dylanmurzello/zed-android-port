@@ -89,4 +89,3 @@ survives, configChanges is right.
 ## See also
 
 - [Multi-Activity OS-chromed extra windows](multi-activity-os-chrome.md)
-- [Activity-recreation idempotency](activity-recreation-idempotency.md) — older companion piece for the GameActivity recreation case

@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** `bcfc976aa9` — Stop tagging Android MouseDowns as first_mouse
-**Files:** `crates/gpui_android/src/events.rs`
+**Files:** `crates/gpui_android/src/events/mouse.rs` (`button_down`)
 
 ## Problem
 

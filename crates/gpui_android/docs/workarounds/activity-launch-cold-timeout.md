@@ -27,9 +27,20 @@ Gen 2 measured at:
 | 3 | 2030ms |
 | 4 | 2070ms |
 
-The 2-second outliers happen when Android is doing transition / app-kill
-work concurrently. So a 500ms or 1000ms timeout fires too eagerly. A 5s+
-timeout risks the game thread freeze the user notices as input lag.
+The 2-second outliers were a deadlock, not a slow system. Outside DeX the
+new Activity covers the main one, so Android pauses the main Activity
+first, and GameActivity's `onPause` holds the UI thread until the game
+thread acknowledges `APP_CMD_PAUSE`, for at most 2 seconds. The game
+thread was sleeping in this wait loop, so it never did, and the new
+Activity, which starts on the same UI thread, only got its surface once
+GameActivity gave up (logcat: `android_app_set_activity_state timed out
+waiting for cmd 14`). Opening Settings froze Zdroid for 2 seconds every
+time. The wait loop now polls android-activity's events instead of
+sleeping, which acknowledges the pause right away (see
+`AndroidPlatform::handle_main_event_while_opening_window`).
+
+A 5s+ timeout still risks the game thread freeze the user notices as input
+lag.
 
 Warm reopens (Activity already alive in Recents from a recent open):
 ~50-100ms. Trivial.
@@ -58,7 +69,8 @@ loop {
             ACTIVITY_LAUNCH_TIMEOUT.as_millis()
         );
     }
-    std::thread::sleep(Duration::from_millis(8));
+    // Polls the main Activity's lifecycle commands; see above.
+    wait(Duration::from_millis(8));
 }
 ```
 
@@ -67,7 +79,7 @@ try again"). Better than a 4s freeze followed by a ghost window.
 
 ## Why this works
 
-- 4s covers the 2030ms outliers we observed plus headroom.
+- 4s covers slow cold starts with headroom.
 - 4s is below Android's 5s ANR threshold for input dispatch.
 - Warm reopens are 50-100ms so the cap only matters on first cold open per
   process lifetime.

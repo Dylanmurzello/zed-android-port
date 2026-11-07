@@ -54,6 +54,13 @@ impl AgentPanelOnboarding {
 
 impl Render for AgentPanelOnboarding {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Android has no Zed account flow; reuse the native API-key setup.
+        if cfg!(target_os = "android") {
+            return AgentPanelOnboardingCard::new()
+                .child(ApiKeysWithoutProviders::new())
+                .into_any_element();
+        }
+
         let enrolled_in_trial = self
             .user_store
             .read(cx)
@@ -86,5 +93,6 @@ impl Render for AgentPanelOnboarding {
                     this.child(ApiKeysWithoutProviders::new())
                 }
             })
+            .into_any_element()
     }
 }
