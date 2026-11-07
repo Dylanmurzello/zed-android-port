@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 use android_activity::AndroidApp;
 use anyhow::{Context, Result, anyhow};
 
-/// Asset name inside the APK. Matches the staging path the Cargo build
-/// emits in `crates/gpui_android/examples/zed_android/build.rs`.
+/// Asset name inside the APK. Matches the file gradle's `buildAskpassHelper`
+/// task stages into `android/app/src/main/assets/`.
 const ASSET_NAME: &str = "zed-askpass-helper";
 
 /// Ensure the askpass helper is present at `<data_path>/<ASSET_NAME>`
