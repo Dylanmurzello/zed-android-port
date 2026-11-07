@@ -55,8 +55,50 @@ use workspace::{OpenOptions, SERIALIZATION_THROTTLE_TIME};
 use super::elicitation::{
     ElicitationCard, ElicitationCardHandlers, ElicitationFormState, should_render_elicitation,
 };
-use super::subagent_card::{SubagentCardState, SubagentStatus};
+use super::subagent_card::{SubagentCardId, SubagentCardState, SubagentStatus, acp_subagent_card};
 use super::*;
+
+/// Which side of a session message a transcript shows, and the other participant when it
+/// is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SessionMessageSide<'a> {
+    Outgoing {
+        recipient: Option<&'a acp_v2::SessionId>,
+    },
+    Incoming {
+        sender: Option<&'a acp_v2::SessionId>,
+    },
+    Unknown,
+}
+
+/// The transcript's own session is always one participant, so a single known participant
+/// that is another session also tells the direction.
+pub(super) fn session_message_side<'a>(
+    message: &'a acp_thread::SessionMessage,
+    own_session_id: &acp_v2::SessionId,
+) -> SessionMessageSide<'a> {
+    let sender = message.sender_session_id.as_ref();
+    let recipient = message.recipient_session_id.as_ref();
+    if sender == Some(own_session_id) {
+        SessionMessageSide::Outgoing { recipient }
+    } else if recipient == Some(own_session_id) || sender.is_some() {
+        SessionMessageSide::Incoming { sender }
+    } else if recipient.is_some() {
+        SessionMessageSide::Outgoing { recipient }
+    } else {
+        SessionMessageSide::Unknown
+    }
+}
+
+/// How a parent's view names a subagent. An ACP parent's own title for the subagent
+/// describes it in that view, so it wins over the subagent's title for itself.
+pub(super) fn subagent_label(thread: &AcpThread) -> SharedString {
+    thread
+        .subagent_association()
+        .and_then(|association| association.title.clone())
+        .or_else(|| thread.title())
+        .unwrap_or_else(|| "Subagent".into())
+}
 
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
 
@@ -399,6 +441,29 @@ fn parse_cat_numbered_line(line: &str) -> Option<(u32, &str)> {
     Some((number.parse().ok()?, text))
 }
 
+#[derive(IntoElement)]
+struct CatNumberedCodeBlock {
+    markdown: Entity<Markdown>,
+    parsed: ParsedCatNumberedCode,
+    markdown_style: MarkdownStyle,
+    copy_button_id: String,
+}
+
+impl RenderOnce for CatNumberedCodeBlock {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        self.markdown
+            .update(cx, |markdown, cx| markdown.ensure_parsed(cx));
+        let language = self.markdown.read(cx).first_code_block_language();
+        render_cat_numbered_code_block(
+            self.parsed,
+            language,
+            self.markdown_style,
+            self.copy_button_id,
+            cx,
+        )
+    }
+}
+
 fn render_cat_numbered_code_block(
     parsed: ParsedCatNumberedCode,
     language: Option<Arc<Language>>,
@@ -575,6 +640,68 @@ mod numbered_code_block_tests {
             )
             .is_none()
         );
+    }
+
+    #[gpui::test]
+    fn numbered_output_starts_parsing_when_rendered(cx: &mut gpui::TestAppContext) {
+        crate::test_support::init_test(cx);
+
+        let languages = Arc::new(language::LanguageRegistry::test(
+            cx.background_executor.clone(),
+        ));
+        languages.add(language::rust_lang());
+        let source = "```rust\n     1\tfn main() {}\n```\n";
+        let markdown = cx.new(|cx| {
+            Markdown::new_with_options(
+                SharedString::from(source),
+                Some(languages),
+                None,
+                markdown::MarkdownOptions {
+                    defer_parsing: true,
+                    ..markdown::MarkdownOptions::default()
+                },
+                cx,
+            )
+        });
+        let cx = cx.add_empty_window();
+        markdown.read_with(cx, |markdown, _| {
+            assert!(markdown.first_code_block_language().is_none());
+            assert!(!markdown.has_pending_render());
+        });
+        let view = cx.new(|_| NumberedOutputView(markdown.clone()));
+        cx.draw(
+            gpui::point(px(0.0), px(0.0)),
+            gpui::size(px(600.0), px(600.0)),
+            |_, _| view.into_any_element(),
+        );
+        cx.run_until_parked();
+
+        markdown.read_with(cx, |markdown, _| {
+            assert_eq!(
+                markdown
+                    .first_code_block_language()
+                    .map(|language| language.name()),
+                Some(language::LanguageName::from("Rust")),
+            );
+            assert!(!markdown.has_pending_render());
+        });
+    }
+
+    struct NumberedOutputView(Entity<Markdown>);
+
+    impl Render for NumberedOutputView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            CatNumberedCodeBlock {
+                parsed: ParsedCatNumberedCode {
+                    code: String::from("fn main() {}"),
+                    first_number: 1,
+                    line_count: 1,
+                },
+                markdown: self.0.clone(),
+                markdown_style: MarkdownStyle::default(),
+                copy_button_id: String::from("read-file-output-test"),
+            }
+        }
     }
 }
 
@@ -1450,6 +1577,17 @@ impl ThreadView {
         !self.message_queue.is_empty()
     }
 
+    fn materialize_tool_call_views(
+        &mut self,
+        entry_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.entry_view_state.update(cx, |state, cx| {
+            state.materialize_entry(entry_ix, &self.thread, window, cx);
+        });
+    }
+
     // events
 
     pub fn handle_entry_view_event(
@@ -2027,7 +2165,7 @@ impl ThreadView {
                     .read()
                     .available_commands()
                     .iter()
-                    .any(|available_command| available_command.name == "logout");
+                    .any(|available_command| available_command.name() == "logout");
             if can_login && !logout_supported {
                 message_editor.update(cx, |editor, cx| editor.clear(window, cx));
                 self.clear_external_source_prompt_warning(cx);
@@ -3645,19 +3783,6 @@ impl ThreadView {
 
     // thread stuff
 
-    pub fn restore_checkpoint(&mut self, client_id: &ClientUserMessageId, cx: &mut Context<Self>) {
-        self.thread
-            .update(cx, |thread, cx| {
-                telemetry::event!(
-                    "Agent Checkpoint Restored",
-                    agent = thread.connection().telemetry_id(),
-                    session = thread.session_id().clone(),
-                );
-                thread.restore_checkpoint(client_id.clone(), cx)
-            })
-            .detach_and_log_err(cx);
-    }
-
     pub fn clear_thread_error(&mut self, cx: &mut Context<Self>) {
         self.thread_error = None;
         self.thread_error_markdown = None;
@@ -4233,7 +4358,7 @@ impl ThreadView {
                 } else {
                     Some(format!(
                         "Subagent: {} ({session_id})",
-                        thread.title().unwrap_or_else(|| "Subagent".into())
+                        subagent_label(thread)
                     ))
                 };
                 cards.push(self.render_generic_permission_card(
@@ -5111,7 +5236,15 @@ impl ThreadView {
             return false;
         };
 
-        let my_session_id = self.thread.read(cx).session_id().clone();
+        // An ACP subagent reports its own outcome; a native one's is its parent's tool call.
+        let thread = self.thread.read(cx);
+        if thread.subagent_association().is_some() {
+            return SubagentCardState::from_acp_subagent(thread)
+                .status
+                .is_failed_or_canceled();
+        }
+
+        let my_session_id = thread.session_id().clone();
 
         self.server_view
             .upgrade()
@@ -5138,6 +5271,12 @@ impl ThreadView {
         let thread = self.thread.clone();
         let is_done = thread.read(cx).status() == ThreadStatus::Idle;
         let is_canceled_or_failed = self.is_subagent_canceled_or_failed(cx);
+        // An ACP subagent can only be cancelled when its parent advertises `cancel` for it.
+        let can_stop = !is_done
+            && thread
+                .read(cx)
+                .subagent_association()
+                .is_none_or(|association| association.can_cancel);
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
 
@@ -5180,15 +5319,22 @@ impl ThreadView {
                         .child(
                             h_flex()
                                 .gap_0p5()
-                                .when(!is_done, |this| {
+                                .when(can_stop, |this| {
                                     this.child(
-                                        IconButton::new("stop_subagent", IconName::Stop)
-                                            .icon_size(IconSize::Small)
-                                            .icon_color(Color::Error)
-                                            .tooltip(Tooltip::text("Stop Subagent"))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.cancel_thread(&thread, cx).detach();
-                                            })),
+                                        div()
+                                            .debug_selector(|| "subagent-titlebar-stop".into())
+                                            .child(
+                                                IconButton::new("stop_subagent", IconName::Stop)
+                                                    .icon_size(IconSize::Small)
+                                                    .icon_color(Color::Error)
+                                                    .tooltip(Tooltip::text("Stop Subagent"))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.cancel_thread(&thread, cx)
+                                                                .detach();
+                                                        },
+                                                    )),
+                                            ),
                                     )
                                 })
                                 .child(
@@ -5216,7 +5362,15 @@ impl ThreadView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.is_subagent() {
-            return div().into_any_element();
+            return h_flex()
+                .px_2()
+                .py_1()
+                .children(
+                    self.config_options_view
+                        .clone()
+                        .filter(|view| view.read(cx).is_read_only()),
+                )
+                .into_any_element();
         }
 
         let focus_handle = self.message_editor.focus_handle(cx);
@@ -7119,13 +7273,8 @@ impl ThreadView {
                 let opaque_window = cx.theme().window_background_appearance()
                     == gpui::WindowBackgroundAppearance::Opaque;
 
-                let has_checkpoint_button = message
-                    .checkpoint
-                    .as_ref()
-                    .is_some_and(|checkpoint| checkpoint.show);
-
                 let is_subagent = self.is_subagent();
-                let can_restore_checkpoint = self
+                let can_rewind = self
                     .thread
                     .read(cx)
                     .can_rewind_to(message.client_id.as_ref(), cx);
@@ -7134,7 +7283,7 @@ impl ThreadView {
                     .source_blocks()
                     .iter()
                     .all(acp_thread::content::can_convert_to_v1);
-                let is_editable = can_restore_checkpoint && source_is_representable;
+                let is_editable = can_rewind && source_is_representable;
                 let agent_name = if is_subagent {
                     "subagents".into()
                 } else {
@@ -7154,25 +7303,6 @@ impl ThreadView {
                     .px_2()
                     .gap_1p5()
                     .w_full()
-                    .when(can_restore_checkpoint && has_checkpoint_button, |this| {
-                        this.children(message.client_id.clone().map(|client_id| {
-                            h_flex()
-                                .px_3()
-                                .gap_2()
-                                .child(Divider::horizontal())
-                                .child(
-                                    Button::new("restore-checkpoint", "Restore Checkpoint")
-                                        .start_icon(Icon::new(IconName::Undo).size(IconSize::XSmall).color(Color::Muted))
-                                        .label_size(LabelSize::XSmall)
-                                        .color(Color::Muted)
-                                        .tooltip(Tooltip::text("Restores all files in the project to the content they had at this point in the conversation."))
-                                        .on_click(cx.listener(move |this, _, _window, cx| {
-                                            this.restore_checkpoint(&client_id, cx);
-                                        }))
-                                )
-                                .child(Divider::horizontal())
-                        }))
-                    })
                     .child(
                         div()
                             .relative()
@@ -7428,6 +7558,25 @@ impl ThreadView {
             }
             AgentThreadEntry::ContextCompaction(compaction) => {
                 self.render_context_compaction(entry_ix, compaction, window, cx)
+            }
+            AgentThreadEntry::SessionMessage(message) => {
+                let session_message =
+                    match acp_subagent_card(self.thread.read(cx), entry_ix, message) {
+                        Some((card_id, subagent)) => {
+                            self.render_acp_subagent_card(entry_ix, &card_id, &subagent, window, cx)
+                        }
+                        None => self.render_session_message(entry_ix, message, window, cx),
+                    };
+                if let Some(handle) = self
+                    .entry_view_state
+                    .read(cx)
+                    .entry(entry_ix)
+                    .and_then(|entry| entry.focus_handle(cx))
+                {
+                    session_message.track_focus(&handle).into_any()
+                } else {
+                    session_message.into_any()
+                }
             }
         };
 
@@ -8745,11 +8894,129 @@ impl ThreadView {
                 AgentThreadEntry::ToolCall(_)
                 | AgentThreadEntry::Elicitation(_)
                 | AgentThreadEntry::AssistantMessage(_)
+                | AgentThreadEntry::SessionMessage(_)
                 | AgentThreadEntry::ContextCompaction(_) => {}
             }
         }
 
         has_running_terminal_call
+    }
+
+    fn render_session_message(
+        &self,
+        entry_ix: usize,
+        message: &acp_thread::SessionMessage,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Div {
+        let own_session_id = self.thread.read(cx).session_id().clone();
+        let (icon, direction, participant) = match session_message_side(message, &own_session_id) {
+            SessionMessageSide::Outgoing { recipient } => (IconName::Send, "To", recipient),
+            SessionMessageSide::Incoming { sender } => (IconName::Envelope, "From", sender),
+            SessionMessageSide::Unknown => (IconName::Envelope, "Message between sessions", None),
+        };
+        let participant = participant.map(|session_id| {
+            match self.session_participant_label(session_id, cx) {
+                Some(label) => div()
+                    .debug_selector(move || format!("session-message-participant-{entry_ix}"))
+                    .child(
+                        Button::new(("session-message-participant", entry_ix), label)
+                            .label_size(LabelSize::Small)
+                            .tooltip(Tooltip::text("Open Session"))
+                            .on_click(cx.listener({
+                                let session_id = session_id.clone();
+                                move |this, _, window, cx| {
+                                    this.server_view
+                                        .update(cx, |view, cx| {
+                                            view.navigate_to_thread(session_id.clone(), window, cx)
+                                        })
+                                        .log_err();
+                                }
+                            })),
+                    )
+                    .into_any_element(),
+                // The RFD allows messages naming a session this conversation never learned about.
+                None => Label::new("Unavailable Session")
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+                    .into_any_element(),
+            }
+        });
+
+        v_flex()
+            .px_5()
+            .py_1p5()
+            .w_full()
+            .gap_1p5()
+            .text_ui(cx)
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .child(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
+                    .child(
+                        Label::new(direction)
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .children(participant),
+            )
+            .child(
+                div()
+                    .pl_3()
+                    .border_l_2()
+                    .border_color(cx.theme().colors().border)
+                    .child(self.render_message_content(entry_ix, 0, &message.content, window, cx)),
+            )
+    }
+
+    fn render_acp_subagent_card(
+        &self,
+        entry_ix: usize,
+        card_id: &SubagentCardId,
+        subagent: &Entity<AcpThread>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Div {
+        let subagent_session_id = subagent.read(cx).session_id().clone();
+        let subagent_thread_view = self
+            .server_view
+            .upgrade()
+            .and_then(|server_view| server_view.read(cx).as_connected())
+            .and_then(|connected| connected.threads.get(&subagent_session_id));
+        let content = self.render_subagent_card(
+            self.thread.read(cx).session_id(),
+            entry_ix,
+            card_id,
+            &SubagentCardState::from_acp_subagent(subagent.read(cx)),
+            subagent_thread_view,
+            &self.focus_handle(cx),
+            window,
+            cx,
+        );
+
+        v_flex()
+            .mx_5()
+            .my_1p5()
+            .gap_3()
+            .debug_selector(move || format!("subagent-card-{entry_ix}"))
+            .child(content)
+    }
+
+    /// How this conversation names another of its sessions, or `None` when it has no thread
+    /// for that session.
+    pub(super) fn session_participant_label(
+        &self,
+        session_id: &acp_v2::SessionId,
+        cx: &App,
+    ) -> Option<SharedString> {
+        let server_view = self.server_view.upgrade()?;
+        let thread_view = server_view.read(cx).thread_view(session_id)?;
+        let thread = thread_view.read(cx).thread.read(cx);
+        Some(if thread.parent_session_id().is_none() {
+            "Main Agent".into()
+        } else {
+            subagent_label(thread)
+        })
     }
 
     fn render_collapsible_command(
@@ -8930,6 +9197,7 @@ impl ThreadView {
                 this.entry_view_state.update(cx, |state, _cx| {
                     state.toggle_tool_call_expansion(&id);
                 });
+                this.materialize_tool_call_views(entry_ix, window, cx);
                 this.refresh_thread_search(window, cx);
                 cx.notify();
             }
@@ -9206,7 +9474,12 @@ impl ThreadView {
                 .any(|content| matches!(content, ToolCallContent::DiffPatch { .. }));
 
         let is_cancelled_edit = is_edit && matches!(tool_call.status(), ToolCallStatus::Canceled);
-        let (has_revealed_diff, tool_call_output_focus, tool_call_output_focus_handle) = tool_call
+        let has_diff_changes = is_cancelled_edit
+            && tool_call
+                .diffs()
+                .next()
+                .is_some_and(|diff| diff.read(cx).has_changes(cx));
+        let (tool_call_output_focus, tool_call_output_focus_handle) = tool_call
             .diffs()
             .next()
             .and_then(|diff| {
@@ -9215,12 +9488,11 @@ impl ThreadView {
                     .read(cx)
                     .entry(entry_ix)
                     .and_then(|entry| entry.editor_for_diff(diff))?;
-                let has_revealed_diff = diff.read(cx).has_revealed_range(cx);
                 let has_focus = editor.read(cx).is_focused(window);
                 let focus_handle = editor.focus_handle(cx);
-                Some((has_revealed_diff, has_focus, focus_handle))
+                Some((has_focus, focus_handle))
             })
-            .unwrap_or_else(|| (false, false, focus_handle.clone()));
+            .unwrap_or((false, focus_handle.clone()));
 
         let use_card_layout = needs_confirmation || is_edit || is_terminal_tool;
 
@@ -9499,7 +9771,7 @@ impl ThreadView {
                                 tool_call,
                                 is_edit,
                                 is_cancelled_edit,
-                                has_revealed_diff,
+                                has_diff_changes,
                                 use_card_layout,
                                 window,
                                 cx,
@@ -9507,7 +9779,7 @@ impl ThreadView {
                             .child(
                                 h_flex()
                                     .when(is_collapsible || failed_or_canceled, |this| {
-                                        let diff_for_discard = if has_revealed_diff
+                                        let diff_for_discard = if has_diff_changes
                                             && is_cancelled_edit
                                         {
                                             tool_call.diffs().next().cloned()
@@ -9543,6 +9815,7 @@ impl ThreadView {
                                                                             );
                                                                     },
                                                                 );
+                                                                this.materialize_tool_call_views(entry_ix, window, cx);
                                                                 this.refresh_thread_search(window, cx);
                                                                 cx.notify();
                                                             }
@@ -9550,7 +9823,7 @@ impl ThreadView {
                                                     )
                                                 })
                                                 .when(failed_or_canceled, |this| {
-                                                    if is_cancelled_edit && !has_revealed_diff {
+                                                    if is_cancelled_edit && !has_diff_changes {
                                                         this.child(
                                                             div()
                                                                 .id(entry_ix)
@@ -9598,21 +9871,9 @@ impl ThreadView {
                                                                 let tool_call_id =
                                                                     tool_call_id.clone();
                                                                 move |this, _, _window, cx| {
-                                                                    let diff_data = diff.read(cx);
-                                                                    let base_text = diff_data
-                                                                        .base_text()
-                                                                        .clone();
-                                                                    let buffer =
-                                                                        diff_data.buffer().clone();
-                                                                    buffer.update(
-                                                                        cx,
-                                                                        |buffer, cx| {
-                                                                            buffer.set_text(
-                                                                                base_text.as_ref(),
-                                                                                cx,
-                                                                            );
-                                                                        },
-                                                                    );
+                                                                    diff.update(cx, |diff, cx| {
+                                                                        diff.discard_partial_edit(cx)
+                                                                    });
                                                                     this.discarded_partial_edits
                                                                         .insert(
                                                                             tool_call_id.clone(),
@@ -11010,7 +11271,7 @@ impl ThreadView {
         tool_call: &ToolCall,
         is_edit: bool,
         has_failed: bool,
-        has_revealed_diff: bool,
+        has_diff_changes: bool,
         use_card_layout: bool,
         window: &Window,
         cx: &Context<Self>,
@@ -11027,7 +11288,7 @@ impl ThreadView {
             Icon::new(IconName::ToolPencil).color(Color::Muted)
         };
 
-        let interrupted_edit = is_file && has_failed && has_revealed_diff;
+        let interrupted_edit = is_file && has_failed && has_diff_changes;
         let tool_icon = if interrupted_edit {
             div()
                 .child(DecoratedIcon::new(
@@ -11219,7 +11480,10 @@ impl ThreadView {
                             selections.select_anchor_ranges([anchor..anchor]);
                         })
                     } else {
-                        let row = tool_call_location.line.unwrap_or_default();
+                        // ACP numbers lines from 1; editor rows start at 0.
+                        let row = tool_call_location
+                            .line
+                            .map_or(0, |line| line.saturating_sub(1));
                         editor.change_selections(Default::default(), window, cx, |selections| {
                             selections.select_ranges([Point::new(row, 0)..Point::new(row, 0)]);
                         })
@@ -11609,16 +11873,16 @@ impl ThreadView {
             return None;
         }
 
-        let markdown = markdown.read(cx);
-        let parsed = parse_cat_numbered_markdown_code_block(markdown.source())?;
-        let language = markdown.first_code_block_language();
-        Some(render_cat_numbered_code_block(
-            parsed,
-            language,
-            markdown_style,
-            format!("copy-read-file-output-{entry_ix}-{context_ix}"),
-            cx,
-        ))
+        let parsed = parse_cat_numbered_markdown_code_block(markdown.read(cx).source())?;
+        Some(
+            CatNumberedCodeBlock {
+                markdown,
+                parsed,
+                markdown_style,
+                copy_button_id: format!("copy-read-file-output-{entry_ix}-{context_ix}"),
+            }
+            .into_any_element(),
+        )
     }
 
     fn render_image_output(
@@ -11682,7 +11946,7 @@ impl ThreadView {
         let content = self.render_subagent_card(
             active_session_id,
             entry_ix,
-            &tool_call.id,
+            &SubagentCardId::ToolCall(tool_call.id.clone()),
             &SubagentCardState::from_tool_call(tool_call, cx),
             subagent_thread_view,
             focus_handle,
@@ -11693,13 +11957,11 @@ impl ThreadView {
         v_flex().mx_5().my_1p5().gap_3().child(content)
     }
 
-    /// `card_id` keys the card's expansion state and element IDs, since the same
-    /// subagent can have one card per message it was sent.
     fn render_subagent_card(
         &self,
         active_session_id: &acp_v2::SessionId,
         entry_ix: usize,
-        card_id: &acp_v2::ToolCallId,
+        card_id: &SubagentCardId,
         state: &SubagentCardState,
         thread_view: Option<&Entity<ThreadView>>,
         focus_handle: &FocusHandle,
@@ -11725,10 +11987,7 @@ impl ThreadView {
             })
             .is_some();
 
-        let is_expanded = self
-            .entry_view_state
-            .read(cx)
-            .is_tool_call_expanded(card_id);
+        let is_expanded = self.is_subagent_card_expanded(card_id, cx);
         let files_changed = changed_buffers.len();
         let diff_stats = DiffStats::all_files(changed_buffers, cx);
 
@@ -11782,6 +12041,15 @@ impl ThreadView {
                 SubagentStatus::Completed => Icon::new(IconName::Check)
                     .size(IconSize::Small)
                     .color(Color::Success)
+                    .into_any_element(),
+                SubagentStatus::Unknown => div()
+                    .id(status_icon)
+                    .child(
+                        Icon::new(IconName::CircleHelp)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .tooltip(Tooltip::text("Subagent Status Unknown"))
                     .into_any_element(),
             });
 
@@ -11916,10 +12184,8 @@ impl ThreadView {
                                         let card_id = card_id.clone();
                                         move |this, _, window, cx| {
                                             let expanded =
-                                                this.entry_view_state.update(cx, |state, _cx| {
-                                                    state.toggle_tool_call_expansion(&card_id);
-                                                    state.is_tool_call_expanded(&card_id)
-                                                });
+                                                this.toggle_subagent_card_expansion(&card_id, cx);
+                                            this.materialize_tool_call_views(entry_ix, window, cx);
                                             this.refresh_thread_search(window, cx);
                                             telemetry::event!("Subagent Toggled", expanded);
                                             cx.notify();
@@ -11929,22 +12195,29 @@ impl ThreadView {
                     )
                     .when(state.can_stop && subagent_session_id.is_some(), |buttons| {
                         buttons.child(
-                            IconButton::new(format!("stop-subagent-{}", entry_ix), IconName::Stop)
-                                .icon_size(IconSize::Small)
-                                .icon_color(Color::Error)
-                                .tooltip(Tooltip::text("Stop Subagent"))
-                                .when_some(
-                                    thread_view
-                                        .as_ref()
-                                        .map(|view| view.read(cx).thread.clone()),
-                                    |this, thread| {
-                                        this.on_click(cx.listener(
-                                            move |this, _event, _window, cx| {
-                                                telemetry::event!("Subagent Stopped");
-                                                this.cancel_thread(&thread, cx).detach();
-                                            },
-                                        ))
-                                    },
+                            div()
+                                .debug_selector(move || format!("stop-subagent-{entry_ix}"))
+                                .child(
+                                    IconButton::new(
+                                        format!("stop-subagent-{}", entry_ix),
+                                        IconName::Stop,
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Error)
+                                    .tooltip(Tooltip::text("Stop Subagent"))
+                                    .when_some(
+                                        thread_view
+                                            .as_ref()
+                                            .map(|view| view.read(cx).thread.clone()),
+                                        |this, thread| {
+                                            this.on_click(cx.listener(
+                                                move |this, _event, _window, cx| {
+                                                    telemetry::event!("Subagent Stopped");
+                                                    this.cancel_thread(&thread, cx).detach();
+                                                },
+                                            ))
+                                        },
+                                    ),
                                 ),
                         )
                     }),
@@ -12026,10 +12299,31 @@ impl ThreadView {
             .into_any_element()
     }
 
+    fn is_subagent_card_expanded(&self, card_id: &SubagentCardId, cx: &App) -> bool {
+        let state = self.entry_view_state.read(cx);
+        match card_id {
+            SubagentCardId::ToolCall(id) => state.is_tool_call_expanded(id),
+            SubagentCardId::SessionMessage(id) => state.is_session_message_card_expanded(id),
+        }
+    }
+
+    /// Returns whether the card is expanded afterwards.
+    fn toggle_subagent_card_expansion(
+        &mut self,
+        card_id: &SubagentCardId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.entry_view_state.update(cx, |state, _| match card_id {
+            SubagentCardId::ToolCall(id) => state.toggle_tool_call_expansion(id),
+            SubagentCardId::SessionMessage(id) => state.toggle_session_message_card_expansion(id),
+        });
+        self.is_subagent_card_expanded(card_id, cx)
+    }
+
     fn render_subagent_expanded_content(
         &self,
         thread_view: &Entity<ThreadView>,
-        card_id: &acp_v2::ToolCallId,
+        card_id: &SubagentCardId,
         state: &SubagentCardState,
         window: &Window,
         cx: &Context<Self>,
@@ -12093,7 +12387,7 @@ impl ThreadView {
                     // Include the card id so the same subagent session
                     // rendered in multiple parent cards gets distinct element
                     // ids for its inlined entries (avoids duplicate a11y ids).
-                    .id(format!("subagent-entries-{}-{}", session_id, card_id.0))
+                    .id(format!("subagent-entries-{}-{}", session_id, card_id))
                     .track_scroll(&scroll_handle)
                     .children(rendered_entries),
             )
@@ -14007,8 +14301,8 @@ fn leading_native_command(
     let name_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let name = &rest[..name_end];
     let is_native = available_commands.iter().any(|command| {
-        command.name == name
-            && acp_thread::command_category_from_meta(&command.meta)
+        command.name() == name
+            && acp_thread::command_category_from_meta(command.meta())
                 == Some(acp_thread::CommandCategory::Native)
     });
     is_native.then(|| name.to_string())
@@ -14090,14 +14384,14 @@ mod tests {
     }
 
     fn native_command(name: &str) -> acp_v2::AvailableCommand {
-        acp_v2::AvailableCommand::new(name, "").meta(acp_thread::meta_with_command_category(
-            acp_thread::CommandCategory::Native,
+        acp_v2::AvailableCommand::Command(acp_v2::Command::new(name, "").meta(
+            acp_thread::meta_with_command_category(acp_thread::CommandCategory::Native),
         ))
     }
 
     fn mcp_command(name: &str) -> acp_v2::AvailableCommand {
-        acp_v2::AvailableCommand::new(name, "").meta(acp_thread::meta_with_command_category(
-            acp_thread::CommandCategory::Mcp,
+        acp_v2::AvailableCommand::Command(acp_v2::Command::new(name, "").meta(
+            acp_thread::meta_with_command_category(acp_thread::CommandCategory::Mcp),
         ))
     }
 

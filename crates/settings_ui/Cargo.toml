@@ -79,6 +79,7 @@ zed_credentials_provider.workspace = true
 zdroid_runtime = { path = "../zdroid_runtime" }
 
 [dev-dependencies]
+credentials_provider = { workspace = true, features = ["test-support"] }
 fs = { workspace = true, features = ["test-support"] }
 futures.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
