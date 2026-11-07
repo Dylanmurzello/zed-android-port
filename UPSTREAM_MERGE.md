@@ -66,6 +66,10 @@ On Android the kernel spells the app files dir `/data/data/<pkg>/files` while th
 
 When you resolve a conflict in one of these, ALSO check if a workaround doc under `crates/gpui_android/docs/workarounds/` covers the affected file: the doc explains why the patch is there, which makes the resolution obvious.
 
+### Action namespace rule
+
+`actions!(zed, [...])` is declared in BOTH `crates/zed/src/zed.rs` and `crates/zed_actions`. One home per action name, ever: an action referenced outside `crates/zed` (workspace/editor registrations, the Android app) must live in `zed_actions`, and `zed.rs` must not re-declare it. Keep-both compiles and then breaks action dispatch at runtime (the registry keys on name strings).
+
 ## Merge driver
 
 `.gitattributes` declares `merge=ours` for owned files. Enable the `ours` driver only for the upstream merge command itself, never in your git config: with it on, rebases, cherry-picks and other merges silently keep one side of those files:
@@ -92,8 +96,8 @@ git -c merge.ours.driver=true merge upstream/main
 
 cargo check --workspace          # gate 1: desktop
 cd crates/gpui_android/examples/zed_android && \
-  ANDROID_NDK_HOME=<ndk> RUSTFLAGS="-C target-feature=+fp16" \
-  cargo ndk --platform 26 -t arm64-v8a check   # gate 2: THE gate
+  ANDROID_NDK_HOME=<ndk> \
+  cargo ndk --platform 31 -t arm64-v8a check   # gate 2: THE gate
 ```
 
 **Treat the `cargo ndk check` as a hard gate, not polish.** Everything behind
@@ -113,7 +117,18 @@ Example-workspace rules while resolving:
 - Regenerate the example `Cargo.lock` via the ndk check and COMMIT IT ON THE
   SYNC BRANCH, so the branch is self-consistent before it reaches main.
 - Never sync away the example's `[profile]` overrides or
-  `.cargo/config.toml` (`+fp16`).
+  `.cargo/config.toml` (the CPU and size flags). Never export `RUSTFLAGS`
+  around the build either: an environment value replaces that table.
+
+Two files upstream keeps touching are resolved the same way every time:
+
+- `crates/zed/RELEASE_CHANNEL` is `dev` here (`merge=ours`). A release tag
+  carries `stable`, so after every merge `cat crates/zed/RELEASE_CHANNEL`
+  must print `dev`; `stable` would turn on Zed's own update polling and
+  crash reporter in desktop builds of this tree.
+- `.rules`: upstream's HARD RULE line that prepends a review banner to
+  `README.md` on every source change is deleted here (our README is the
+  product page). Re-delete it when upstream's `.rules` changes.
 
 Then land and verify on hardware:
 

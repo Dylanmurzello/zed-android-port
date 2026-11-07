@@ -28,11 +28,13 @@ trackpad, in both tablet mode and DeX.
 | **Active** | Currently shipping in the APK |
 | **Deferred** | Designed, scheduled, not yet built |
 | **Upstream** | Fixed in a dependency; what's left here is noted in the writeup |
+| **Superseded** | Replaced by the rootfs engine or a later design; kept for history |
 
 ## Storage / filesystem
 
 | Workaround | Status | Why it exists |
 |---|---|---|
+| [Tier 2 root storage (bind-mount /mnt/pass_through)](deferred-tier2-root-storage.md) | Deferred | Wait for in-app settings UI |
 | [Noexec mount on /storage/emulated/0](android-noexec-mount.md) | Active | FUSE-mounted shared storage rejects execve regardless of file mode |
 | [~/storage curated symlinks](termux-storage-symlinks.md) | Active | Surface common /sdcard subdirs without making them workspace roots |
 | [~/projects workspace + Import-from-sdcard](projects-workspace-import.md) | Active | Builds need exec mount; SAF picks land on noexec mount |
@@ -47,6 +49,9 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
+| [Bun resolv.conf hex-patch resilience](deferred-bun-resolv-resilience.md) | Superseded | Hex-patching binaries is gone; guest binaries read a real `/etc/resolv.conf` |
+| [LD_PRELOAD strip for musl-static children](deferred-musl-subprocess-ld-preload.md) | Superseded | No LD_PRELOAD shim anymore; the engine handles shebangs at exec |
+| [LD_PRELOAD `libzed-compat.so` path-redirect shim](deferred-ld-preload-shim.md) | Superseded | Never applied to static musl; the engine replaced the whole approach |
 | [Storage permission JNI shim](storage-permission-jni.md) | Active | Raw `/sdcard` paths need All files access |
 | [Remote development on Android](remote-development-on-android.md) | Active | Env, release channel and CDN gotchas of SSH projects |
 | [Rootfs engine integration](rootfs-engine-integration.md) | Active | How the editor reaches the Ubuntu rootfs: the loader link, the bundled image extracted on first launch, the symlink farm, the spawn bridge, reset |
@@ -74,6 +79,8 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 
 | Workaround | Status | Why it exists |
 |---|---|---|
+| [Soft-keyboard / IME bridge](deferred-soft-keyboard.md) | Superseded | The bridge landed: `ZdroidInputConnection` and `ime.rs` |
+| [Phone form-factor polish](deferred-phone-form-factor-polish.md) | Deferred | Tablets and desktop mode first |
 | [Extra-window input parity](extra-window-input-parity.md) | Active | Hover, scroll and secondary buttons in windows without GameActivity's input queue |
 | [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with vsync callbacks, requested only while gpui has frames to draw |
 | [Trackpads and mice go through Android's input stack](touchpad-input.md) | Active | What Android reports for a trackpad, and why Zdroid doesn't capture the pointer |
@@ -120,7 +127,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Debug-strip oversized .so](debug-strip-oversized-so.md) | Active | llvm-strip chokes on >2 GB ELF; profile.dev workaround |
-| [audio + livekit + call cfg-gates](android-cfg-gates.md) | Active | These crates don't compile against bionic; mock fallbacks already exist |
+| [cfg(target_os = "android") gates in upstream files](android-cfg-gates.md) | Active | Touch hit zones, drag claims, the quit path and the Android settings sections, each gated so iOS, web and desktop builds keep upstream's behavior |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
 | [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off. Armv9 cores shipped with Android 12, hence minSdk 31 |

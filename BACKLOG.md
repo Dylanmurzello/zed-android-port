@@ -39,6 +39,10 @@ The rest of 0.10.0's device checks passed on the tablet on 2026-10-30. These two
 - The in-app update from 0.10.0 to the next release: the updater at targetSdk 35, with the native libraries extracted at install.
 - Speed against 0.9.23, which ran its tools natively, while 0.10.0's engine translates every path system call: rust-analyzer's first diagnostics and go to definition in a Rust project under `~/projects`, `cargo build`, and `git status` in a large repository, timed on the same project with both versions.
 
+## Open after the 2026-11 merge review
+
+- **Terminal touch scrolling moves by whole rows.** A finger drag on the terminal scrolls the grid a row per row of travel (`terminal_view`), which reads as stepping next to the editor's pixel scrolling. A sub-row variant would keep a fractional offset in the terminal element and round it at paint. Deferred: correct as it is, and the editor's touch scrolling is where the time went.
+
 ## Open from the final pass, 2026-10-31
 
 Seen on the tablet while testing 0.11.0, none of them caused by that release:

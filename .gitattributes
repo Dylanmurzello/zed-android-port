@@ -23,6 +23,9 @@ CONTRIBUTING.md         merge=ours
 BACKLOG.md              merge=ours
 RELEASING.md            merge=ours
 UPSTREAM_MERGE.md       merge=ours
+# This tree is a Dev build of Zed on every platform; a release tag flips
+# the file to stable or preview.
+crates/zed/RELEASE_CHANNEL merge=ours
 .gitattributes          merge=ours
 
 # .github surface (issue templates, PR template, funding)
