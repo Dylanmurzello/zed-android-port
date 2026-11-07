@@ -1207,6 +1207,9 @@ mod element {
 
     struct PaneAxisHandleLayout {
         hitbox: Hitbox,
+        /// A wider hitbox for a finger, present while the last input was a
+        /// touch (Android).
+        touch_hitbox: Option<Hitbox>,
         divider_bounds: Bounds<Pixels>,
     }
 
@@ -1319,12 +1322,12 @@ mod element {
             window.refresh();
         }
 
-        /// Touch has no hover, so a finger gets a wider area around the
-        /// divider than the mouse does.
-        fn handle_hit(hitbox: &Hitbox, position: Point<Pixels>, window: &Window) -> bool {
+        /// Whether a press at the window's pointer position lands on the
+        /// handle, through the hit test, so that a menu or a modal drawn over
+        /// the divider takes the press instead.
+        fn handle_hit(hitbox: &Hitbox, touch_hitbox: Option<&Hitbox>, window: &Window) -> bool {
             hitbox.is_hovered(window)
-                || (window.last_input_was_touch()
-                    && hitbox.bounds.dilate(px(16.0)).contains(&position))
+                || touch_hitbox.is_some_and(|hitbox| hitbox.is_hovered(window))
         }
 
         fn layout_handle(
@@ -1348,8 +1351,17 @@ mod element {
                 size: pane_bounds.size.apply_along(axis, |_| px(DIVIDER_SIZE)),
             };
 
+            // Touch has no hover, so a finger gets a wider area around the
+            // divider than the mouse does: a hitbox of its own, so the hit
+            // test still ranks it under whatever is drawn over the divider,
+            // and `Normal`, so it takes no presses from the content beside it.
+            let touch_hitbox =
+                (cfg!(target_os = "android") && window.last_input_was_touch()).then(|| {
+                    window.insert_hitbox(handle_bounds.dilate(px(16.0)), HitboxBehavior::Normal)
+                });
             PaneAxisHandleLayout {
                 hitbox: window.insert_hitbox(handle_bounds, HitboxBehavior::BlockMouse),
+                touch_hitbox,
                 divider_bounds,
             }
         }
@@ -1589,11 +1601,12 @@ mod element {
                         let flexes = self.flexes.clone();
                         let workspace = self.workspace.clone();
                         let handle_hitbox = handle.hitbox.clone();
+                        let touch_hitbox = handle.touch_hitbox.clone();
                         move |e: &MouseDownEvent, phase, window, cx| {
                             if !phase.bubble() {
                                 return;
                             }
-                            if Self::handle_hit(&handle_hitbox, e.position, window) {
+                            if Self::handle_hit(&handle_hitbox, touch_hitbox.as_ref(), window) {
                                 dragged_handle.replace(Some(ix));
                                 if e.click_count >= 2 {
                                     let mut borrow = flexes.lock();
@@ -1640,6 +1653,7 @@ mod element {
                         let dragged_handle = layout.dragged_handle.clone();
                         let flexes = self.flexes.clone();
                         let handle_hitbox = handle.hitbox.clone();
+                        let touch_hitbox = handle.touch_hitbox.clone();
                         let child_bounds = child.bounds;
                         let axis = self.axis;
                         move |event: &gpui::TouchDragEvent, phase, window, cx| {
@@ -1650,7 +1664,7 @@ mod element {
                                 gpui::TouchPhase::Started => {
                                     if Self::handle_hit(
                                         &handle_hitbox,
-                                        event.start_position,
+                                        touch_hitbox.as_ref(),
                                         window,
                                     ) {
                                         dragged_handle.replace(Some(ix));

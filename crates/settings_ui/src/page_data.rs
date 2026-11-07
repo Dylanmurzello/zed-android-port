@@ -433,7 +433,6 @@ fn general_page(cx: &App) -> SettingsPage {
         ]
     }
 
-    #[cfg(not(target_os = "android"))]
     fn privacy_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SectionHeader("Privacy"),
@@ -501,13 +500,6 @@ fn general_page(cx: &App) -> SettingsPage {
                 files: USER,
             }),
         ]
-    }
-
-    // Android doesn't start Zed's telemetry or offer Zed's hosted models, so
-    // these toggles would do nothing.
-    #[cfg(target_os = "android")]
-    fn privacy_section() -> [SettingsPageItem; 0] {
-        []
     }
 
     fn auto_update_section() -> [SettingsPageItem; 2] {

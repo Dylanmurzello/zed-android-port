@@ -878,8 +878,7 @@ impl<T: ScrollableHandle> ScrollbarState<T> {
             );
             // A finger rarely lands on the thin thumb, so a touch on the track
             // also grabs the thumb, by its center, after the jump.
-            let touch_drag = window
-                .last_input_was_touch()
+            let touch_drag = (cfg!(target_os = "android") && window.last_input_was_touch())
                 .then(|| (*axis, thumb_bounds.size.along(*axis) / 2.));
             self.set_offset(
                 scroll_handle.offset().apply_along(*axis, |_| click_offset),

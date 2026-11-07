@@ -11843,6 +11843,9 @@ pub async fn prepare_windows_to_quit(
 
     if cancelled {
         flush_windows_serialization(&prepared_windows, cx).await;
+        // The first window is the Activity's surface and can't be opened
+        // again in the process, so a cancelled quit keeps every window.
+        #[cfg(not(target_os = "android"))]
         for window in prepared_windows {
             window
                 .update(cx, |_, window, _cx| {

@@ -6381,7 +6381,7 @@ impl EditorElement {
                     // found by position.
                     let Some((scrollbar_layout, axis)) =
                         scrollbars_layout.get_hovered_axis(window).or_else(|| {
-                            if !window.last_input_was_touch() {
+                            if !cfg!(target_os = "android") || !window.last_input_was_touch() {
                                 return None;
                             }
                             scrollbars_layout
