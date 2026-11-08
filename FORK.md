@@ -114,11 +114,11 @@ Fork-specific changes to keep while resolving:
 
 - `ZDROID_RELEASE_REPO` in `crates/gpui_android/src/updater.rs`. Without it, the in-app updater follows Dylan's releases, and those are signed with a different key.
 - `versionCode`/`versionName` in `crates/gpui_android/examples/zed_android/android/app/build.gradle.kts`. Take whichever is higher.
-- Dylan edits Zed's crates in place for Android; this fork keeps that code out of them. Port such an edit instead of taking it:
-  - spawning, the files dir spellings and the per-spawn PATH (his `gpui_util`, `util::command`, `util::env`) go to `crates/zdroid_hooks`;
-  - the language server restarts (his `lsp_store.rs`) to the app's `src/lsp_watchdog.rs`;
-  - Android settings (his `workspace_settings.rs`, `default.json`, `page_data.rs`) to the app, as `android_input` and `android_runtime` are, and to `crates/settings_ui/src/page_data/android.rs`;
-  - his app code to the app's copies of Zed's startup code (`src/zed.rs`, `src/lib.rs`).
+- Take Dylan's small edits to Zed's crates as he wrote them, even though each one adds to what a Zed sync can conflict in: staying with his code matters more than a few lines. 0.4.3's came in this way (`remote_connection.rs`, `pane_group.rs`, `workspace.rs`, and `settings_ui`'s dependency on `zdroid_runtime`). Move one into fork-owned code only when it conflicts at a Zed sync and the change can live outside the Zed file. Send that move to Dylan first, and keep it on `zdroid` once he has merged it, so the two repositories don't drift apart. Where code moved out of Zed's crates lives, and where more of the same goes:
+  - spawning, the files dir spellings and the per-spawn PATH (once his `gpui_util`, `util::command`, `util::env`): `crates/zdroid_hooks`;
+  - the language server restarts (once his `lsp_store.rs`): the app's `src/lsp_watchdog.rs`;
+  - Android settings (once his `workspace_settings.rs`, `default.json`, `page_data.rs`): the app, as `android_input` and `android_runtime` are, and `crates/settings_ui/src/page_data/android.rs`;
+  - app code: the app's copies of Zed's startup code (`src/zed.rs`, `src/lib.rs`).
 - Dylan's engine crates, `crates/zd_engine_core` and `crates/zd_loader`, are unformatted, and their `rustfmt.toml` keeps CI's format check off them. Take his versions as they are, except for two fixes the fork made and sent to him, which his next version may carry in his own form:
   - a guest's `execve` passes its signal mask to the new image as `ZD_SIGMASK`, which `main.rs` applies before the jump (exec'd programs started with every signal blocked);
   - the refusal log reads the call's own `x0`, kept before dispatch (it dereferenced the `-errno` result).
