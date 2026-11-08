@@ -1364,7 +1364,7 @@ impl Render for Dock {
             let position = self.position;
             // Android widens the handle for fingers and draws a grabber
             // pill on it, lit while this dock is being resized.
-            let handle_size = if window.last_input_was_touch() {
+            let handle_size = if cfg!(target_os = "android") && window.last_input_was_touch() {
                 px(20.)
             } else {
                 RESIZE_HANDLE_SIZE

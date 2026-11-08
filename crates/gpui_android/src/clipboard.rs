@@ -118,16 +118,19 @@ fn read_image(android_app: &AndroidApp) -> Result<Option<Image>> {
         if let Some(image) = cached {
             return Ok(image);
         }
-        // Cached even when it failed, so that a clip that can't be read doesn't
-        // block drawing on every later read.
+        // Kotlin keeps one read per clip and answers at once after it, so a
+        // clip whose image isn't read yet is asked for again at the next
+        // paste instead of being remembered as having none.
         let image = load_image(env, activity).unwrap_or_else(|error| {
             log::warn!("clipboard: couldn't load an image: {error:#}");
             None
         });
-        IMAGE_CACHE.set(Some(CachedImage {
-            timestamp,
-            image: image.clone(),
-        }));
+        if image.is_some() {
+            IMAGE_CACHE.set(Some(CachedImage {
+                timestamp,
+                image: image.clone(),
+            }));
+        }
         Ok(image)
     })
 }

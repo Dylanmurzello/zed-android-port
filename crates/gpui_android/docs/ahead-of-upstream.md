@@ -2,7 +2,7 @@
 
 Zdroid implements these because upstream Zed doesn't yet; at each Zed sync, check whether upstream now covers one, and if so take upstream's and delete ours.
 
-Everything outside `crates/gpui_android` and the app is gated with `cfg(target_os = "android")`. Items (a) to (d) build on gpui's touch gesture recognizer (`crates/gpui/src/gestures.rs`), which gets all finger input.
+Every behavior change outside `crates/gpui_android` and the app is gated with `cfg(target_os = "android")`, including the touch hit zones that read `Window::last_input_was_touch` (gpui_ios and gpui_web emit touch input too). What stays ungated is additions other platforms never call: `Panel::snap_size`, `App::active_drag_value`, `CosmicTextSystem::load_fonts_dir`, `AndroidBasicsSections`, `Workspace::drag_dock_edge`. Items (a) to (d) build on gpui's touch gesture recognizer (`crates/gpui/src/gestures.rs`), which gets all finger input.
 
 ## (a) Two-finger tap and two-finger pan
 

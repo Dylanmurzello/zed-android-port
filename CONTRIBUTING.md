@@ -39,8 +39,7 @@ The complete recipe lives in [`crates/gpui_android/examples/zed_android/README.m
 ```sh
 cd crates/gpui_android/examples/zed_android
 export ANDROID_NDK_HOME=...
-export RUSTFLAGS="-C target-feature=+fp16"
-cargo ndk --platform 26 -t arm64-v8a -o android/app/src/main/jniLibs build --release
+cargo ndk --platform 31 -t arm64-v8a -o android/app/src/main/jniLibs build --release
 cd android && gradle assembleRelease
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```

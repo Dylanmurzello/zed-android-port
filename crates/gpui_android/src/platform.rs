@@ -291,7 +291,7 @@ impl AndroidCommon {
         let rootfs = runtime.rootfs_dir();
         let started = std::time::Instant::now();
         for dir in [
-            runtime.workspace_root().join(".local/share/fonts"),
+            runtime.guest_home().join(".local/share/fonts"),
             rootfs.join("usr/share/fonts"),
             rootfs.join("usr/local/share/fonts"),
         ] {
@@ -1743,6 +1743,12 @@ impl Platform for AndroidPlatform {
     ) -> Result<Box<dyn PlatformWindow>> {
         let primary_present = self.common.borrow().window.is_some();
         if primary_present {
+            // A pop-up (an agent's notification) would start an Activity,
+            // which Android refuses from the background and which the
+            // notification isn't worth in front; gpui's callers do without.
+            if matches!(options.kind, gpui::WindowKind::PopUp) {
+                anyhow::bail!("pop-up windows aren't opened on Android");
+            }
             return self.open_extra_window(handle, options);
         }
 
