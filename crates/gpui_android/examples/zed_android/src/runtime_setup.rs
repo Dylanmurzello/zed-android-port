@@ -153,7 +153,7 @@ pub fn register(boot: BootSetup, cx: &mut App) {
                 BootSetup::AlreadyInstalled => {}
                 BootSetup::Installed => {
                     crate::runtime_background::prompt_battery_exemption_once();
-                    start_job(workspace, Job::Essentials, cx);
+                    start_job(workspace, Job::Essentials { after_reset: false }, cx);
                 }
                 BootSetup::Failed(reason) => show_failure(workspace, reason, cx),
             }
@@ -216,7 +216,7 @@ fn install_essentials(
     _window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    start_job(workspace, Job::Essentials, cx);
+    start_job(workspace, Job::Essentials { after_reset: false }, cx);
 }
 
 fn show_failure(workspace: &mut Workspace, reason: &str, cx: &mut Context<Workspace>) {
@@ -244,14 +244,14 @@ fn show_failure(workspace: &mut Workspace, reason: &str, cx: &mut Context<Worksp
 #[derive(Clone, Copy, Debug)]
 enum Job {
     Install,
-    Essentials,
+    Essentials { after_reset: bool },
 }
 
 impl Job {
     fn title(self) -> &'static str {
         match self {
             Self::Install => "Setting up the Ubuntu runtime",
-            Self::Essentials => "Installing git, the SSH client and certificates",
+            Self::Essentials { .. } => "Installing git, the SSH client and certificates",
         }
     }
 
@@ -260,7 +260,23 @@ impl Job {
             Self::Install => {
                 "Ubuntu runtime reset. Restart Zdroid to reload the terminal and language servers."
             }
-            Self::Essentials => "git, the SSH client and CA certificates are installed.",
+            Self::Essentials { after_reset: false } => {
+                "git, the SSH client and CA certificates are installed."
+            }
+            Self::Essentials { after_reset: true } => {
+                "Ubuntu runtime reset, with git, the SSH client and CA certificates installed. \
+                 Restart Zdroid to reload the terminal and language servers."
+            }
+        }
+    }
+
+    /// The base image has neither git nor CA certificates, so a reset on
+    /// its own would leave the runtime behind a first launch; the same
+    /// step follows both.
+    fn followed_by(self) -> Option<Job> {
+        match self {
+            Self::Install => Some(Self::Essentials { after_reset: true }),
+            Self::Essentials { .. } => None,
         }
     }
 
@@ -282,7 +298,7 @@ impl Job {
                     progress,
                 )
             }
-            Self::Essentials => install::install_essentials(&runtime, progress),
+            Self::Essentials { .. } => install::install_essentials(&runtime, progress),
         }
     }
 }
@@ -334,35 +350,40 @@ fn start_job(workspace: &mut Workspace, job: Job, cx: &mut Context<Workspace>) {
         .log_err();
     show_progress(workspace, job.title().to_string(), cx);
     cx.spawn(async move |workspace, cx| {
-        loop {
+        let succeeded = loop {
             cx.background_executor()
                 .timer(Duration::from_millis(300))
                 .await;
-            let finished = workspace
-                .update(cx, |workspace, cx| drain(workspace, job, &receiver, cx))
-                .unwrap_or(true);
-            if finished {
-                break;
+            match workspace.update(cx, |workspace, cx| drain(workspace, job, &receiver, cx)) {
+                Ok(None) => {}
+                Ok(Some(succeeded)) => break succeeded,
+                Err(_) => break false,
             }
-        }
+        };
         JOB_RUNNING.store(false, Ordering::Release);
+        if succeeded && let Some(next) = job.followed_by() {
+            workspace
+                .update(cx, |workspace, cx| start_job(workspace, next, cx))
+                .ok();
+        }
     })
     .detach();
 }
 
-/// Apply queued events; returns true once the job thread is done.
+/// Apply queued events; `Some(succeeded)` once the job thread is done.
 fn drain(
     workspace: &mut Workspace,
     job: Job,
     receiver: &Receiver<JobEvent>,
     cx: &mut Context<Workspace>,
-) -> bool {
+) -> Option<bool> {
     let mut latest_step = None;
     while let Ok(event) = receiver.try_recv() {
         match event {
             JobEvent::Step(label) => latest_step = Some(label),
             JobEvent::Warn(message) => latest_step = Some(message),
             JobEvent::Finished(result) => {
+                let succeeded = result.is_ok();
                 let message = match result {
                     Ok(()) => job.done_message().to_string(),
                     Err(error) => format!("{} failed: {error}", job.title()),
@@ -371,14 +392,14 @@ fn drain(
                 workspace.show_notification(notification_id(), cx, |cx| {
                     cx.new(|cx| MessageNotification::new(message.clone(), cx))
                 });
-                return true;
+                return Some(succeeded);
             }
         }
     }
     if let Some(step) = latest_step {
         show_progress(workspace, format!("{}: {step}", job.title()), cx);
     }
-    false
+    None
 }
 
 fn show_progress(workspace: &mut Workspace, text: String, cx: &mut Context<Workspace>) {
