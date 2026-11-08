@@ -8,12 +8,14 @@ Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilker
 
 > [!IMPORTANT]
 > - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the runtime and its home folder.
-> - Zdroid 0.10 doesn't open the data of 0.9.x and earlier, which ran Bootstrap or a Kali chroot: its first launch asks to clear Zdroid's data. Copy what you want to keep from the home folder first (**Open Files** in that dialog).
+> - Zdroid 0.16 moves the runtime's home folder to `/root`, as Dylan's builds have it. Updating from 0.10 to 0.15 keeps `~/projects`, `~/.ssh`, `~/.gitconfig` and the Claude and Codex logins. Other dotfiles, such as shell settings, `~/.cargo`, `~/.rustup`, `~/.local` and `~/.config`, stay in the old home folder, `/data/user/0/com.zdroid/files/home`; move the ones you want into `~`.
 > - Release builds need Android 12 or later and a CPU whose cores are all Cortex-A55, A75 or newer (Armv8.2 with dot product), as in the Snapdragon 8 series from the 845 on and every Tensor. They're tested on the Galaxy Tab S9 Ultra and the Exynos Galaxy S21 Ultra. CPUs with older cores, such as Cortex-A53, crash at launch. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
 
 Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
 
 ### What the fork adds
+
+Dylan's 0.4.3 took everything below through Zdroid 0.14.1. The fork keeps merging each Zed release, and carries what his repository doesn't have yet.
 
 **Zed, kept current**
 
@@ -57,7 +59,6 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Dylan's Ubuntu runtime and engine (his 0.4.0), merged into Zed's current release, with:
   - language servers, debug adapters, Node and ACP agents that Zed downloads picking their Linux builds, the agent registry's included;
   - the SSH client installed on first launch, next to git and the CA certificates;
-  - one home folder for the editor, the terminal, the Files app and your projects (`~/projects`), which **Reset Runtime** leaves alone;
   - the terminal runs root's login shell, so `chsh -s /usr/bin/zsh` switches it to zsh, and fonts in `~/.local/share/fonts` or installed with apt reach the editor and the terminal;
   - the runtime's DNS servers following Android's when the network changes;
   - a language server that Android stops restarted, up to three times in ten minutes.
@@ -76,7 +77,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 
 ### Contributing
 
-Pull requests go to the `zdroid` branch; `main` mirrors Dylan's repository. [FORK.md](FORK.md) covers syncing Zed and Dylan's repository, and releasing.
+Pull requests go to the `zdroid` branch; `main` is the fork's contribution to Dylan's repository. [FORK.md](FORK.md) covers syncing Zed and Dylan's repository, and releasing.
 
 ---
 
@@ -201,7 +202,7 @@ The editor is bionic-linked and runs as the Android app process. Every subproces
 
 How that is possible without root: a distro binary bakes `/usr`, `/lib` and `/etc` into its rodata and its `PT_INTERP`, and no app-writable Android path is that short, so the rewrite cannot happen in the file. It happens at the syscall. The kernel only ever execs `libzdload.so`, a static loader that maps the Ubuntu binary and glibc's own `ld.so`, installs a seccomp filter that traps the path syscalls (`openat`, `execve`, `stat`, `readlink`, `bind` and the rest) and translates the guest path into the rootfs from an in-thread SIGSYS handler, then re-issues the syscall from inside the loader's own text, which the filter lets through. That is proot's idea driven by the kernel's trap instead of a second process and ptrace: three microseconds per translated path syscall instead of two cross-process stops, static binaries run, and real `ptrace` stays free, so gdb, lldb and strace work inside. The same handler answers the syscalls Android's own app filter refuses (`rseq`, `set_robust_list`, the termios2 ioctls, hard links on app data, netlink audit), which is why unmodified glibc, apt and dpkg run at all. Writeups: [`rootfs-engine-integration.md`](crates/gpui_android/docs/workarounds/rootfs-engine-integration.md), [`rootfs-guest-env.md`](crates/gpui_android/docs/workarounds/rootfs-guest-env.md).
 
-Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is the app's home folder (`/data/user/0/com.zdroid/files/home`, the one the Files app shows), which holds your projects and survives a reset, the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
+Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is the image's `/root`, which a reset keeps, with `~/projects`, `~/storage` and `~/received` linked to the app's home folder (`/data/user/0/com.zdroid/files/home`, the one the Files app shows), the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
 
 Background survival: a foreground service holds the process out of Android's cached state while a language server or terminal is alive (always, with **Zdroid → Keep Running in Background**), children are reaped when you quit or swipe the task away, and a language server killed from outside is restarted up to three times in ten minutes before it stays stopped with a hint. **Keep Awake** in Settings → Android adds a wake lock so builds continue with the screen off. The device-wide phantom process cap (32 on Android 12+) cannot be lifted from an app; Android 14+ has a Developer Options toggle, and over adb `settings put global settings_enable_monitor_phantom_procs false`.
 

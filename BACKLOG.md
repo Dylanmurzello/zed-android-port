@@ -32,6 +32,17 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 - **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames the engine loader for keeping stdout open: check whether that still holds, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
+## 0.16.0 device checks
+
+0.16.0 merges Dylan's 0.4.3, which moves the guest's home back to the image's `/root`. Check, updating over 0.15.1 on the tablet:
+
+- `echo $HOME` in the terminal prints `/root`, and `~/projects`, `~/storage`, `~/received`, `~/.ssh`, `~/.claude`, `~/.claude.json` and `~/.codex` are links into `/data/user/0/com.zdroid/files/home` (only the ones that folder has).
+- An SSH project opens without a new password or host key prompt, `git config user.email` in a local project prints the address set before the update, and Claude and Codex threads start without signing in again.
+- After `sed -i 's#^\(root:[^:]*:0:0:[^:]*:\)[^:]*#\1/root#' /etc/passwd`, `getent passwd root` shows `/root`.
+- **Settings → Android → Reset Runtime** keeps `~/.ssh` and a file created in `/root`.
+- Quit from the menu: the runtime notification goes at once, and no `ZdRuntimeService` start shows in logcat afterwards.
+- Copy an image in Zdroid and paste it into the agent's message box: it attaches within a second.
+
 ## 0.14.1 device checks
 
 0.14.0 merges Zed v1.27.0. The merge conflicted in the scrollbar and dock code that claims touch drags, and Battery Saver now caps animations. 0.14.1, tested in its place, names the remote server it downloads as a stable one, so the server removes older versions as it does for desktop Zed. Check:
