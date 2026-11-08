@@ -356,6 +356,10 @@ pub fn close_range(first: u32, last: u32, flags: usize) -> Result<(), i32> {
     check(unsafe { syscall6(nr::CLOSE_RANGE, first as usize, last as usize, flags, 0, 0, 0) }).map(|_| ())
 }
 
+pub fn getdents64(fd: i32, buffer: &mut [u8]) -> Result<usize, i32> {
+    check(unsafe { syscall6(nr::GETDENTS64, fd as usize, buffer.as_mut_ptr() as usize, buffer.len(), 0, 0, 0) })
+}
+
 pub fn memfd_create(name: *const u8, flags: usize) -> Result<i32, i32> {
     check(unsafe { syscall6(nr::MEMFD_CREATE, name as usize, flags, 0, 0, 0, 0) }).map(|fd| fd as i32)
 }

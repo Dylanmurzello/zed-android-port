@@ -257,8 +257,10 @@ android {
 
     defaultConfig {
         applicationId = "com.zdroid"
-        // Android 12. Release builds need Armv9 cores (.cargo/config.toml),
-        // which shipped with it. Keep in sync with `-P` in the two tasks above.
+        // Android 12. Raised from 26 for 0.8.5's Armv9 build and kept when
+        // 0.15.0 went back to Armv8.2 cores (.cargo/config.toml), since
+        // nothing since has been checked below it. Keep in sync with `-P`
+        // in the two tasks above.
         minSdk = 31
         // targetSdk 35. The old pin at 28 kept the app in a SELinux domain
         // that may exec app-private files; the rootfs engine made that
