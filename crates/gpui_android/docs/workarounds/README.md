@@ -80,6 +80,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | Workaround | Status | Why it exists |
 |---|---|---|
 | [Soft-keyboard / IME bridge](deferred-soft-keyboard.md) | Superseded | The bridge landed: `ZdroidInputConnection` and `ime.rs` |
+| [Confirmation prompts fit Android windows](android-confirmation-prompts.md) | Active | Fixed desktop width and unscrollable content clip prompts; Android needs larger buttons and role-based cancellation |
 | [Phone form-factor polish](deferred-phone-form-factor-polish.md) | Deferred | Tablets and desktop mode first |
 | [Extra-window input parity](extra-window-input-parity.md) | Active | Hover, scroll and secondary buttons in windows without GameActivity's input queue |
 | [Choreographer-driven vsync](choreographer-vsync.md) | Active | Replaces 8ms fixed-interval polling with vsync callbacks, requested only while gpui has frames to draw |
