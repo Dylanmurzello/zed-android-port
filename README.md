@@ -142,7 +142,7 @@ apt install -y nodejs npm
 npm install -g @anthropic-ai/claude-code @openai/codex
 ```
 
-In the terminal, run Codex as `codex --no-daemon` (or add `alias codex='codex --no-daemon'` to `~/.bashrc`): by default it starts a background server that sandboxes itself with bubblewrap, which needs namespaces that Android doesn't give an app. The agent panel's Codex doesn't use that server.
+Codex runs its commands in its own sandbox, which needs bubblewrap and Linux namespaces that Android doesn't give an app. With its default permissions every command fails with `error building bubblewrap command` (Codex 0.167.0), with or without its background server. Give it full access: in the terminal, run `codex -s danger-full-access` (or add `alias codex='codex -s danger-full-access'` to `~/.bashrc`); in the agent panel, pick **Full access** in the permissions menu under the message box. Codex can then change any file Zdroid can reach, including `/sdcard` when All files access is on.
 
 Go comes from the official `linux-arm64` tarball unpacked into `/usr/local`; gopls, delve, clangd and the rest install the way their docs say for Linux. Anything that lands in `/usr/bin`, `/usr/local/bin`, `~/.cargo/bin` or `~/.local/bin` shows up on the editor's PATH within a couple of seconds, so language servers start from the editor without configuration.
 
