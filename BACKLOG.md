@@ -43,7 +43,6 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 Found while checking, none of them new in 0.16.0:
 
 - **Reset Runtime's confirmation opens behind the Settings window.** The Settings page's Reset button sends the action to the main window (`dispatch_app_action` in `settings_ui`'s `page_data/android.rs`, the same since 0.10.0). The main window draws gpui's prompt under the Settings window in front of it, so the button seems to do nothing until Settings is minimized or closed. Activating the main window first won't help: on Android, `activate()` only brings extra windows forward.
-- **A reset doesn't seed a `/root` from 0.10 to 0.15.** `install_inner` writes `/root/.lldbinit` and creates `~/.cargo/bin` and `~/.local/bin` in the new tree, then moves the old `/root` over it. A `/root` from 0.10 to 0.15, when it wasn't the home, never had them and still doesn't after a reset, so LLDB stops on the engine's `SIGSYS`. Adding the missing ones in `link_home`, which runs at every boot, would cover updates and resets alike. It's Dylan's code, so send the change to him first.
 - **After a reset, the guest's clock is UTC until tzdata is installed.** The base image has no tzdata and Install Essentials doesn't install it, so `/etc/localtime` points at a missing file (`seed_timezone`). `apt-get install tzdata` fixes it.
 
 ## 0.14.1 device checks
