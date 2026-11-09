@@ -38,12 +38,15 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 - Passed: `echo $HOME` prints `/root`, and `~/projects`, `~/storage`, `~/received`, `~/.ssh`, `~/.claude`, `~/.claude.json` and `~/.codex` link into `/data/user/0/com.zdroid/files/home`. The SSH project reconnected at launch without a prompt, and the Codex login (`~/.codex/auth.json`) is there. After `sed -i 's#^\(root:[^:]*:0:0:[^:]*:\)[^:]*#\1/root#' /etc/passwd`, `getent passwd root` shows `/root`. **Settings → Android → Reset Runtime** kept `/root` with its links and a file created there, and Install Essentials then installed git, the SSH client and the CA certificates. Quit from the menu stopped the service and removed the notification 0.2 s after the tap, and the service didn't start again.
 - Not applicable: the old home had no `.gitconfig`, so `link_home` had no include to add.
-- Still to check: a Claude and a Codex thread start without signing in again, and an image copied in Zdroid attaches to the agent's message box within a second.
+- Passed on 2026-11-09: an image copied with Chrome's Copy image pastes into the agent's message box as an image. Copy in the project panel puts the file's path on the clipboard as text, as on desktop, so it pastes the path; a project image attaches through `@`, the box's `+` → Image, or a drag from the project panel.
+- Passed on 2026-11-09: a Claude and a Codex thread start without signing in again, with `.claude`, `.claude.json` and `.codex` moved into `/root`.
 
 Found while checking, none of them new in 0.16.0:
 
 - **Reset Runtime's confirmation opens behind the Settings window.** The Settings page's Reset button sends the action to the main window (`dispatch_app_action` in `settings_ui`'s `page_data/android.rs`, the same since 0.10.0). The main window draws gpui's prompt under the Settings window in front of it, so the button seems to do nothing until Settings is minimized or closed. Activating the main window first won't help: on Android, `activate()` only brings extra windows forward.
 - **After a reset, the guest's clock is UTC until tzdata is installed.** The base image has no tzdata and Install Essentials doesn't install it, so `/etc/localtime` points at a missing file (`seed_timezone`). `apt-get install tzdata` fixes it.
+- ~~**A symlink with an absolute target breaks when it's renamed into another directory.**~~ Fixed in 0.16.1 ([Dylan's issue #25](https://github.com/Dylanmurzello/zed-android-port/issues/25)): `symlinkat` stores an absolute target as its host path instead of a path relative to the link's directory, and `readlink` returns the path the program wrote. Codex 0.167.0 hit it when it installed its app-server daemon (`daemon executable not found`). A link made before 0.16.1 keeps the target it was stored with; making it again fixes a broken one, for Codex `ln -sfn releases/<release> ~/.codex/packages/app-server-daemon/current`.
+- **The engine drops a path's trailing slash.** `guest_to_host("/root/x/")` gives the host path without the slash, so `lstat` on `link/` describes the link instead of following it as Linux does: `ls link/` and `stat link/` on a broken link succeed where Linux fails with "No such file or directory". Seen on the tablet while reproducing Dylan's issue #25 (2026-11-09).
 
 ## 0.14.1 device checks
 

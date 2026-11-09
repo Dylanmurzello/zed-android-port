@@ -37,9 +37,10 @@ writeup is the editor side.
   `assets/rootfs/` (stored, not recompressed). On a launch with no
   `<data>/files/rootfs/.rootfs-version`, `runtime_setup::setup_at_boot`
   streams the asset through the installer before the first paint: every
-  symlink rewritten relative (the engine's invariant), modes kept, device
-  nodes skipped, seeds for `resolv.conf`, `hostname`, `hosts`, the
-  device's time zone (`/etc/localtime` as a relative link into
+  symlink rewritten relative (links the guest makes later store an
+  absolute target as its host path instead, so they survive a rename into
+  another folder), modes kept, device nodes skipped, seeds for
+  `resolv.conf`, `hostname`, `hosts`, the device's time zone (`/etc/localtime` as a relative link into
   `zoneinfo` plus `/etc/timezone`, from `persist.sys.timezone`: the base
   image has no tzdata, and without the link the first `apt install` that
   pulls it in stops at an interactive time zone menu), the debugger
