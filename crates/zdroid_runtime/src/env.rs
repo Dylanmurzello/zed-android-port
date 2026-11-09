@@ -29,7 +29,8 @@ pub fn baseline_env(data_path: &Path, home: &Path) -> Vec<(String, EnvOp)> {
     path.push(&existing_path);
 
     vec![
-        // The guest's home too, so `~` is one folder to the editor and to the
+        // The guest's home (`<data>/files/rootfs/root`, which the engine
+        // reports as `/root`), so `~` is one folder to the editor and to the
         // tools: the SSH hosts Zed lists, the `~/.gitconfig` it watches, where
         // a terminal opens without a project. Zed's own config, data and temp
         // dirs follow the custom data dir instead.

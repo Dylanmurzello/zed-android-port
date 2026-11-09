@@ -14,7 +14,7 @@
 //! - [`progress`]: [`ProgressSink`] for long operations.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 pub mod env;
 pub mod install;
@@ -47,24 +47,30 @@ pub fn data_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_PATH))
 }
 
-static NAMESERVERS: OnceLock<Vec<String>> = OnceLock::new();
+static NAMESERVERS: RwLock<Vec<String>> = RwLock::new(Vec::new());
 
 /// Public resolvers used when the platform has not reported any.
 pub const FALLBACK_NAMESERVERS: &[&str] = &["1.1.1.1", "8.8.8.8"];
 
-/// Record the device's active DNS servers (from the platform bridge)
-/// so the installer can seed the guest's `/etc/resolv.conf`.
+/// Record the device's active DNS servers, from the platform bridge at
+/// boot and at every network change, so the installer and a reset seed
+/// the guest's `/etc/resolv.conf` with the current ones.
 pub fn set_nameservers(servers: Vec<String>) {
-    if NAMESERVERS.set(servers).is_err() {
-        log::debug!("zdroid_runtime: nameservers already set; ignoring re-set");
-    }
+    let mut recorded = NAMESERVERS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *recorded = servers;
 }
 
 /// The recorded nameservers, or the public fallback. Never empty.
 pub fn nameservers() -> Vec<String> {
-    match NAMESERVERS.get() {
-        Some(servers) if !servers.is_empty() => servers.clone(),
-        _ => FALLBACK_NAMESERVERS.iter().map(|s| s.to_string()).collect(),
+    let recorded = NAMESERVERS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if recorded.is_empty() {
+        FALLBACK_NAMESERVERS.iter().map(|s| s.to_string()).collect()
+    } else {
+        recorded.clone()
     }
 }
 

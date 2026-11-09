@@ -1,10 +1,10 @@
-# `ZedDocumentsProvider` exposes `~` as a SAF root
+# `ZedDocumentsProvider` exposes the app's home folder as a SAF root
 
 **Status:** Active
 **Phase / Commit:** L8
 **Files:**
 - `crates/.../kotlin/com/zdroid/ZedDocumentsProvider.kt` (new)
-- `crates/.../kotlin/com/zdroid/ZedApplication.kt` (mkdir `~`)
+- `crates/.../kotlin/com/zdroid/ZedApplication.kt` (mkdir `files/home/projects`)
 - `crates/.../AndroidManifest.xml` (`<provider>` declaration)
 
 ## Problem
@@ -57,7 +57,9 @@ it in the picker.
 
 ### Provider shape (matches Termux)
 
-- Single root = `~` (`Context.getFilesDir().resolve("home")`).
+- Single root = the app's home folder (`Context.getFilesDir().resolve("home")`),
+  which holds `projects`, `storage` and `received`. The guest's `~` is
+  `/root`, which links those three folders here.
   Resolves correctly across `/data/data/<pkg>` vs `/data/user/0/<pkg>`
   vs work-profile namespaces.
 - Document ID = absolute filesystem path. `getFileForDocId` is
@@ -82,7 +84,7 @@ it in the picker.
    `text/rust`, `application/toml`, `text/markdown`, `text/x-go`,
    `text/x-python`, `text/typescript`, etc. before falling through to
    the system MIME map.
-2. **Search skip list.** `~` will commonly contain `.git/`,
+2. **Search skip list.** The folder will commonly contain `.git/`,
    `node_modules/`, `target/`, `__pycache__/`, `.venv/`, `.cargo/`,
    `.rustup/`, `build/`, `dist/`, `.gradle/`, `.idea/`, `.next/` —
    directories with thousands of files that match no useful query and
@@ -94,7 +96,7 @@ it in the picker.
    Activity startup). Ours doesn't:
    ContentProviders attach earlier than Activities (see below). We
    defend with `if (!baseDir.isDirectory) return emptyCursor`, plus a
-   `mkdirs()` in `ZedApplication.onCreate` so `~` always exists pre-
+   `mkdirs()` in `ZedApplication.onCreate` so the folder always exists pre-
    provider-call. Defense in depth.
 
 ### Lifecycle gotcha (the load-bearing one)
@@ -111,7 +113,7 @@ When another app opens DocumentsUI and Zed isn't running:
 `MainActivity` is **never instantiated** in this path. `android_main`
 never runs. The runtime setup lives there and so do our env-setup
 `std::fs::create_dir_all(&home)` calls. So a cold provider query finds no
-`~` dir.
+home folder.
 
 If `queryRoots` returns empty here, the user sees "Zdroid" in the SAF
 sidebar with a blank inside on tap — and on some Android versions the
@@ -142,7 +144,7 @@ directly, but it's `exported=true` so the system can see us at all.
 Standard pattern.
 
 Verified end-to-end: Files-app's "Open from" picker shows "Zdroid" in the
-sidebar with subtitle "Home folder". Tapping it lists `~`
+sidebar with subtitle "Home folder". Tapping it lists the home folder's
 contents (visible: projects, storage, plus any non-hidden files). Standard SAF actions
 (navigate, "Use this folder", create folder) all wired.
 

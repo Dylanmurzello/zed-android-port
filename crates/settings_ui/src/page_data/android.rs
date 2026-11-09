@@ -19,18 +19,36 @@ fn dispatch_app_action(name: &'static str, cx: &mut App) {
 }
 
 pub(super) fn android_page() -> SettingsPage {
+    let runtime = zdroid_runtime::Runtime::new(&zdroid_runtime::data_path());
+    let installed = runtime.installed_image();
+    let runtime_description = match &installed {
+        Some(image) => format!(
+            "Installed from {}. Resetting extracts the bundled image again and removes what \
+             you installed with apt; your home folder, projects and settings stay.",
+            image.name
+        ),
+        None => "The runtime is not installed, so the terminal and language servers cannot \
+                 start. Extract the bundled Ubuntu image."
+            .to_string(),
+    };
     SettingsPage {
         title: "Android",
         items: Box::new([
             SettingsPageItem::SectionHeader("Runtime"),
             SettingsPageItem::ActionLink(ActionLink {
-                title: "Reset Runtime".into(),
-                description: Some(
-                    "Extract the bundled Ubuntu image again. Removes what you installed with \
-                     apt; your home folder, projects and settings stay."
-                        .into(),
-                ),
-                button_text: "Reset".into(),
+                title: if installed.is_some() {
+                    "Reset Runtime"
+                } else {
+                    "Install Runtime"
+                }
+                .into(),
+                description: Some(runtime_description.into()),
+                button_text: if installed.is_some() {
+                    "Reset"
+                } else {
+                    "Install"
+                }
+                .into(),
                 on_click: Arc::new(|_settings_window, _window, cx| {
                     dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
                 }),

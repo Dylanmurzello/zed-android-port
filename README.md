@@ -8,12 +8,14 @@ Download `Zdroid-X.Y.Z.apk` from [this fork's releases](https://github.com/ilker
 
 > [!IMPORTANT]
 > - This fork's APKs are signed with a different key than Dylan's. To switch, uninstall Dylan's build first. That deletes the app's data, including the runtime and its home folder.
-> - Zdroid 0.10 doesn't open the data of 0.9.x and earlier, which ran Bootstrap or a Kali chroot: its first launch asks to clear Zdroid's data. Copy what you want to keep from the home folder first (**Open Files** in that dialog).
+> - Zdroid 0.16 moves the runtime's home folder to `/root`, as Dylan's builds have it. Updating from 0.10 to 0.15 keeps `~/projects`, `~/.ssh`, `~/.gitconfig` and the Claude and Codex logins. Other dotfiles, such as shell settings, `~/.cargo`, `~/.rustup`, `~/.local` and `~/.config`, stay in the old home folder, `/data/user/0/com.zdroid/files/home`. Link the ones you want into `~`, for example `ln -s /data/user/0/com.zdroid/files/home/.local ~/.local`, and restart Zdroid; moving them breaks the absolute paths that tools such as uv write inside them. Linking `~/.local` also brings back the fonts in `~/.local/share/fonts`. So that LLDB doesn't stop on the runtime's `SIGSYS`, put `process handle SIGSYS -n false -p true -s false` in `~/.lldbinit`.
 > - Release builds need Android 12 or later and a CPU whose cores are all Cortex-A55, A75 or newer (Armv8.2 with dot product), as in the Snapdragon 8 series from the 845 on and every Tensor. They're tested on the Galaxy Tab S9 Ultra and the Exynos Galaxy S21 Ultra. CPUs with older cores, such as Cortex-A53, crash at launch. See [`reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md).
 
 Known issues are listed in each release's notes, from [`.github/release/caveats.md`](.github/release/caveats.md).
 
 ### What the fork adds
+
+Dylan's 0.4.3 took everything below through Zdroid 0.14.1. The fork keeps merging each Zed release, and carries what his repository doesn't have yet.
 
 **Zed, kept current**
 
@@ -57,7 +59,6 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 - Dylan's Ubuntu runtime and engine (his 0.4.0), merged into Zed's current release, with:
   - language servers, debug adapters, Node and ACP agents that Zed downloads picking their Linux builds, the agent registry's included;
   - the SSH client installed on first launch, next to git and the CA certificates;
-  - one home folder for the editor, the terminal, the Files app and your projects (`~/projects`), which **Reset Runtime** leaves alone;
   - the terminal runs root's login shell, so `chsh -s /usr/bin/zsh` switches it to zsh, and fonts in `~/.local/share/fonts` or installed with apt reach the editor and the terminal;
   - the runtime's DNS servers following Android's when the network changes;
   - a language server that Android stops restarted, up to three times in ten minutes.
@@ -76,7 +77,7 @@ Known issues are listed in each release's notes, from [`.github/release/caveats.
 
 ### Contributing
 
-Pull requests go to the `zdroid` branch; `main` mirrors Dylan's repository. [FORK.md](FORK.md) covers syncing Zed and Dylan's repository, and releasing.
+Pull requests go to the `zdroid` branch; `main` is the fork's contribution to Dylan's repository. [FORK.md](FORK.md) covers syncing Zed and Dylan's repository, and releasing.
 
 ---
 
@@ -110,13 +111,13 @@ Zdroid is an independent port of [Zed](https://zed.dev) for Android, not affilia
 
 Vulkan via wgpu. AChoreographer-driven vsync, no JNI hop per frame. Opt-in 120Hz with Mailbox present mode. Glyph fallback into `/system/fonts` so Powerline arrows and CJK render without bundling fonts. Editing, projects, search, Git, extensions, and terminal UI use Zed's native implementations. The Rust `.so` is the app process. gpui composites every pixel (yes, you read that right) straight into the Adreno Vulkan driver. Multi-Activity OS-chromed extra windows so DeX freeform renders Settings and secondary editors with real chrome.
 
-A userland chroot without root or ptrace: the kernel only ever execs a 500 KB static loader shipped in the APK, which maps the Ubuntu binary and glibc's ld.so itself, installs a seccomp filter that traps path syscalls, and rewrites every guest path into the rootfs from an in-thread SIGSYS handler, three microseconds per translated syscall. Static binaries, Go, cargo, strace and lldb all run as on Linux because real ptrace stays free. Same engine answers the syscalls Android's own app filter refuses, which is why stock glibc starts at all. SurfaceControl-composited hardware cursor sprite on a sibling overlay, separate from the wgpu frame. Pointer-capture trackpad that consumes historical motion samples so finger drags don't lose 80% of their travel to event batching. SAF DocumentsProvider exposing `~/` as a system volume. HTTPS trusts the Mozilla root bundle (`webpki-roots`). In-app updater pulling signed APKs from GitHub Releases. Everything else is upstream. Deep-dives for the platform layer live in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
+A userland chroot without root or ptrace: the kernel only ever execs a 500 KB static loader shipped in the APK, which maps the Ubuntu binary and glibc's ld.so itself, installs a seccomp filter that traps path syscalls, and rewrites every guest path into the rootfs from an in-thread SIGSYS handler, three microseconds per translated syscall. Static binaries, Go, cargo, strace and lldb all run as on Linux because real ptrace stays free. Same engine answers the syscalls Android's own app filter refuses, which is why stock glibc starts at all. Mice, trackpads and the S Pen go through Android's own pointer, with its speed, tap-to-click and scroll direction settings. A DocumentsProvider exposes the projects folder as a system volume. HTTPS trusts the Mozilla root bundle (`webpki-roots`). In-app updater pulling signed APKs from GitHub Releases. Everything else is upstream. Deep-dives for the platform layer live in [`crates/gpui_android/docs/workarounds/`](crates/gpui_android/docs/workarounds/).
 
 ---
 
 ## <img src="https://api.iconify.design/lucide:download.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Install
 
-Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/ilkersigirci/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
+Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/Dylanmurzello/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
 
 ### First launch
 
@@ -201,7 +202,7 @@ The editor is bionic-linked and runs as the Android app process. Every subproces
 
 How that is possible without root: a distro binary bakes `/usr`, `/lib` and `/etc` into its rodata and its `PT_INTERP`, and no app-writable Android path is that short, so the rewrite cannot happen in the file. It happens at the syscall. The kernel only ever execs `libzdload.so`, a static loader that maps the Ubuntu binary and glibc's own `ld.so`, installs a seccomp filter that traps the path syscalls (`openat`, `execve`, `stat`, `readlink`, `bind` and the rest) and translates the guest path into the rootfs from an in-thread SIGSYS handler, then re-issues the syscall from inside the loader's own text, which the filter lets through. That is proot's idea driven by the kernel's trap instead of a second process and ptrace: three microseconds per translated path syscall instead of two cross-process stops, static binaries run, and real `ptrace` stays free, so gdb, lldb and strace work inside. The same handler answers the syscalls Android's own app filter refuses (`rseq`, `set_robust_list`, the termios2 ioctls, hard links on app data, netlink audit), which is why unmodified glibc, apt and dpkg run at all. Writeups: [`rootfs-engine-integration.md`](crates/gpui_android/docs/workarounds/rootfs-engine-integration.md), [`rootfs-guest-env.md`](crates/gpui_android/docs/workarounds/rootfs-guest-env.md).
 
-Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is the app's home folder (`/data/user/0/com.zdroid/files/home`, the one the Files app shows), which holds your projects and survives a reset, the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
+Inside, you are `root` (a virtual identity the engine keeps for apt and dpkg; the files belong to the app uid), `$HOME` is the image's `/root`, which a reset keeps, with `~/projects`, `~/storage` and `~/received` linked to the app's home folder (`/data/user/0/com.zdroid/files/home`, the one the Files app shows), the app's files dir is visible at the same absolute path on both sides so project paths mean the same thing to the editor and to the tools, and `/sdcard` and `/storage` are bound through.
 
 Background survival: a foreground service holds the process out of Android's cached state while a language server or terminal is alive (always, with **Zdroid → Keep Running in Background**), children are reaped when you quit or swipe the task away, and a language server killed from outside is restarted up to three times in ten minutes before it stays stopped with a hint. **Keep Awake** in Settings → Android adds a wake lock so builds continue with the screen off. The device-wide phantom process cap (32 on Android 12+) cannot be lifted from an app; Android 14+ has a Developer Options toggle, and over adb `settings put global settings_enable_monitor_phantom_procs false`.
 

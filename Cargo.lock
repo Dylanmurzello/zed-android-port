@@ -16494,6 +16494,7 @@ dependencies = [
  "url",
  "util",
  "workspace",
+ "zdroid_runtime",
  "zed_actions",
  "zed_credentials_provider",
 ]

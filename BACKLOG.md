@@ -32,6 +32,19 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 - **SSH: `-f` leaves master processes behind, and `accept-new` trusts new hosts.** On Android, `remote/src/transport/ssh.rs` adds `-f`, so ssh moves the master connection into a background process Zed doesn't track. `kill()` only kills the parent, which has already exited, so every disconnect or reconnect leaves an ssh master running. The comment blames the engine loader for keeping stdout open: check whether that still holds, or have `kill()` run `ssh -O exit`, then drop `-f` and the exit-status edits that exist for it. `StrictHostKeyChecking=accept-new` accepts any unknown host key without asking. Zed sets `SSH_ASKPASS_REQUIRE=force` and the app bundles an askpass helper, so OpenSSH may already ask through it: test without the option, and drop it if the prompt appears. Tablet check: disconnect and reconnect an SSH project a few times, then count ssh processes with `adb shell ps -A | grep ssh`; connect to a new host and see whether Zed asks about its key.
 
+## 0.16.0 device checks
+
+0.16.0 merges Dylan's 0.4.3, which moves the guest's home back to the image's `/root`. Checked on the tablet on 2026-11-08, updating over 0.15.1:
+
+- Passed: `echo $HOME` prints `/root`, and `~/projects`, `~/storage`, `~/received`, `~/.ssh`, `~/.claude`, `~/.claude.json` and `~/.codex` link into `/data/user/0/com.zdroid/files/home`. The SSH project reconnected at launch without a prompt, and the Codex login (`~/.codex/auth.json`) is there. After `sed -i 's#^\(root:[^:]*:0:0:[^:]*:\)[^:]*#\1/root#' /etc/passwd`, `getent passwd root` shows `/root`. **Settings → Android → Reset Runtime** kept `/root` with its links and a file created there, and Install Essentials then installed git, the SSH client and the CA certificates. Quit from the menu stopped the service and removed the notification 0.2 s after the tap, and the service didn't start again.
+- Not applicable: the old home had no `.gitconfig`, so `link_home` had no include to add.
+- Still to check: a Claude and a Codex thread start without signing in again, and an image copied in Zdroid attaches to the agent's message box within a second.
+
+Found while checking, none of them new in 0.16.0:
+
+- **Reset Runtime's confirmation opens behind the Settings window.** The Settings page's Reset button sends the action to the main window (`dispatch_app_action` in `settings_ui`'s `page_data/android.rs`, the same since 0.10.0). The main window draws gpui's prompt under the Settings window in front of it, so the button seems to do nothing until Settings is minimized or closed. Activating the main window first won't help: on Android, `activate()` only brings extra windows forward.
+- **After a reset, the guest's clock is UTC until tzdata is installed.** The base image has no tzdata and Install Essentials doesn't install it, so `/etc/localtime` points at a missing file (`seed_timezone`). `apt-get install tzdata` fixes it.
+
 ## 0.14.1 device checks
 
 0.14.0 merges Zed v1.27.0. The merge conflicted in the scrollbar and dock code that claims touch drags, and Battery Saver now caps animations. 0.14.1, tested in its place, names the remote server it downloads as a stable one, so the server removes older versions as it does for desktop Zed. Check:
@@ -47,6 +60,10 @@ The rest of 0.10.0's device checks passed on the tablet on 2026-10-30. These two
 
 - The in-app update from 0.10.0 to the next release: the updater at targetSdk 35, with the native libraries extracted at install.
 - Speed against 0.9.23, which ran its tools natively, while 0.10.0's engine translates every path system call: rust-analyzer's first diagnostics and go to definition in a Rust project under `~/projects`, `cargo build`, and `git status` in a large repository, timed on the same project with both versions.
+
+## Open after the 2026-11 merge review
+
+- **Terminal touch scrolling moves by whole rows.** A finger drag on the terminal scrolls the grid a row per row of travel (`terminal_view`), which reads as stepping next to the editor's pixel scrolling. A sub-row variant would keep a fractional offset in the terminal element and round it at paint. Deferred: correct as it is, and the editor's touch scrolling is where the time went.
 
 ## Open from the final pass, 2026-10-31
 

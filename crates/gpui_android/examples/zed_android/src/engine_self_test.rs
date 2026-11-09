@@ -277,9 +277,8 @@ fn run_shell_builtins(runtime: &Runtime, data_path: &Path, report: &mut Report) 
             for line in run.stderr_text().lines() {
                 report.lines.push(format!("  sh stderr: {line}"));
             }
-            let home = format!("HOME={}", runtime.workspace_root().display());
             let ok = run.succeeded()
-                && stdout.contains(&home)
+                && stdout.contains("HOME=/root")
                 && stdout.contains("hostname=zdroid")
                 && stdout.contains("SigBlk:\t0000000000000000");
             report.record(

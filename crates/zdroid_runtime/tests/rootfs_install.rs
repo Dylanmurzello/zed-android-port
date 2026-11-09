@@ -90,6 +90,11 @@ fn installs_the_bundled_image() {
         "cancel left {leftovers:?}"
     );
 
+    // What a Bootstrap-era home left in the app's home folder.
+    let app_home = runtime.workspace_root();
+    fs::create_dir_all(app_home.join(".ssh")).unwrap();
+    fs::write(app_home.join(".gitconfig"), "[user]\n\tname = Zdroid\n").unwrap();
+
     let mut sink = LogProgressSink;
     zdroid_runtime::install::install(
         &runtime,
@@ -120,9 +125,12 @@ fn installs_the_bundled_image() {
 
     let mut found = Vec::new();
     absolute_symlinks(&rootfs, &mut found);
+    let data_link = format!("-> {}/", data_path.display());
     let allowed: Vec<_> = found
         .iter()
-        .filter(|line| !line.contains("-> /dev/") && !line.contains("-> /proc/"))
+        .filter(|line| {
+            !line.contains("-> /dev/") && !line.contains("-> /proc/") && !line.contains(&data_link)
+        })
         .cloned()
         .collect();
     assert!(
@@ -181,28 +189,29 @@ fn installs_the_bundled_image() {
     );
     eprintln!("alternatives links checked: {alternatives}");
 
-    // The guest's home is the app's home folder, outside the rootfs.
-    let home = runtime.workspace_root();
-    let passwd = fs::read_to_string(rootfs.join("etc/passwd")).unwrap();
-    let root_entry = passwd
-        .lines()
-        .find(|line| line.starts_with("root:"))
-        .unwrap();
-    assert_eq!(root_entry.split(':').nth(5), home.to_str());
+    // The guest's home is the image's /root; the app's home folder is
+    // reached through links.
+    let home = runtime.guest_home();
+    for name in ["projects", "storage", "received", ".ssh"] {
+        assert_eq!(fs::read_link(home.join(name)).unwrap(), app_home.join(name));
+    }
+    assert!(fs::symlink_metadata(home.join(".codex")).is_err());
+    assert!(home.join(".lldbinit").is_file());
+    assert!(home.join(".cargo/bin").is_dir());
     assert!(
         fs::read_to_string(rootfs.join("etc/gitconfig"))
             .unwrap()
             .contains("directory = *")
     );
-    for name in [".bashrc", ".profile", ".lldbinit"] {
-        assert!(home.join(name).is_file(), "{name} seeded into the home");
-    }
-    assert!(home.join(".cargo/bin").is_dir());
+    let gitconfig = fs::read_to_string(home.join(".gitconfig")).unwrap();
+    assert!(
+        gitconfig.contains(&format!("path = {}", app_home.join(".gitconfig").display())),
+        "{gitconfig}"
+    );
 
-    // A reset over an existing tree swaps, leaves the home and its files as
-    // they are, and leaves no .old behind.
+    // A reset over an existing tree swaps, carries the guest's home over and
+    // leaves no .old behind.
     fs::write(home.join(".bash_history"), "ls\n").unwrap();
-    fs::write(home.join(".bashrc"), "# mine\n").unwrap();
     zdroid_runtime::install::install(
         &runtime,
         &mut open_image(),
@@ -217,8 +226,9 @@ fn installs_the_bundled_image() {
         "ls\n"
     );
     assert_eq!(
-        fs::read_to_string(home.join(".bashrc")).unwrap(),
-        "# mine\n"
+        fs::read_to_string(home.join(".gitconfig")).unwrap(),
+        gitconfig,
+        "the include is added once"
     );
     assert_eq!(
         fs::read_to_string(rootfs.join("etc/resolv.conf")).unwrap(),

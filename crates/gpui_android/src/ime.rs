@@ -228,6 +228,10 @@ pub(crate) enum ImeEvent {
         before_length: i32,
         after_length: i32,
     },
+    /// `setSelection(start, end)`. The IME's view of the selection, which
+    /// its next edit is relative to; LatinIME deletes a selection as
+    /// `setSelection(end, end)` then `deleteSurroundingText(len, 0)`.
+    SetSelection { start: i32, end: i32 },
     /// `sendKeyEvent(KeyEvent)`. Hardware-style key delivery from the
     /// IME (Enter, arrows, etc.). Routed through the existing
     /// `events::keyboard::translate_extra_key_event` translator.
@@ -293,6 +297,7 @@ fn debug_event(event: &ImeEvent) -> String {
         } => {
             format!("DeleteSurroundingText before={before_length} after={after_length}")
         }
+        ImeEvent::SetSelection { start, end } => format!("SetSelection {start}..{end}"),
         ImeEvent::KeyEvent {
             action,
             keycode,
@@ -438,6 +443,27 @@ pub(crate) fn commit_composition(
     state.ime_composition_text = None;
 }
 
+/// The selection the IME last set, taken once: every edit or key after it
+/// starts from the editor's own selection again.
+fn take_ime_selection(window_ptr: &AndroidWindowStatePtr) -> Option<std::ops::Range<usize>> {
+    window_ptr.state.borrow_mut().ime_selection.take()
+}
+
+/// Replaces the text of a selection the IME set with `text`, as an IME that
+/// selected text and then committed over it expects.
+fn replace_ime_selection(
+    window_ptr: &AndroidWindowStatePtr,
+    range: std::ops::Range<usize>,
+    text: &str,
+) {
+    forget_composition(window_ptr);
+    let handled =
+        window_ptr.with_input_handler(|handler| handler.replace_text_in_range(Some(range), text));
+    if handled.is_none() {
+        log::debug!("ime: replace_ime_selection dropped (no input handler)");
+    }
+}
+
 /// Stop tracking the composition and leave its text alone, for a key press whose
 /// text is about to replace it.
 pub(crate) fn forget_composition(window_ptr: &AndroidWindowStatePtr) {
@@ -525,14 +551,31 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
     log::debug!("ime::apply_event {:?}", debug_event(&event));
     let needs_mirror_push = match event {
         ImeEvent::CommitText { text, .. } => {
-            commit_composition(window_ptr, Some(&text));
+            match take_ime_selection(window_ptr) {
+                Some(range) if range.start != range.end => {
+                    replace_ime_selection(window_ptr, range, &text);
+                }
+                _ => commit_composition(window_ptr, Some(&text)),
+            }
             true
         }
         ImeEvent::SetComposingText { text, .. } => {
+            if let Some(range) = take_ime_selection(window_ptr)
+                && range.start != range.end
+            {
+                replace_ime_selection(window_ptr, range, "");
+            }
             set_composition(window_ptr, &text);
             true
         }
+        ImeEvent::SetSelection { start, end } => {
+            let start = start.max(0) as usize;
+            let end = end.max(0) as usize;
+            window_ptr.state.borrow_mut().ime_selection = Some(start.min(end)..start.max(end));
+            false
+        }
         ImeEvent::FinishComposingText => {
+            take_ime_selection(window_ptr);
             // Only push mirror state if there was an active composition
             // to clear. Without this guard, Gboard fires
             // `finishComposingText` defensively after each
@@ -548,20 +591,26 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             before_length,
             after_length,
         } => {
+            let ime_selection = take_ime_selection(window_ptr);
             let deleted = window_ptr.with_input_handler(|handler| {
-                let Some(selection) = handler.selected_text_range(false) else {
-                    return false;
+                // Around the selection the IME set, else the editor's own.
+                let range = match ime_selection {
+                    Some(range) => range,
+                    None => match handler.selected_text_range(false) {
+                        Some(selection) => selection.range,
+                        None => return false,
+                    },
                 };
-                let before = (before_length.max(0) as usize).min(selection.range.start);
+                let before = (before_length.max(0) as usize).min(range.start);
                 let after = after_length.max(0) as usize;
                 // The selection stays: the IME names what's around it. The
                 // later range goes first, so the earlier one's offsets hold.
                 if after > 0 {
-                    let end = selection.range.end;
+                    let end = range.end;
                     handler.replace_text_in_range(Some(end..end + after), "");
                 }
                 if before > 0 {
-                    let start = selection.range.start;
+                    let start = range.start;
                     handler.replace_text_in_range(Some(start - before..start), "");
                 }
                 true
@@ -577,6 +626,8 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             meta_state,
             repeat_count,
         } => {
+            // A key moves the editor's own cursor; the IME's view is stale.
+            take_ime_selection(window_ptr);
             if let Some(input) = crate::events::translate_extra_key_event(
                 window_ptr,
                 action,
@@ -594,6 +645,7 @@ fn apply_event(window_ptr: &AndroidWindowStatePtr, event: ImeEvent) {
             true
         }
         ImeEvent::EditorAction { action_id } => {
+            take_ime_selection(window_ptr);
             // Soft keyboards deliver Enter either as
             // sendKeyEvent(KEYCODE_ENTER) (handled in the KeyEvent arm) or
             // as performEditorAction, depending on the keyboard and the
@@ -695,6 +747,17 @@ pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImeFinishComposingText
     window_id: i64,
 ) {
     dispatch_event(window_id as u64, ImeEvent::FinishComposingText);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_zdroid_NativeBridge_nativeImeSetSelection<'local>(
+    _env: JNIEnv<'local>,
+    _bridge: JObject<'local>,
+    window_id: i64,
+    start: i32,
+    end: i32,
+) {
+    dispatch_event(window_id as u64, ImeEvent::SetSelection { start, end });
 }
 
 #[unsafe(no_mangle)]

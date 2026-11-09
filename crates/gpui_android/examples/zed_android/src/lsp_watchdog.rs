@@ -105,19 +105,9 @@ fn on_exit(
         })
         .collect();
     let name = server.name();
-    if buffers.is_empty() {
-        // A restart with no buffers only removes the server, which then
-        // starts again when a buffer needs it; a stop would keep it stopped.
-        log::info!("lsp_watchdog: {name} exited with no buffers open; removing it");
-        lsp_store.restart_language_servers_for_buffers(
-            Vec::new(),
-            HashSet::from_iter([LanguageServerSelector::Id(server_id)]),
-            cx,
-        );
-        return;
-    }
     let selector = HashSet::from_iter([LanguageServerSelector::Name(name.clone())]);
 
+    // Every exit counts toward the budget, with buffers open or not.
     let now = Instant::now();
     let mut recent_exits = recent_exits.borrow_mut();
     let exits = recent_exits.entry(name.clone()).or_default();
@@ -128,8 +118,9 @@ fn on_exit(
             "lsp_watchdog: {name} exited {RESTART_BUDGET} times within {minutes} minutes; \
              leaving it stopped"
         );
+        // No buffer list: with one, every server on those buffers stops too.
         lsp_store
-            .stop_language_servers_for_buffers(buffers, selector, cx)
+            .stop_language_servers_for_buffers(Vec::new(), selector, cx)
             .detach_and_log_err(cx);
         cx.emit(LspStoreEvent::Notification(format!(
             "{name} exited {RESTART_BUDGET} times in {minutes} minutes and stays stopped. If \
@@ -141,6 +132,19 @@ fn on_exit(
     }
     exits.push(now);
     let attempt = exits.len();
+    if buffers.is_empty() {
+        // A restart with no buffers only removes the server, which then
+        // starts again when a buffer needs it; a stop would keep it stopped.
+        log::info!(
+            "lsp_watchdog: {name} exited with no buffers open; removing it ({attempt}/{RESTART_BUDGET})"
+        );
+        lsp_store.restart_language_servers_for_buffers(
+            Vec::new(),
+            HashSet::from_iter([LanguageServerSelector::Id(server_id)]),
+            cx,
+        );
+        return;
+    }
     log::warn!(
         "lsp_watchdog: {name} (pid {:?}) exited; restarting ({attempt}/{RESTART_BUDGET})",
         server.process_id()

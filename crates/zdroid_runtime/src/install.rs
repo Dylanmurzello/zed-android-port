@@ -204,15 +204,7 @@ fn install_inner(
     extract(image, staging, &translator, progress)?;
 
     progress.step("Seeding configuration");
-    let home = runtime.workspace_root();
-    seed(
-        staging,
-        nameservers,
-        timezone,
-        &runtime.bind_guest_dirs(),
-        &home,
-    )?;
-    seed_home(staging, &home)?;
+    seed(staging, nameservers, timezone, &runtime.bind_guest_dirs())?;
     let image = self::image();
     fs::write(
         staging.join(VERSION_FILE),
@@ -228,7 +220,20 @@ fn install_inner(
     }
     fs::rename(staging, &rootfs)
         .with_context(|| format!("rename {} -> {}", staging.display(), rootfs.display()))?;
+    // The guest's home outlives a reset: dotfiles, SSH keys, logins and
+    // rustup's toolchains stay. On an error the old tree, home included,
+    // is left in place.
+    let old_home = old.join("root");
+    if old_home.is_dir() {
+        let home = rootfs.join("root");
+        remove_existing(&home)?;
+        fs::rename(&old_home, &home)
+            .with_context(|| format!("rename {} -> {}", old_home.display(), home.display()))?;
+    }
     sweep(old);
+    if let Err(error) = link_home(runtime) {
+        progress.warn(&format!("linking the home folder failed: {error:#}"));
+    }
     log::info!(
         "install: {} ({}) active at {}",
         image.name,
@@ -478,15 +483,15 @@ fn extract(
 }
 
 /// Files the guest needs that the base image does not ship usable:
-/// resolvers (Android has no resolv.conf), a hostname, root's home in
-/// `/etc/passwd`, git's `safe.directory` and the gdb config that keeps
-/// SIGSYS traps from stopping debug sessions.
+/// resolvers (Android has no resolv.conf), a hostname, git's
+/// `safe.directory`, the debugger configs that keep SIGSYS traps from
+/// stopping gdb and lldb sessions, and the home directories the symlink
+/// farm watches.
 fn seed(
     root: &Path,
     nameservers: &[String],
     timezone: &str,
     bind_guest_dirs: &[String],
-    home: &Path,
 ) -> Result<()> {
     let write = |relative: &str, contents: String| -> Result<()> {
         let path = root.join(relative);
@@ -510,8 +515,11 @@ fn seed(
         "etc/gdb/gdbinit",
         "handle SIGSYS nostop noprint pass\n".to_string(),
     )?;
-    set_root_home(root, home)?;
-    for dir in ["usr/local/bin", "tmp"] {
+    write(
+        "root/.lldbinit",
+        "process handle SIGSYS -n false -p true -s false\n".to_string(),
+    )?;
+    for dir in ["root/.cargo/bin", "root/.local/bin", "usr/local/bin", "tmp"] {
         let path = root.join(dir);
         fs::create_dir_all(&path).with_context(|| format!("create {}", path.display()))?;
     }
@@ -530,53 +538,55 @@ fn seed(
     Ok(())
 }
 
-/// Makes `home` root's home directory in `/etc/passwd`: ssh, among others,
-/// takes the home from there rather than from `$HOME`.
-fn set_root_home(root: &Path, home: &Path) -> Result<()> {
-    let path = root.join("etc/passwd");
-    let passwd = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let home = home.to_str().context("home path is not UTF-8")?;
-    let mut updated = String::with_capacity(passwd.len() + home.len());
-    let mut found = false;
-    for line in passwd.lines() {
-        let mut fields: Vec<&str> = line.split(':').collect();
-        if fields.len() == 7 && fields[0] == "root" {
-            fields[5] = home;
-            found = true;
-        }
-        updated.push_str(&fields.join(":"));
-        updated.push('\n');
-    }
-    if !found {
-        bail!("{} has no root entry", path.display());
-    }
-    fs::write(&path, updated).with_context(|| format!("write {}", path.display()))
-}
+/// Things the guest's home (`/root`) reaches in the app's home folder
+/// (`<data>/files/home`): the projects Zed's picker opens, the `~/storage`
+/// links, the copies of files other apps hand over, and which held the home
+/// of the Bootstrap runtime that Zdroid had before this one.
+const LINKED_FROM_APP_HOME: &[&str] = &["projects", "storage", "received"];
+const LINKED_IF_PRESENT: &[&str] = &[".ssh", ".claude", ".claude.json", ".codex"];
 
-/// The guest's home is the app's home folder, outside the rootfs at a path
-/// the editor and the tools spell the same: projects live in it, the Files
-/// app shows it, and a reset leaves it alone. This gives it the image's
-/// root dotfiles and the lldb setting for the engine's traps where it has
-/// none of its own, and the directories the symlink farm watches.
-fn seed_home(root: &Path, home: &Path) -> Result<()> {
-    for dir in [home.join(".cargo/bin"), home.join(".local/bin")] {
+/// Links `/root/<name>` to the app's home folder for [`LINKED_FROM_APP_HOME`]
+/// and for whichever of [`LINKED_IF_PRESENT`] a Bootstrap-era home holds,
+/// and makes the guest's git config include that home's. A name the guest's
+/// home already has is left alone, so this runs at every boot for a rootfs
+/// installed before the links existed. The targets are identity-mapped, so
+/// a tool's `getcwd` under `~/projects` reports the path Zed uses; binding
+/// `/root` to the folder instead would make the engine's reverse lookup
+/// report `/root/projects/...`.
+pub fn link_home(runtime: &Runtime) -> Result<()> {
+    if !runtime.is_installed() {
+        return Ok(());
+    }
+    let home = runtime.guest_home();
+    let app_home = runtime.workspace_root();
+    for name in LINKED_FROM_APP_HOME {
+        let dir = app_home.join(name);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     }
-    for name in [".bashrc", ".profile"] {
-        let target = home.join(name);
-        let source = root.join("root").join(name);
-        if fs::symlink_metadata(&target).is_err() && source.is_file() {
-            fs::copy(&source, &target)
-                .with_context(|| format!("copy {} -> {}", source.display(), target.display()))?;
+    let present = LINKED_IF_PRESENT
+        .iter()
+        .filter(|name| fs::symlink_metadata(app_home.join(name)).is_ok());
+    for name in LINKED_FROM_APP_HOME.iter().chain(present) {
+        let link = home.join(name);
+        if fs::symlink_metadata(&link).is_ok() {
+            continue;
         }
+        symlink(app_home.join(name), &link).with_context(|| format!("link {}", link.display()))?;
     }
-    let lldbinit = home.join(".lldbinit");
-    if fs::symlink_metadata(&lldbinit).is_err() {
-        fs::write(
-            &lldbinit,
-            "process handle SIGSYS -n false -p true -s false\n",
-        )
-        .with_context(|| format!("write {}", lldbinit.display()))?;
+    let app_gitconfig = app_home.join(".gitconfig");
+    if app_gitconfig.is_file() {
+        let gitconfig = home.join(".gitconfig");
+        let include = format!("[include]\n\tpath = {}\n", app_gitconfig.display());
+        let current = fs::read_to_string(&gitconfig).unwrap_or_default();
+        if !current.contains(&include) {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&gitconfig)
+                .with_context(|| format!("open {}", gitconfig.display()))?;
+            std::io::Write::write_all(&mut file, include.as_bytes())
+                .with_context(|| format!("write {}", gitconfig.display()))?;
+        }
     }
     Ok(())
 }

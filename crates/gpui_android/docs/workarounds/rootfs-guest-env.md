@@ -24,21 +24,22 @@ every exec.
 ## Solution
 
 - **Editor process (`Runtime::env_for_zed_process`).** `baseline_env`
-  keeps the host shape: `HOME=<data>/files/home` (the guest's home, so `~`
+  keeps the host shape: `HOME=<data>/files/rootfs/root` (the guest's home
+  in the host's spelling, which the engine reports back as `/root`, so `~`
   is one folder to both: the SSH hosts Zed lists, the `~/.gitconfig` it
-  watches, where a terminal opens without a project, `~/` links in the
-  terminal), `TMPDIR=<data>/files/tmp`,
+  watches, where a terminal opens without a project), `TMPDIR=<data>/files/tmp`,
   `PATH=<data>/files/zd-runtime:<data>/files/bin:<system PATH>`, `TERM`,
   `COLORTERM`, `LANG`, `ZED_BUILD_REMOTE_SERVER=never`, no `LD_PRELOAD`.
   On top of it the engine block every loader invocation needs:
   `ZD_ROOTFS`, `ZD_BINDS`, `ZD_FAKE_ROOT=1`, `ZD_HOSTNAME=zdroid`,
   `ZD_CLOSE_FDS=1`, `ZD_GUEST_ENV`, and `ZD_LOG` when the dev toggle file
   `<data>/files/etc/zd-engine-log` exists. `SHELL` is the loader link.
-- **Guest view (`ZD_GUEST_ENV`).** `HOME=<data>/files/home;USER=root;
-  LOGNAME=root;SHELL=<root's login shell>;PATH=<guest PATH>;LANG=C.UTF-8;TMPDIR=/tmp`,
-  where the guest PATH is the engine's default with `~/.cargo/bin` and
-  `~/.local/bin` of that home in place of `/root`'s. The home is the app's
-  home folder, outside the rootfs (`rootfs-engine-integration.md`). The loader
+- **Guest view (`ZD_GUEST_ENV`).** `HOME=/root;USER=root;
+  LOGNAME=root;SHELL=<root's login shell>;PATH=<engine default PATH>;LANG=C.UTF-8;TMPDIR=/tmp`.
+  The home is the image's `/root`, inside the rootfs; a reset carries it
+  into the new tree, and `install::link_home` links `~/projects`,
+  `~/storage` and `~/received` to the app's home folder
+  (`<data>/files/home`), where the Files app and Zed's picker look. The loader
   applies it at an exec the editor initiates and removes it from the
   guest's environment, and the handler never re-injects it, so a guest
   process changing its own environment is honoured downstream. The
@@ -82,7 +83,11 @@ settings, databases and logs derive from it. They don't here:
 temp files under the files dir whatever `HOME` is, and what's left of
 `HOME` in Zed (SSH config, `~/.gitconfig`, journal, `~` expansion, the
 fallback working directory) means the user's home. With two homes, Zed
-read `files/.ssh/config` while ssh read `files/home/.ssh/config`.
+read `files/.ssh/config` while ssh read `/root/.ssh/config`. Pointing the
+editor at `<data>/files/rootfs/root` closes that: the files dir is
+identity-mapped into the guest and the rootfs prefix is the longest match
+for the engine's reverse lookup, so a terminal Zed opens there reports its
+directory as `/root`.
 
 ## Failure mode
 

@@ -2763,7 +2763,7 @@ impl PyreflyLspAdapter {
             _ => consts::ARCH,
         };
         let os = Self::ARCH_SERVER_NAME;
-        let suffix = match consts::OS {
+        let suffix = match util::runtime_os() {
             "windows" => "zip",
             _ => "tar.gz",
         };

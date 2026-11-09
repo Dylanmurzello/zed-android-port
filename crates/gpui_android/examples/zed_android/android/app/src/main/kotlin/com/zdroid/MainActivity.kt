@@ -2,7 +2,6 @@ package com.zdroid
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
@@ -51,6 +50,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -182,6 +182,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         installSplashOverlay()
         ZdRuntimeService.startIfBackgroundMode(this)
         watchDnsServers()
+        clipboard.addPrimaryClipChangedListener(clipboardImageListener)
         watchPowerSaveMode()
         // Reopening from Recents brings back the intent that started the
         // task, which may be an earlier "Open with".
@@ -362,27 +363,49 @@ class MainActivity : GameActivity(), ZdroidWindow {
         return if (mayHoldImage) description.timestamp else 0
     }
 
-    /// The clip's first image, or null. Read on a thread of its own with a time
-    /// limit: Rust waits here on the thread that draws, and a content URI can be
-    /// backed by anything. `android_main`'s stack is also short for all of
-    /// `ContentResolver` when this is called from deep in gpui's dispatch.
+    /// The clip's first image, or null. The read runs on a thread of its own,
+    /// since a content URI can be backed by anything, and is kept per clip: the
+    /// first ask waits a short while for it, later asks return what it found,
+    /// and `clipboardImageListener` starts it ahead of a paste. Rust waits here
+    /// on the thread that draws. `android_main`'s stack is also short for all
+    /// of `ContentResolver` when this is called from deep in gpui's dispatch.
     @Suppress("unused") // called from Rust via JNI
     fun readClipboardImage(): ClipboardImage? {
-        val clip = clipboard.primaryClip ?: return null
-        val uris = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
-        if (uris.isEmpty()) return null
-        val read = FutureTask { firstImage(uris) }
-        Thread(read, "zdroid_clipboard").apply { isDaemon = true }.start()
+        val timestamp = clipboardImageTimestamp()
+        if (timestamp == 0L) return null
+        val read = clipboardImageRead(timestamp) ?: return null
         return try {
             read.get(CLIPBOARD_IMAGE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (error: ExecutionException) {
             Log.w(TAG, "couldn't read an image from the clipboard", error)
             null
         } catch (error: TimeoutException) {
-            read.cancel(true)
-            Log.w(TAG, "reading an image from the clipboard took too long", error)
+            Log.i(TAG, "the clipboard's image isn't read yet; pasting without it")
             null
         }
+    }
+
+    /// Reading a clip is what shows Android's "pasted from" toast, so the read
+    /// starts early only for a clip set while Zdroid has focus, which is a copy
+    /// within Zdroid, and not at every return to the app.
+    private val clipboardImageListener = ClipboardManager.OnPrimaryClipChangedListener {
+        val timestamp = clipboardImageTimestamp()
+        if (timestamp != 0L) clipboardImageRead(timestamp)
+    }
+
+    private var clipboardImageRead: Pair<Long, Future<ClipboardImage?>>? = null
+
+    /// The read of the clip set at `timestamp`, started if there is none.
+    @Synchronized
+    private fun clipboardImageRead(timestamp: Long): Future<ClipboardImage?>? {
+        clipboardImageRead?.let { (readAt, read) -> if (readAt == timestamp) return read }
+        val clip = clipboard.primaryClip ?: return null
+        val uris = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+        if (uris.isEmpty()) return null
+        val read = FutureTask { firstImage(uris) }
+        Thread(read, "zdroid_clipboard").apply { isDaemon = true }.start()
+        clipboardImageRead = timestamp to read
+        return read
     }
 
     private fun firstImage(uris: List<Uri>): ClipboardImage? {
@@ -472,11 +495,12 @@ class MainActivity : GameActivity(), ZdroidWindow {
 
     /// Zed's "Reveal in File Manager". Android can't point a file manager at one
     /// file, so this opens the folder that holds it in Android's Files app.
+    /// Showing a folder needs no write, so the grant is read-only.
     @Suppress("unused") // called from Rust via JNI
     fun revealInFiles(path: String) {
         runOnUiThread {
             val file = File(path)
-            viewDocument(if (file.isDirectory) file else file.parentFile ?: file)
+            viewDocument(if (file.isDirectory) file else file.parentFile ?: file, allowWrite = false)
         }
     }
 
@@ -485,10 +509,10 @@ class MainActivity : GameActivity(), ZdroidWindow {
     /// writing if the file can be written.
     @Suppress("unused") // called from Rust via JNI
     fun openWithSystem(path: String) {
-        runOnUiThread { viewDocument(File(path)) }
+        runOnUiThread { viewDocument(File(path), allowWrite = true) }
     }
 
-    private fun viewDocument(file: File) {
+    private fun viewDocument(file: File, allowWrite: Boolean) {
         val uri = documentUri(file)
         if (uri == null || !file.exists()) {
             Toast.makeText(this, "Other apps can't open ${file.path}", Toast.LENGTH_LONG).show()
@@ -497,7 +521,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         // The provider's type for a file it can't identify, which almost no app
         // accepts, so such a file gets Android's full list of apps instead.
         val type = contentResolver.getType(uri)?.takeUnless { it == "application/octet-stream" }
-        val write = if (file.canWrite()) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0
+        val write = if (allowWrite && file.canWrite()) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, type ?: "*/*")
             .addFlags(
@@ -558,36 +582,10 @@ class MainActivity : GameActivity(), ZdroidWindow {
         if (Environment.isExternalStorageManager()) return
         val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) return
-        prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
-        requestAllFilesAccess()
-    }
-
-    /// Android's own Clear storage for this app: deletes all of its data and
-    /// ends the process. Backs the clean start that an install from before
-    /// 0.10 needs.
-    @Suppress("unused") // called from Rust via JNI
-    fun clearAppData(): Boolean {
-        val activityManager = getSystemService(ActivityManager::class.java) ?: return false
-        return activityManager.clearApplicationUserData()
-    }
-
-    /// Opens the home folder, `ZedDocumentsProvider`'s root, in Android's
-    /// Files app, where folders can be copied to shared storage.
-    @Suppress("unused") // called from Rust via JNI
-    fun openHomeInFiles(): Boolean {
-        val root = DocumentsContract.buildRootUri(
-            DOCUMENTS_AUTHORITY,
-            File(filesDir, "home").absolutePath,
-        )
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(root, DocumentsContract.Root.MIME_TYPE_ITEM)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        return try {
-            startActivity(intent)
-            true
-        } catch (error: ActivityNotFoundException) {
-            Log.w(TAG, "no app opens the documents provider's root", error)
-            false
+        // Marked once the page has opened, not before: a launch that can't
+        // open it asks again next time.
+        if (requestAllFilesAccess()) {
+            prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
         }
     }
 
@@ -596,17 +594,23 @@ class MainActivity : GameActivity(), ZdroidWindow {
     @Suppress("unused")
     fun requestAllFilesAccess(): Boolean {
         if (Environment.isExternalStorageManager()) return true
+        // In a task of its own: this Activity is singleTask, so a page started
+        // in its task is finished when the launcher icon brings Zdroid back,
+        // before the user has reached the toggle.
         val direct = Intent(
             Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
             Uri.parse("package:$packageName"),
-        )
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return try {
             startActivity(direct)
             true
         } catch (t: Throwable) {
             Log.w(TAG, "all files access screen unavailable; opening the list", t)
             try {
-                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
                 true
             } catch (inner: Throwable) {
                 Log.w(TAG, "all files access settings unavailable", inner)
@@ -837,6 +841,14 @@ class MainActivity : GameActivity(), ZdroidWindow {
         return applied
     }
 
+    /// Quit: stops the service whatever Keep Running in Background says, so
+    /// the exit leaves no start intent that Android would deliver to a
+    /// recreated service with no app behind it.
+    @Suppress("unused") // called from Rust via JNI
+    fun stopRuntimeService() {
+        ZdRuntimeService.stop(this)
+    }
+
     private var notificationPermissionRequested: Boolean = false
 
     /// Android 13+ posts no notification, the foreground service's
@@ -913,6 +925,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         getSystemService(InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         contentResolver.unregisterContentObserver(showImeWithHardKeyboardObserver)
+        clipboard.removePrimaryClipChangedListener(clipboardImageListener)
         // A swiped-away task reaches here with the Rust side still alive:
         // end the children it spawned before the process goes, then drop
         // the runtime service so no orphan notification lingers.
@@ -921,7 +934,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         } catch (t: Throwable) {
             Log.w(TAG_RUNTIME, "nativeBeforeProcessExit failed", t)
         }
-        stopService(Intent(this, ZdRuntimeService::class.java))
+        ZdRuntimeService.stop(this)
         super.onDestroy()
         Process.killProcess(Process.myPid())
     }
@@ -942,7 +955,7 @@ class MainActivity : GameActivity(), ZdroidWindow {
         private const val REQ_INSTALL_PERMISSION = 0xA4
         private const val REQ_POST_NOTIFICATIONS = 0xA5
         private const val DOCUMENTS_AUTHORITY = "com.zdroid.documents"
-        private const val CLIPBOARD_IMAGE_TIMEOUT_MS = 2000L
+        private const val CLIPBOARD_IMAGE_TIMEOUT_MS = 1000L
         private const val CLIPBOARD_IMAGE_MAX_BYTES = 32 * 1024 * 1024
         private const val PREFS = "zdroid"
         private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"

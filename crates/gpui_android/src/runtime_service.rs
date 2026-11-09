@@ -107,6 +107,11 @@ fn reconcile(android_app: &AndroidApp) {
     let now = Instant::now();
     let keep_awake = KEEP_AWAKE.load(Ordering::Acquire);
     let mut state = service_state();
+    // Checked again under the lock: a quit that set the flag while this scan
+    // read the process table has stopped the service already.
+    if SHUTTING_DOWN.load(Ordering::Acquire) {
+        return;
+    }
     let was_active = state.pushed.is_some_and(|(active, _)| active);
     let active = if descendants().iter().any(Process::is_live) {
         state.idle_since = None;
@@ -141,9 +146,10 @@ fn reconcile(android_app: &AndroidApp) {
 pub(crate) fn shutdown(android_app: &AndroidApp) {
     SHUTTING_DOWN.store(true, Ordering::Release);
     let mut state = service_state();
-    if state.pushed.is_some_and(|(active, _)| active)
-        && let Err(error) = set_runtime_service(android_app, false, false)
-    {
+    // Not a push of `active = false`: with Keep Running in Background on
+    // that starts the service again, and a start intent Android hasn't
+    // delivered yet outlives `exit(0)` as a service with no app behind it.
+    if let Err(error) = stop_runtime_service(android_app) {
         log::warn!("runtime_service: stop at quit: {error:#}");
     }
     state.pushed = Some((false, false));
@@ -266,6 +272,15 @@ fn set_runtime_service(android_app: &AndroidApp, active: bool, keep_awake: bool)
     })?;
     anyhow::ensure!(applied, "Android refused to start the runtime service");
     Ok(())
+}
+
+/// `MainActivity.stopRuntimeService()`.
+fn stop_runtime_service(android_app: &AndroidApp) -> Result<()> {
+    crate::jni_env::with_activity(android_app, |env, activity| {
+        env.call_method(activity, "stopRuntimeService", "()V", &[])
+            .context("call MainActivity.stopRuntimeService")?;
+        Ok(())
+    })
 }
 
 /// Whether the user already exempted the app from battery optimization.

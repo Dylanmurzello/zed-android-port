@@ -272,8 +272,8 @@ android {
         // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE);
         // see AndroidManifest.xml.
         targetSdk = 35
-        versionCode = 74
-        versionName = "0.15.1"
+        versionCode = 75
+        versionName = "0.16.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

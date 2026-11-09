@@ -152,6 +152,10 @@ pub(crate) struct AndroidWindowState {
     /// with no underline.
     pub(crate) ime_composition_start: Option<usize>,
     pub(crate) ime_composition_text: Option<String>,
+    /// The selection the IME set with `setSelection`, in UTF-16 offsets, kept
+    /// for its next edit: `BaseInputConnection` applies the call to its own
+    /// Editable only, and gpui's input handler has no selection setter.
+    pub(crate) ime_selection: Option<std::ops::Range<usize>>,
     /// The accent a dead key on a physical keyboard is showing as a composition,
     /// for the next key to combine with.
     pub(crate) pending_accent: Option<char>,
@@ -688,6 +692,7 @@ impl AndroidWindow {
             extra_window_id: None,
             ime_composition_start: None,
             ime_composition_text: None,
+            ime_selection: None,
             pending_accent: None,
             ime_currently_visible: false,
             last_ime_target_kind: None,

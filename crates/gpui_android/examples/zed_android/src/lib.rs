@@ -612,6 +612,8 @@ fn android_main(app: AndroidApp) {
         Err(err) => log::warn!("zed_android: engine loader path unavailable: {err:#}"),
     }
 
+    runtime_setup::sweep_previous_runtimes(&data_path);
+
     // First launch: extract the bundled Ubuntu image now, while the splash
     // is up. The outcome reaches the workspace as a notification (a failure
     // with Retry, or the essentials step starting).
@@ -628,6 +630,10 @@ fn android_main(app: AndroidApp) {
         zdroid_runtime::install::reseed_timezone(&runtime, &zdroid_runtime::timezone())
     {
         log::warn!("zed_android: time zone seed failed: {err:#}");
+    }
+    // A rootfs installed before the links existed gets them now.
+    if let Err(err) = zdroid_runtime::install::link_home(&runtime) {
+        log::warn!("zed_android: linking the home folder failed: {err:#}");
     }
 
     // Populate <data>/files/zd-runtime/ with one symlink per program the
@@ -698,6 +704,56 @@ fn android_main(app: AndroidApp) {
     });
 }
 
+/// 0.4.0 and earlier kept credentials in zed_credentials_provider's plaintext
+/// development file, since the Keystore wasn't wired up. Move any such entries
+/// into the Keystore, deleting the file only once every write succeeded.
+fn migrate_development_credentials(cx: &mut App) {
+    let path = paths::config_dir().join("development_credentials");
+    let json = match std::fs::read(&path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            log::warn!("zed_android: can't read {}: {error}", path.display());
+            return;
+        }
+    };
+    let credentials: std::collections::HashMap<String, (String, Vec<u8>)> =
+        match serde_json::from_slice(&json) {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                log::warn!("zed_android: can't parse {}: {error}", path.display());
+                return;
+            }
+        };
+    let writes = credentials
+        .iter()
+        .map(|(url, (username, password))| cx.write_credentials(url, username, password))
+        .collect::<Vec<_>>();
+    cx.background_spawn(async move {
+        for write in writes {
+            write.await?;
+        }
+        std::fs::remove_file(&path)?;
+        info!(
+            "zed_android: moved {} credentials into the Keystore",
+            credentials.len()
+        );
+        anyhow::Ok(())
+    })
+    .detach_and_log_err(cx);
+}
+
+/// Whether a `terminal.shell` names a program under the app files dir: what
+/// 0.3.x and 0.4.0 wrote into settings.json, and what no user would type.
+fn is_runtime_shell_leftover(shell: &settings::Shell, data_path: &Path) -> bool {
+    let program = match shell {
+        settings::Shell::Program(program) => program,
+        settings::Shell::WithArguments { program, .. } => program,
+        _ => return false,
+    };
+    Path::new(program).starts_with(data_path)
+}
+
 fn boot(
     cx: &mut App,
     data_path: &std::path::Path,
@@ -745,6 +801,7 @@ fn boot(
     gpui_android::storage::setup_user_symlinks(&home);
 
     release_channel::init(zed_release_version(), cx);
+    migrate_development_credentials(cx);
     info!("zed_android: release_channel init");
 
     info!("zed_android: settings + theme + editor init");
@@ -972,6 +1029,21 @@ fn boot(
     // (`env: '.../usr/bin/bash': No such file or directory`). Defaults
     // stay on the device and rank below settings.json, so remote
     // terminals fall back to the remote's own shell.
+    // Telemetry is off by default: this is a fork, and Zed's server rejects
+    // events without the build-time checksum seed, so sending them would only
+    // move the data off the device for nothing. The Privacy toggles stay.
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            // Zed's default settings always carry a telemetry block.
+            if let Some(telemetry) = defaults.telemetry.as_mut() {
+                telemetry.metrics = Some(false);
+                telemetry.diagnostics = Some(false);
+            } else {
+                log::warn!("zed_android: no telemetry block in the default settings");
+            }
+        });
+    });
+
     let terminal_shell = Runtime::new(data_path).terminal_shell();
     let shell_path = terminal_shell.program;
     if shell_path.is_file() {
@@ -994,6 +1066,33 @@ fn boot(
             "zed_android: default terminal.shell -> {} {shell_args}",
             shell_path.display()
         );
+
+        // 0.3.x and 0.4.0 wrote their shell into settings.json, where it
+        // outranks this default and reaches SSH remotes. Any program under
+        // the app files dir is such a leftover: a shell of the user's own
+        // choice is a path inside the rootfs.
+        let user_has_leftover_shell = cx
+            .global::<SettingsStore>()
+            .raw_user_settings()
+            .and_then(|user_settings| user_settings.content.terminal.as_ref())
+            .and_then(|terminal| terminal.project.shell.as_ref())
+            .is_some_and(|shell| is_runtime_shell_leftover(shell, data_path));
+        if user_has_leftover_shell {
+            let data_path = data_path.to_path_buf();
+            cx.global::<SettingsStore>()
+                .update_settings_file(fs.clone(), move |content, _cx| {
+                    if let Some(terminal) = content.terminal.as_mut()
+                        && terminal
+                            .project
+                            .shell
+                            .as_ref()
+                            .is_some_and(|shell| is_runtime_shell_leftover(shell, &data_path))
+                    {
+                        terminal.project.shell = None;
+                    }
+                });
+            info!("zed_android: removing an earlier release's terminal.shell from settings.json");
+        }
     } else {
         log::warn!(
             "zed_android: loader link {} missing; leaving terminal.shell as-is",
@@ -1149,7 +1248,6 @@ fn boot(
     project::agent_server_store::AllAgentServersSettings::register(cx);
     onboarding::init(cx);
     menu_bar::register_actions(cx);
-    let previous_runtime = matches!(boot_setup, runtime_setup::BootSetup::PreviousRuntime);
     runtime_setup::register(boot_setup, cx);
     engine_self_test::register(cx);
     runtime_background::register(cx);
@@ -1232,13 +1330,6 @@ fn boot(
     let path_prompts = gpui_android::path_prompts();
     cx.spawn(async move |cx| answer_path_prompts(path_prompts, cx).await)
         .detach();
-
-    // An earlier release's data: no session is restored, and the only way
-    // on is clearing it.
-    if previous_runtime {
-        runtime_setup::open_clean_start(app_state.clone(), cx);
-        return Ok(());
-    }
 
     let restore_task = cx
         .spawn({

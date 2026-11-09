@@ -143,6 +143,10 @@ object NativeBridge {
     /// edits. Routes to `unmark_text` on the target window.
     external fun nativeImeFinishComposingText(windowId: Long)
 
+    /// IME `setSelection(start, end)`: the selection the IME's next edit is
+    /// relative to.
+    external fun nativeImeSetSelection(windowId: Long, start: Int, end: Int)
+
     /// IME `deleteSurroundingText(before, after)`. Backspace / delete
     /// spans a range around the cursor of the target window.
     external fun nativeImeDeleteSurroundingText(

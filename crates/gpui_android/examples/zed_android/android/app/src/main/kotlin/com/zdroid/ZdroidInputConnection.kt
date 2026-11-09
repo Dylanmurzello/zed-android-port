@@ -133,6 +133,14 @@ class ZdroidInputConnection(hostView: View, private val host: ImeHost) :
         return true
     }
 
+    /// `BaseInputConnection` would move only its own Editable's selection, so
+    /// the editor learns the IME's view of it for the edit that follows.
+    override fun setSelection(start: Int, end: Int): Boolean {
+        debugLog { "IC.setSelection w=$windowId $start..$end" }
+        NativeBridge.nativeImeSetSelection(windowId, start, end)
+        return true
+    }
+
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         debugLog { "IC.deleteSurroundingText w=$windowId before=$beforeLength after=$afterLength" }
         NativeBridge.nativeImeDeleteSurroundingText(windowId, beforeLength, afterLength)

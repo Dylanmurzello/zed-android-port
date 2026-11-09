@@ -45,11 +45,12 @@ Read that list. Note user-visible behavior changes vs internal/refactor commits.
 ```sh
 cd crates/gpui_android/examples/zed_android
 export ANDROID_NDK_HOME=/opt/homebrew/share/android-commandlinetools/ndk/27.0.12077973
-RUSTFLAGS="-C target-feature=+fp16" \
-  cargo ndk -t arm64-v8a --platform 26 -o android/app/src/main/jniLibs build --release
+cargo ndk -t arm64-v8a --platform 31 -o android/app/src/main/jniLibs build --release
 cd android
 gradle clean assembleRelease
 ```
+
+Two variables must stay unset in the shell that builds. `RUSTFLAGS`: the CPU and size flags live in the app's `.cargo/config.toml`, and an environment `RUSTFLAGS` replaces that table entirely instead of adding to it. `ZDROID_RELEASE_REPO`: the in-app updater's repository is compiled in and defaults to this repository; the variable exists for forks that sign with their own key.
 
 APK lands at `app/build/outputs/apk/release/app-release.apk`. ~9 minutes for a clean release build. Always `clean` for a release: an incremental package can keep the dead bytes of a replaced native library inside the zip (a debug APK measured 257 MB with 148 MB of listed entries), and `clean` also refetches the rootfs image into `build/rootfs/` (33 MB, SHA-256 checked). The gradle tasks need `ANDROID_NDK_HOME` exported, not only prefixed to the cargo line.
 
