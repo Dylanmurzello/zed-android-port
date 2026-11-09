@@ -34,14 +34,17 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 ## 0.16.0 device checks
 
-0.16.0 merges Dylan's 0.4.3, which moves the guest's home back to the image's `/root`. Check, updating over 0.15.1 on the tablet:
+0.16.0 merges Dylan's 0.4.3, which moves the guest's home back to the image's `/root`. Checked on the tablet on 2026-11-08, updating over 0.15.1:
 
-- `echo $HOME` in the terminal prints `/root`, and `~/projects`, `~/storage`, `~/received`, `~/.ssh`, `~/.claude`, `~/.claude.json` and `~/.codex` are links into `/data/user/0/com.zdroid/files/home` (only the ones that folder has).
-- An SSH project opens without a new password or host key prompt, `git config user.email` in a local project prints the address set before the update, and Claude and Codex threads start without signing in again.
-- After `sed -i 's#^\(root:[^:]*:0:0:[^:]*:\)[^:]*#\1/root#' /etc/passwd`, `getent passwd root` shows `/root`.
-- **Settings → Android → Reset Runtime** keeps `~/.ssh` and a file created in `/root`.
-- Quit from the menu: the runtime notification goes at once, and no `ZdRuntimeService` start shows in logcat afterwards.
-- Copy an image in Zdroid and paste it into the agent's message box: it attaches within a second.
+- Passed: `echo $HOME` prints `/root`, and `~/projects`, `~/storage`, `~/received`, `~/.ssh`, `~/.claude`, `~/.claude.json` and `~/.codex` link into `/data/user/0/com.zdroid/files/home`. The SSH project reconnected at launch without a prompt, and the Codex login (`~/.codex/auth.json`) is there. After `sed -i 's#^\(root:[^:]*:0:0:[^:]*:\)[^:]*#\1/root#' /etc/passwd`, `getent passwd root` shows `/root`. **Settings → Android → Reset Runtime** kept `/root` with its links and a file created there, and Install Essentials then installed git, the SSH client and the CA certificates. Quit from the menu stopped the service and removed the notification 0.2 s after the tap, and the service didn't start again.
+- Not applicable: the old home had no `.gitconfig`, so `link_home` had no include to add.
+- Still to check: a Claude and a Codex thread start without signing in again, and an image copied in Zdroid attaches to the agent's message box within a second.
+
+Found while checking, none of them new in 0.16.0:
+
+- **Reset Runtime's confirmation opens behind the Settings window.** The Settings page's Reset button sends the action to the main window (`dispatch_app_action` in `settings_ui`'s `page_data/android.rs`, the same since 0.10.0). The main window draws gpui's prompt under the Settings window in front of it, so the button seems to do nothing until Settings is minimized or closed. Activating the main window first won't help: on Android, `activate()` only brings extra windows forward.
+- **A reset doesn't seed a `/root` from 0.10 to 0.15.** `install_inner` writes `/root/.lldbinit` and creates `~/.cargo/bin` and `~/.local/bin` in the new tree, then moves the old `/root` over it. A `/root` from 0.10 to 0.15, when it wasn't the home, never had them and still doesn't after a reset, so LLDB stops on the engine's `SIGSYS`. Adding the missing ones in `link_home`, which runs at every boot, would cover updates and resets alike. It's Dylan's code, so send the change to him first.
+- **After a reset, the guest's clock is UTC until tzdata is installed.** The base image has no tzdata and Install Essentials doesn't install it, so `/etc/localtime` points at a missing file (`seed_timezone`). `apt-get install tzdata` fixes it.
 
 ## 0.14.1 device checks
 
