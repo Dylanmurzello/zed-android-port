@@ -578,6 +578,13 @@ fn chroot(regs: &[u64; 31]) -> u64 {
         &absolute[..len]
     };
     let host_len = match translate(translator, path, host, link, target) {
+        // The translation keeps a trailing slash, which the chroot utility's
+        // `.` has once anchored (`<cwd>/.`). The new root is stored, and
+        // handed to exec'd programs, without it.
+        Ok(Translated::Host(len)) if len > 1 && host[len - 1] == b'/' => {
+            host[len - 1] = 0;
+            len - 1
+        }
         Ok(Translated::Host(len)) => len,
         Ok(_) => return sys::neg_errno(sys::EPERM),
         Err(errno) => return sys::neg_errno(errno),
