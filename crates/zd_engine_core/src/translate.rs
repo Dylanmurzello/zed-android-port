@@ -102,12 +102,20 @@ impl<'a> Translator<'a> {
             None => (self.rootfs, 0),
         };
         let rest_len = len - rest_start;
-        let total = prefix.len() + rest_len;
+        // A trailing `/` or `/.` makes the kernel follow a final symlink and
+        // require a directory, even in calls that otherwise act on the link
+        // itself (`lstat`, `unlink`, `rename`). Clamping rebuilds the path
+        // from its components and drops it, so it is put back.
+        let slash = usize::from(len > 1 && names_directory(guest));
+        let total = prefix.len() + rest_len + slash;
         if total + 1 > out.len() {
             return Err(TranslateError::TooLong);
         }
         out.copy_within(rest_start..len, prefix.len());
         out[..prefix.len()].copy_from_slice(prefix);
+        if slash == 1 {
+            out[total - 1] = b'/';
+        }
         out[total] = 0;
         Ok(Translated::Host(total))
     }
@@ -262,6 +270,12 @@ enum Tree<'a> {
 enum ProcFile {
     Exe,
     Auxv,
+}
+
+/// Whether a path ends in `/` or `/.`, which names its final component as
+/// a directory.
+fn names_directory(path: &[u8]) -> bool {
+    path.ends_with(b"/") || path.ends_with(b"/.")
 }
 
 /// `/proc/<who>/exe` and `/proc/<who>/auxv`, the two per-process files
@@ -424,6 +438,20 @@ mod tests {
         assert_eq!(to_host("/"), "/data/user/0/com.zdroid/files/rootfs");
         assert_eq!(to_host("/../etc/passwd"), "/data/user/0/com.zdroid/files/rootfs/etc/passwd");
         assert_eq!(to_host("/usr/../etc"), "/data/user/0/com.zdroid/files/rootfs/usr/../etc");
+    }
+
+    #[test]
+    fn trailing_slash_kept() {
+        // The kernel then follows a final symlink, as Linux does for the
+        // guest's own path.
+        assert_eq!(to_host("/root/projects/"), "/data/user/0/com.zdroid/files/rootfs/root/projects/");
+        assert_eq!(to_host("/root/projects/."), "/data/user/0/com.zdroid/files/rootfs/root/projects/");
+        assert_eq!(to_host("/root/projects//"), "/data/user/0/com.zdroid/files/rootfs/root/projects/");
+        assert_eq!(to_host("/tmp/"), "/data/user/0/com.zdroid/files/tmp/");
+        assert_eq!(to_host("/sdcard/Download/"), "/sdcard/Download/");
+        assert_eq!(to_host("/root/a/../"), "/data/user/0/com.zdroid/files/rootfs/root/a/../");
+        assert_eq!(to_host("/root/projects"), "/data/user/0/com.zdroid/files/rootfs/root/projects");
+        assert_eq!(to_host("//"), "/data/user/0/com.zdroid/files/rootfs");
     }
 
     #[test]
