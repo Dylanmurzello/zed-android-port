@@ -57,9 +57,9 @@ pub(super) fn android_page() -> SettingsPage {
             SettingsPageItem::ActionLink(ActionLink {
                 title: "Install Essentials".into(),
                 description: Some(
-                    "Install git, the SSH client and the CA certificates with apt, which the \
-                     base image lacks. This runs on first launch; use it if that failed \
-                     without a network, or after a reset."
+                    "Install git, the SSH client, the CA certificates and time zone data with \
+                     apt, which the base image lacks. This runs on first launch; use it if \
+                     that failed without a network, or after a reset."
                         .into(),
                 ),
                 button_text: "Install".into(),

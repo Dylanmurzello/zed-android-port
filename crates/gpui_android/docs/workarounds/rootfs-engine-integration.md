@@ -45,7 +45,7 @@ writeup is the editor side.
   image has no tzdata, and without the link the first `apt install` that
   pulls it in stops at an interactive time zone menu), the debugger
   configs and the binding directory chains, then a two-rename swap. Seconds on a tablet, no network. The essentials step (`apt-get
-  install ca-certificates git`, which the base image lacks) runs in the
+  install ca-certificates git openssh-client tzdata`, which the base image lacks) runs in the
   background afterwards with a notification; it is the one network-bound
   part and has a button on the settings page for a retry.
 - **The farm.** `<data>/files/zd-runtime/<name> -> ../bin/zdload` for

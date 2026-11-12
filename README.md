@@ -122,7 +122,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/D
 ### First launch
 
 1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid; turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
-2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
+2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client, the CA certificates and time zone data are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
 3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; **Settings → Android → Allow Background Activity** asks for the exemption.
 
 ### Setting up your shell environment
