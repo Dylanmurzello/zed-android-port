@@ -7,8 +7,9 @@ use gpui::App;
 
 use crate::{ActionLink, SettingField, SettingItem, SettingsPage, SettingsPageItem, USER};
 
-/// Dispatches an action the app registers on workspaces. The Settings window
-/// has no workspace, so the action goes to the active one.
+/// Dispatches one of the app's runtime actions in the workspace's window, since
+/// the Settings window has none. `ResetRuntime` still asks for confirmation in
+/// the active window, which is Settings when its button is pressed.
 fn dispatch_app_action(name: &'static str, cx: &mut App) {
     workspace::with_active_or_new_workspace(cx, move |_workspace, window, cx| {
         match cx.build_action(name, None) {
