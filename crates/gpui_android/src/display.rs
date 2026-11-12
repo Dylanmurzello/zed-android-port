@@ -22,7 +22,7 @@ impl PlatformDisplay for AndroidDisplay {
 
     fn bounds(&self) -> Bounds<Pixels> {
         // A nominal size: gpui only uses it to center new windows, and
-        // `compute_launch_bounds` centers extra windows itself.
+        // `MainActivity.launchExtraWindow` centers extra windows itself.
         Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)))
     }
 

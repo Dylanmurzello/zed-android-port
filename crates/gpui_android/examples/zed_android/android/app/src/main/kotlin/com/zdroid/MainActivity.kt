@@ -39,6 +39,7 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -310,22 +311,47 @@ class MainActivity : GameActivity(), ZdroidWindow {
         refreshPhysicalKeyboard()
     }
 
-    /// Starts the Activity that hosts an extra gpui window, with `bounds` as
-    /// its freeform window's rectangle if it has any. `documentLaunchMode` in
-    /// the manifest gives it its own task; adding the matching intent flags
-    /// here sent this Activity to the background under DeX.
+    /// Starts the Activity that hosts an extra gpui window, as a freeform
+    /// window of `width` by `height` pixels if both are positive.
+    /// `documentLaunchMode` in the manifest gives it its own task; adding the
+    /// matching intent flags here sent this Activity to the background under
+    /// DeX.
     @Suppress("unused") // called from Rust via JNI
-    fun launchExtraWindow(windowId: Long, left: Int, top: Int, right: Int, bottom: Int) {
+    fun launchExtraWindow(windowId: Long, width: Int, height: Int) {
         val launch = Intent(this, ExtraWindowActivity::class.java)
             .putExtra(ExtraWindowActivity.EXTRA_WINDOW_ID, windowId)
-        val options = if (right > left && bottom > top) {
+        val options = if (width > 0 && height > 0) {
             ActivityOptions.makeBasic()
-                .setLaunchBounds(Rect(left, top, right, bottom))
+                .setLaunchBounds(freeformWindowBounds(width, height))
                 .toBundle()
         } else {
             null
         }
         startActivity(launch, options)
+    }
+
+    /// A rectangle of at most `width` by `height`, centered in the part of
+    /// the display the system bars and cutout leave free. Android moves a
+    /// freeform window that doesn't fit there below the status bar without
+    /// shrinking it, so a window as tall as the screen lost its bottom edge,
+    /// and Zed's status bar with it (One UI outside DeX, 2026-10-31).
+    private fun freeformWindowBounds(width: Int, height: Int): Rect {
+        val metrics = windowManager.maximumWindowMetrics
+        val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+            WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+        )
+        val display = metrics.bounds
+        val area = Rect(
+            display.left + insets.left,
+            display.top + insets.top,
+            display.right - insets.right,
+            display.bottom - insets.bottom,
+        )
+        val fittedWidth = width.coerceAtMost(area.width())
+        val fittedHeight = height.coerceAtMost(area.height())
+        val left = area.left + (area.width() - fittedWidth) / 2
+        val top = area.top + (area.height() - fittedHeight) / 2
+        return Rect(left, top, left + fittedWidth, top + fittedHeight)
     }
 
     /// `ViewConfiguration`'s gesture values for gpui's touch recognizer:

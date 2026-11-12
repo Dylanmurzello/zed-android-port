@@ -204,15 +204,13 @@ pub(crate) fn unmark_window_registered(window_id: u64) {
     }
 }
 
-/// Optional launch bounds (in device pixels) the OS uses as the initial
-/// freeform window rect. `None` lets the system pick — typically a centered
-/// default. Passed straight through to `ActivityOptions.setLaunchBounds`.
+/// The size in device pixels to ask for as an extra window's freeform
+/// rectangle; `MainActivity.launchExtraWindow` fits it into the screen and
+/// centers it. `None` lets the system pick.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct LaunchBounds {
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
+pub(crate) struct LaunchSize {
+    pub(crate) width: i32,
+    pub(crate) height: i32,
 }
 
 /// Block the game thread until the `ExtraWindowActivity` for `window_id` has
@@ -232,7 +230,7 @@ pub(crate) struct LaunchBounds {
 pub(crate) fn create_extra_window_blocking(
     android_app: &AndroidApp,
     window_id: u64,
-    bounds: Option<LaunchBounds>,
+    size: Option<LaunchSize>,
     mut wait: impl FnMut(Duration) -> bool,
 ) -> Result<NativeWindow> {
     let (tx, rx) = oneshot::channel();
@@ -244,7 +242,7 @@ pub(crate) fn create_extra_window_blocking(
         }
         map.insert(window_id, tx);
     }
-    if let Err(err) = launch_extra_activity(android_app, window_id, bounds) {
+    if let Err(err) = launch_extra_activity(android_app, window_id, size) {
         pending_table().as_mut().and_then(|m| m.remove(&window_id));
         return Err(err.context("ExtraWindowActivity launch failed"));
     }
@@ -343,25 +341,21 @@ pub(crate) fn finish_extra_activity(android_app: &AndroidApp, window_id: u64) {
 fn launch_extra_activity(
     android_app: &AndroidApp,
     window_id: u64,
-    bounds: Option<LaunchBounds>,
+    size: Option<LaunchSize>,
 ) -> Result<()> {
-    let bounds = bounds.unwrap_or(LaunchBounds {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let size = size.unwrap_or(LaunchSize {
+        width: 0,
+        height: 0,
     });
     crate::jni_env::with_activity(android_app, |env, activity| {
         env.call_method(
             activity,
             "launchExtraWindow",
-            "(JIIII)V",
+            "(JII)V",
             &[
                 JValue::Long(window_id as i64),
-                JValue::Int(bounds.left),
-                JValue::Int(bounds.top),
-                JValue::Int(bounds.right),
-                JValue::Int(bounds.bottom),
+                JValue::Int(size.width),
+                JValue::Int(size.height),
             ],
         )?;
         Ok(())
