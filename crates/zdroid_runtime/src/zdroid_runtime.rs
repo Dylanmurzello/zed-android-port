@@ -11,6 +11,7 @@
 //! - [`install`]: extraction of the bundled image, seeds, the optional
 //!   essentials step.
 //! - [`env`]: the baseline Zed-process environment.
+//! - [`login_path`]: root's login shell PATH for the editor's guest children.
 //! - [`progress`]: [`ProgressSink`] for long operations.
 
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use std::sync::{OnceLock, RwLock};
 
 pub mod env;
 pub mod install;
+pub mod login_path;
 pub mod progress;
 pub mod runtime;
 

@@ -1,8 +1,9 @@
 //! The Android code that Zed's crates call from small `cfg(target_os =
 //! "android")` blocks: process spawning (`gpui_util`, `util::command`), path
-//! spelling (`fs`) and a path lookup fallback (`project`). Keeping it here
-//! leaves one call in each of those crates, which are merged at every Zed
-//! sync.
+//! spelling (`fs`), a path lookup fallback and the project environment
+//! (`project`), and the program Zed's shell capture runs (`util`). Keeping
+//! it here leaves one call in each of those crates, which are merged at
+//! every Zed sync.
 //!
 //! The app registers the runtime's paths at startup. A second registration,
 //! when the Activity is recreated, is ignored.
@@ -12,6 +13,10 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use futures::FutureExt as _;
+use futures::channel::oneshot;
+use futures::future::Shared;
+
 /// Invoked by short name: the kernel's PATH lookup finds the
 /// `<files>/bin/zdload` link to the engine loader, so this crate needs no
 /// app-package paths.
@@ -19,6 +24,8 @@ const BRIDGE_PROGRAM: &str = zd_engine_core::LOADER_LINK_NAME;
 
 static ENVIRONMENT_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static FILES_DIR_SPELLINGS: OnceLock<Option<(PathBuf, PathBuf)>> = OnceLock::new();
+static ZED_HELPER: OnceLock<PathBuf> = OnceLock::new();
+static LOGIN_ENVIRONMENT: OnceLock<Shared<oneshot::Receiver<()>>> = OnceLock::new();
 
 fn register<T>(slot: &OnceLock<T>, value: T, name: &str) {
     if slot.set(value).is_err() {
@@ -38,6 +45,33 @@ pub fn register_environment_root(root: PathBuf) {
 pub fn register_files_dir_spellings(editor: PathBuf, kernel: PathBuf) {
     let spellings = (editor != kernel).then_some((editor, kernel));
     register(&FILES_DIR_SPELLINGS, spellings, "files dir spellings");
+}
+
+/// Registers the program that stands in for Zed's own executable where a
+/// guest program runs it: the app's is `app_process64`, which only Android's
+/// app launcher can start. Zed's shell capture runs it as `zed --printenv`.
+pub fn register_zed_helper(path: PathBuf) {
+    register(&ZED_HELPER, path, "Zed helper");
+}
+
+/// `util::get_shell_safe_zed_path` on Android.
+pub fn zed_helper() -> Option<&'static Path> {
+    ZED_HELPER.get().map(PathBuf::as_path)
+}
+
+/// Registers when the app has applied the login shell's environment, which
+/// it captures once at startup, as Zed's `main()` does.
+pub fn register_login_environment(loaded: oneshot::Receiver<()>) {
+    register(&LOGIN_ENVIRONMENT, loaded.shared(), "login environment");
+}
+
+/// `project::environment`'s directory environment on Android, which is the
+/// app's own: it waits for the login shell's, as desktop Zed waits for a
+/// login shell in the project's folder.
+pub async fn login_environment_loaded() {
+    if let Some(loaded) = LOGIN_ENVIRONMENT.get() {
+        loaded.clone().await.ok();
+    }
 }
 
 /// `path` with the kernel's spelling of the files dir replaced by the

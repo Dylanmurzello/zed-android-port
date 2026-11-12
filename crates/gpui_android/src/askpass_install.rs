@@ -14,6 +14,9 @@
 //! Unix socket the gpui process is listening on, read the password
 //! back, print it to stdout.
 //!
+//! It also stands in for `zed --printenv`, which Zed's login shell
+//! capture runs inside the shell (`zdroid_hooks::register_zed_helper`).
+//!
 //! It installs to `<data>/files/zed-askpass-helper`, which the runtime
 //! sees at the same path.
 //!

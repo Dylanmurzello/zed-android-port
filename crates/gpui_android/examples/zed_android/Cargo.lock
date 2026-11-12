@@ -15938,6 +15938,7 @@ version = "0.1.0"
 name = "zdroid_hooks"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "log",
  "zd_engine_core",
 ]
