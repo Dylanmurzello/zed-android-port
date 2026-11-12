@@ -24,11 +24,6 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 - **Restoring the last session picks the main window by timestamp.** gpui_android doesn't implement `Platform::window_stack`, so the restore in `lib.rs` takes the window whose workspace was saved last. That column has one-second precision, so two windows saved in the same second come back in no fixed order, and the main Activity can restore the other window's workspaces. The app restores only that one window, with all of its workspaces, so in DeX a second window doesn't come back after a force-stop, and Zed 1.28's fix for two windows on the same SSH host, ported in 0.17.0, only matters once more than one window is restored. Fix: implement `window_stack()` with the main window first, or persist the main window's id. Tablet check: in DeX, open a second workspace window, edit in both, force-stop and relaunch; the main window must come back with its own workspace.
 
-## Found during device checks
-
-- **Reset Runtime's confirmation opens behind the Settings window** (0.16.0). The Settings page's Reset button sends the action to the main window (`dispatch_app_action` in `settings_ui`'s `page_data/android.rs`, the same since 0.10.0). The main window draws gpui's prompt under the Settings window in front of it, so the button seems to do nothing until Settings is minimized or closed. Activating the main window first won't help: on Android, `activate()` only brings extra windows forward.
-- **After a reset, the guest's clock is UTC until tzdata is installed** (0.16.0). The base image has no tzdata and Install Essentials doesn't install it (`ESSENTIALS_SCRIPT` in `zdroid_runtime`'s `install.rs`), so `/etc/localtime` points at a missing file (`seed_timezone`). `apt-get install tzdata` fixes it.
-
 ## Open after the 2026-11 merge review
 
 - **Terminal touch scrolling moves by whole rows.** A finger drag on the terminal scrolls the grid a row per row of travel, because `Terminal::determine_scroll_lines` (`crates/terminal/src/terminal.rs`) turns pixels into whole lines. That reads as stepping next to the editor's pixel scrolling. A sub-row variant would keep a fractional offset in the terminal element and round it at paint. Deferred: correct as it is, and the editor's touch scrolling is where the time went.
@@ -37,9 +32,7 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 Seen on the tablet while testing 0.11.0, none of them caused by that release:
 
-- **A new window sits 45 px too low outside DeX (seen).** Ctrl+Shift+N asks for the whole screen and One UI's freeform mode places it at `[0,45][2960,1893]`, which hides its status bar. Dragging or maximizing it from the caption is the way out. `compute_launch_bounds` could leave room for the caption.
 - **Alt reads "option" in shortcut hints (seen).** `PlatformStyle::platform()` in `crates/ui` treats every OS it doesn't know as Mac, and `keybinding.rs` names Alt from it, so the command palette shows `ctrl-option-j`. gpui's own `display_modifiers` already says "alt" on Android. Changing `PlatformStyle` needs a look at its other uses.
-- **Edit → Paste goes to the center editor while the agent's message box has focus.** The app's menu bar (`menu_bar.rs`) sends every menu action to the active pane's active item and focuses that item first, so on 0.12.0 the text landed in the active tab's file, and nothing happened with an image viewer as the active tab. The keyboard and the command palette's `editor: paste` reach the message box. Zed's desktop `ApplicationMenu` dispatches to the focused element instead (`title_bar`'s `application_menu.rs`).
 
 Not checked on the tablet:
 
