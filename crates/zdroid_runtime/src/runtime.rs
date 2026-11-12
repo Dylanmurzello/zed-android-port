@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use zd_engine_core::{DEFAULT_GUEST_PATH, LIST_SEPARATOR, LOADER_LINK_NAME, env as engine_env};
+use zd_engine_core::{LIST_SEPARATOR, LOADER_LINK_NAME, env as engine_env};
 
 use crate::env::EnvOp;
 
@@ -179,12 +179,16 @@ impl Runtime {
 
     /// Variables applied to the guest environment only.
     pub fn guest_env_spec(&self) -> String {
+        self.guest_env_spec_with_path(&self.guest_path())
+    }
+
+    pub(crate) fn guest_env_spec_with_path(&self, path: &str) -> String {
         [
             "HOME=/root",
             "USER=root",
             "LOGNAME=root",
             &format!("SHELL={}", self.login_shell()),
-            &format!("PATH={DEFAULT_GUEST_PATH}"),
+            &format!("PATH={path}"),
             "LANG=C.UTF-8",
             // The host's `<data>/tmp` is the guest's `/tmp` (bound), so the
             // guest spelling keeps temp paths short and native-looking.
@@ -277,10 +281,11 @@ impl Runtime {
     }
 
     /// The host directories holding the guest's programs, the ones on the
-    /// guest's PATH.
+    /// guest's PATH: the standard ones, then those root's login shell adds
+    /// (`login_path.rs`).
     pub fn binary_dirs(&self) -> Vec<PathBuf> {
         let rootfs = self.rootfs_dir();
-        [
+        let mut dirs: Vec<PathBuf> = [
             "usr/bin",
             "usr/local/bin",
             "usr/sbin",
@@ -289,10 +294,16 @@ impl Runtime {
         ]
         .into_iter()
         .map(|dir| rootfs.join(dir))
-        .collect()
+        .collect();
+        for dir in self.login_binary_dirs() {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+        dirs
     }
 
-    /// Names of the programs the guest's standard directories hold; the
+    /// Names of the programs the guest's binary dirs hold; the
     /// symlink farm mirrors them so Zed's PATH lookup finds them. `bin`
     /// and `sbin` are links to their `usr/` directories in Ubuntu.
     pub fn list_binaries(&self) -> Vec<String> {

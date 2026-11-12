@@ -14,6 +14,7 @@ use android_activity::{AndroidApp, MainEvent, PollEvent};
 use anyhow::{Context as _, Result};
 use fs::Fs;
 use futures::StreamExt as _;
+use futures::channel::oneshot;
 use gpui::{App, AppContext as _, Context, DismissEvent, PromptLevel, Window, actions};
 use util::ResultExt as _;
 use workspace::Workspace;
@@ -385,11 +386,97 @@ fn notification_id() -> NotificationId {
     NotificationId::unique::<RuntimeSetupNotification>()
 }
 
+/// Zed's `main()` loads the login shell's environment at this point
+/// (`util::load_login_shell_environment`), and Node.js detection waits for
+/// it. This runs Zed's capture with root's login shell and applies it as
+/// [`Runtime::env_for_login_shell`] says: the editor keeps the runtime's
+/// variables, the shell's PATH becomes the guest's, and the farm mirrors its
+/// folders. The project environments wait for it too
+/// (`zdroid_hooks::login_environment_loaded`), and the binary dirs, its
+/// folders included, are watched once it's done. Returns `NodeRuntime`'s
+/// receiver.
+pub fn load_login_environment(
+    fs: Arc<dyn Fs>,
+    data_path: PathBuf,
+    cx: &mut App,
+) -> oneshot::Receiver<()> {
+    let (node_loaded, node_receiver) = oneshot::channel();
+    let (projects_loaded, projects_receiver) = oneshot::channel();
+    zdroid_hooks::register_login_environment(projects_receiver);
+    let runtime = Arc::new(Runtime::new(&data_path));
+    cx.spawn(async move |cx| {
+        if runtime.is_installed() {
+            let shell = runtime
+                .rootfs_dir()
+                .join(runtime.login_shell().trim_start_matches('/'));
+            let environment = cx
+                .background_spawn({
+                    let shell = shell.clone();
+                    async move { util::shell_env::capture(&shell, &[], paths::home_dir()).await }
+                })
+                .await;
+            match environment {
+                Ok(environment) => {
+                    // SAFETY: as Zed's `load_login_shell_environment` sets the
+                    // login shell's variables while the app runs. Zed spawns
+                    // its children with std's `Command`, which reads the
+                    // environment under the lock `set_var` takes.
+                    unsafe {
+                        for (key, op) in runtime.env_for_login_shell(environment) {
+                            match op {
+                                zdroid_runtime::EnvOp::Set(value) => std::env::set_var(key, value),
+                                zdroid_runtime::EnvOp::Remove => std::env::remove_var(key),
+                            }
+                        }
+                    }
+                    log::info!(
+                        "runtime_setup: set environment variables from {}, guest path: {}",
+                        shell.display(),
+                        runtime.guest_path()
+                    );
+                    cx.background_spawn({
+                        let runtime = runtime.clone();
+                        let data_path = data_path.clone();
+                        async move {
+                            refresh_farm(&runtime, &data_path, "loading the login shell's PATH")
+                        }
+                    })
+                    .await;
+                }
+                Err(err) => log::warn!(
+                    "runtime_setup: capturing the environment with {} failed: {err:#}",
+                    shell.display()
+                ),
+            }
+        }
+        node_loaded.send(()).ok();
+        projects_loaded.send(()).ok();
+        cx.update(|cx| watch_rootfs_binaries(fs, data_path, cx));
+    })
+    .detach();
+    node_receiver
+}
+
+fn refresh_farm(runtime: &Runtime, data_path: &Path, reason: &str) {
+    let binaries = runtime.list_binaries();
+    match gpui_android::runtime_links::ensure_runtime_symlinks(
+        data_path,
+        &binaries,
+        &runtime.farm_link_target(),
+    ) {
+        Ok(()) => log::info!(
+            "runtime_setup: farm refreshed after {reason} ({} binaries)",
+            binaries.len()
+        ),
+        Err(err) => log::warn!("runtime_setup: farm refresh failed: {err:#}"),
+    }
+}
+
 /// Rebuilds the symlink farm whenever a rootfs bin dir changes, so a tool
 /// installed from the terminal (apt, cargo install, pip, npm) is on Zed's
 /// PATH a couple of seconds later instead of at the next launch. `bin` and
 /// `sbin` are symlinks into `usr/`, so watching the `usr/` dirs covers them.
-pub fn watch_rootfs_binaries(fs: Arc<dyn Fs>, data_path: PathBuf, cx: &mut App) {
+fn watch_rootfs_binaries(fs: Arc<dyn Fs>, data_path: PathBuf, cx: &mut App) {
     let runtime = Arc::new(Runtime::new(&data_path));
     let watched: Vec<PathBuf> = runtime
         .binary_dirs()
@@ -406,18 +493,7 @@ pub fn watch_rootfs_binaries(fs: Arc<dyn Fs>, data_path: PathBuf, cx: &mut App) 
                 let runtime = runtime.clone();
                 let data_path = data_path.clone();
                 cx.background_spawn(async move {
-                    let binaries = runtime.list_binaries();
-                    match gpui_android::runtime_links::ensure_runtime_symlinks(
-                        &data_path,
-                        &binaries,
-                        &runtime.farm_link_target(),
-                    ) {
-                        Ok(()) => log::info!(
-                            "runtime_setup: farm refreshed after a rootfs change ({} binaries)",
-                            binaries.len()
-                        ),
-                        Err(err) => log::warn!("runtime_setup: farm refresh failed: {err:#}"),
-                    }
+                    refresh_farm(&runtime, &data_path, "a rootfs change")
                 })
                 .await;
             }

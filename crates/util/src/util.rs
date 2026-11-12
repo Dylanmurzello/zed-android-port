@@ -342,6 +342,12 @@ pub fn get_shell_safe_zed_path(shell_kind: shell::ShellKind) -> anyhow::Result<S
     use paths::PathExt;
     let mut zed_path =
         std::env::current_exe().context("Failed to determine current zed executable path.")?;
+    // Android: the app's executable is `app_process64`, which a shell can't
+    // run; the app's helper prints the environment as `zed --printenv` does.
+    #[cfg(target_os = "android")]
+    if let Some(helper) = zdroid_hooks::zed_helper() {
+        zed_path = helper.to_path_buf();
+    }
     if cfg!(target_os = "linux")
         && !zed_path.is_file()
         && let Some(truncated) = zed_path

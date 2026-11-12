@@ -17,8 +17,10 @@ path = "src/main.rs"
 # `Error changing dalvik-cache ownership: Permission denied`.
 [workspace]
 
-# Tiny binary — no external deps, just std unix sockets + stdio.
+# Tiny binary: std unix sockets and stdio, plus serde_json for `--printenv`'s
+# JSON, as Zed's `util::shell_env::print_env` writes it.
 [dependencies]
+serde_json = "1"
 
 [profile.release]
 opt-level = "z"

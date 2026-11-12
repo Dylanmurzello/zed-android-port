@@ -15,5 +15,6 @@ path = "src/zdroid_hooks.rs"
 # `util` and `gpui_util` depend on this crate, so it can't depend on them.
 # `zd_engine_core` has no dependencies.
 [dependencies]
+futures.workspace = true
 log.workspace = true
 zd_engine_core.workspace = true

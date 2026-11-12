@@ -316,11 +316,13 @@ async fn load_directory_shell_environment(
     load_direnv: DirenvSettings,
     tx: mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<HashMap<String, String>> {
-    // Android: no login shell. The app's environment already holds the
-    // runtime's (the engine variables, the loader links on PATH); a login
-    // shell runs in the guest and reports the guest's view instead.
+    // Android: no login shell per project. The app's environment already
+    // holds the runtime's (the engine variables, the loader links on PATH)
+    // and the login shell's from startup, which this waits for; a login
+    // shell here runs in the guest and reports the guest's view instead.
     #[cfg(target_os = "android")]
     if !matches!(load_direnv, DirenvSettings::Disabled) {
+        zdroid_hooks::login_environment_loaded().await;
         return Ok(std::env::vars().collect());
     }
 
