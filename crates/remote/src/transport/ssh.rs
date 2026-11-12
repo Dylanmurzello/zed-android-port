@@ -334,18 +334,6 @@ impl MasterProcess {
 
         master_process.arg(format!("ControlPath={}", socket_path.display()));
 
-        // Android: ssh runs without a controlling terminal, and Zed's prompt
-        // for an unknown host key doesn't come up before ssh gives up, so
-        // `accept-new` trusts a new host's key and still refuses a changed
-        // one. `-f` backgrounds the master once it has authenticated: in the
-        // foreground, stdout stays open through the engine loader, so
-        // `wait_connected`, which reads it to its end, never returns.
-        #[cfg(target_os = "android")]
-        master_process
-            .arg("-o")
-            .arg("StrictHostKeyChecking=accept-new")
-            .arg("-f");
-
         let process = master_process.args(destination_args).spawn()?;
 
         Ok(MasterProcess { process })
@@ -882,11 +870,7 @@ impl SshRemoteConnection {
                 return Err(e.context("Failed to connect to host"));
             }
 
-            // With -f (Android), the parent ssh exits with success once the
-            // master socket is up.
-            if let Some(status) = master_process.as_mut().try_status()?
-                && !(cfg!(target_os = "android") && status.success())
-            {
+            if master_process.as_mut().try_status()?.is_some() {
                 let mut output = Vec::new();
                 let mut stderr = master_process.as_mut().stderr.take().unwrap();
                 stderr.read_to_end(&mut output).await?;
@@ -946,11 +930,7 @@ impl SshRemoteConnection {
                 return Err(e.context("Failed to connect to host"));
             }
 
-            // With -f (Android), the parent ssh exits with success once the
-            // master socket is up.
-            if let Some(status) = master_process.as_mut().try_status()?
-                && !(cfg!(target_os = "android") && status.success())
-            {
+            if master_process.as_mut().try_status()?.is_some() {
                 let mut output = Vec::new();
                 let mut stderr = master_process.as_mut().stderr.take().unwrap();
                 stderr.read_to_end(&mut output).await?;

@@ -125,3 +125,14 @@ ControlMaster, each fixed in the engine rather than in ssh (2026-10-28):
 
 The password prompt itself depended on a waker identity bug in async-task that
 froze the main loop; see `async-task-waker-identity.md`.
+
+The master runs in the foreground, as on desktop. Once it has connected, ssh
+points its stdout at `/dev/null`, and the pipe's end of file is what Zed's
+`wait_connected` waits for. Until 0.17.1 the fork added `-f` instead, from the
+days of `zd-exec`, which kept a second copy of the pipe open. With `-f`, ssh
+left the master in a background process that Zed couldn't kill, so every
+disconnect and reconnect left one running, with its session open on the host
+(seen on 2026-11-12). Under the engine loader the end of file arrives without
+it (checked in the guest the same day). The same release dropped
+`StrictHostKeyChecking=accept-new`: Zed sets `SSH_ASKPASS_REQUIRE=force`, so
+OpenSSH asks about an unknown host key through Zed's askpass prompt.
