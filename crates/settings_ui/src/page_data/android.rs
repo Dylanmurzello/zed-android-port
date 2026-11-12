@@ -3,13 +3,12 @@
 
 use std::sync::Arc;
 
-use gpui::App;
+use gpui::{App, Window};
 
 use crate::{ActionLink, SettingField, SettingItem, SettingsPage, SettingsPageItem, USER};
 
-/// Dispatches one of the app's runtime actions in the workspace's window, since
-/// the Settings window has none. `ResetRuntime` still asks for confirmation in
-/// the active window, which is Settings when its button is pressed.
+/// Dispatches an action the app registers on workspaces. The Settings window
+/// has no workspace, so the action goes to the active one.
 fn dispatch_app_action(name: &'static str, cx: &mut App) {
     workspace::with_active_or_new_workspace(cx, move |_workspace, window, cx| {
         match cx.build_action(name, None) {
@@ -17,6 +16,14 @@ fn dispatch_app_action(name: &'static str, cx: &mut App) {
             Err(error) => log::warn!("settings_ui: {name} isn't registered: {error}"),
         }
     });
+}
+
+/// Closes Settings after a runtime button, as Zed's Open Keymap link does:
+/// the job's progress, and the reset's confirmation, show in the workspace's
+/// window, which the Settings window covers, and on Android activating the
+/// workspace's window doesn't bring it forward.
+fn close_for_runtime_job(window: &mut Window) {
+    window.remove_window();
 }
 
 pub(super) fn android_page() -> SettingsPage {
@@ -50,8 +57,9 @@ pub(super) fn android_page() -> SettingsPage {
                     "Install"
                 }
                 .into(),
-                on_click: Arc::new(|_settings_window, _window, cx| {
+                on_click: Arc::new(|_settings_window, window, cx| {
                     dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
+                    close_for_runtime_job(window);
                 }),
                 files: USER,
             }),
@@ -59,13 +67,14 @@ pub(super) fn android_page() -> SettingsPage {
                 title: "Install Essentials".into(),
                 description: Some(
                     "Install git, the SSH client, the CA certificates and time zone data with \
-                     apt, which the base image lacks. This runs on first launch; use it if \
-                     that failed without a network, or after a reset."
+                     apt, which the base image lacks. This runs on first launch and after a \
+                     reset; use it if that failed without a network."
                         .into(),
                 ),
                 button_text: "Install".into(),
-                on_click: Arc::new(|_settings_window, _window, cx| {
+                on_click: Arc::new(|_settings_window, window, cx| {
                     dispatch_app_action("zdroid_runtime::InstallEssentials", cx);
+                    close_for_runtime_job(window);
                 }),
                 files: USER,
             }),

@@ -146,7 +146,7 @@ Codex runs its commands in its own sandbox, which needs bubblewrap and Linux nam
 
 Go comes from the official `linux-arm64` tarball unpacked into `/usr/local`; gopls, delve, clangd and the rest install the way their docs say for Linux. Anything that lands in `/usr/bin`, `/usr/local/bin`, `~/.cargo/bin` or `~/.local/bin` shows up on the editor's PATH within a couple of seconds, so language servers start from the editor without configuration.
 
-**Settings → Android → Reset Runtime** extracts the bundled image again when you want a clean slate; your home folder, projects and editor settings stay.
+**Settings → Android → Reset Runtime** extracts the bundled image again when you want a clean slate, then installs the essentials again; your home folder, projects and editor settings stay.
 
 ### Working with projects
 

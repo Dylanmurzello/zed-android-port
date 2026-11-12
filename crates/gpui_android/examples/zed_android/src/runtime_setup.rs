@@ -25,7 +25,7 @@ actions!(
     zdroid_runtime,
     [
         /// Extract the bundled Ubuntu image again, replacing everything
-        /// installed inside the runtime.
+        /// installed inside the runtime, then install the essentials.
         ResetRuntime,
         /// Install git, the SSH client, CA certificates and time zone data into the runtime with apt.
         InstallEssentials,
@@ -137,9 +137,9 @@ pub fn setup_at_boot(app: &AndroidApp, runtime: &Runtime) -> BootSetup {
 }
 
 pub fn register(boot: BootSetup, cx: &mut App) {
-    cx.on_action(reset_runtime);
     cx.observe_new(
         move |workspace: &mut Workspace, _window, cx: &mut Context<Workspace>| {
+            workspace.register_action(reset_runtime);
             workspace.register_action(install_essentials);
             static BOOT_HANDLED: AtomicBool = AtomicBool::new(false);
             if BOOT_HANDLED.swap(true, Ordering::AcqRel) {
@@ -158,54 +158,41 @@ pub fn register(boot: BootSetup, cx: &mut App) {
     .detach();
 }
 
-/// An app action rather than a workspace one, so that the confirmation opens
-/// in the active window: the Settings window's Reset button sent it to the
-/// main window, which drew the prompt under Settings, and on Android
-/// activating the main window doesn't bring it forward.
-fn reset_runtime(_: &ResetRuntime, cx: &mut App) {
+fn reset_runtime(
+    workspace: &mut Workspace,
+    _: &ResetRuntime,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
     let runtime = Runtime::new(&zdroid_runtime::data_path());
     if !runtime.is_installed() {
-        start_install(cx);
+        start_job(workspace, Job::Install, cx);
         return;
     }
-    let Some(window) = cx.active_window() else {
-        log::warn!("runtime_setup: no active window to confirm the reset in");
-        return;
-    };
-    let answer = window.update(cx, |_, window, cx| {
-        window.prompt(
-            PromptLevel::Warning,
-            "Reset the Ubuntu runtime?",
-            Some(
-                "Everything installed inside it with apt is removed and the base image is \
-                 extracted again. Your home folder (dotfiles, SSH keys, toolchains), your \
-                 projects and the editor settings are kept. Running terminals and language \
-                 servers are stopped.",
-            ),
-            // Cancel first: Enter answers the first button.
-            &["Cancel", "Reset"],
-            cx,
-        )
-    });
-    let answer = match answer {
-        Ok(answer) => answer,
-        Err(error) => {
-            log::warn!("runtime_setup: confirming the reset: {error:#}");
+    let answer = window.prompt(
+        PromptLevel::Warning,
+        "Reset the Ubuntu runtime?",
+        Some(
+            "Everything installed inside it with apt is removed and the base image is \
+             extracted again. Your home folder (dotfiles, SSH keys, toolchains), your \
+             projects and the editor settings are kept. Running terminals and language \
+             servers are stopped.",
+        ),
+        // Cancel first: Enter answers the first button.
+        &["Cancel", "Reset"],
+        cx,
+    );
+    cx.spawn_in(window, async move |workspace, cx| {
+        if answer.await != Ok(1) {
             return;
         }
-    };
-    cx.spawn(async move |cx| {
-        if answer.await == Ok(1) {
-            cx.update(start_install);
-        }
+        workspace
+            .update_in(cx, |workspace, _window, cx| {
+                start_job(workspace, Job::Install, cx)
+            })
+            .ok();
     })
     .detach();
-}
-
-fn start_install(cx: &mut App) {
-    workspace::with_active_or_new_workspace(cx, |workspace, _window, cx| {
-        start_job(workspace, Job::Install, cx)
-    });
 }
 
 fn install_essentials(
@@ -280,6 +267,12 @@ impl Job {
                     &zdroid_runtime::nameservers(),
                     &zdroid_runtime::timezone(),
                     progress,
+                )?;
+                // As after the first launch's extraction: the bundled image
+                // has no git, SSH client, certificates or time zone data.
+                install::install_essentials(&runtime, progress).context(
+                    "the runtime is set up, but installing the essentials failed \
+                     (Settings → Android → Install Essentials retries it)",
                 )
             }
             Self::Essentials => install::install_essentials(&runtime, progress),

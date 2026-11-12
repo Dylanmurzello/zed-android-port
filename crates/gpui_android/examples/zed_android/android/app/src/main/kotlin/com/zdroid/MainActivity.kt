@@ -334,7 +334,8 @@ class MainActivity : GameActivity(), ZdroidWindow {
     /// the display the system bars and cutout leave free. Android moves a
     /// freeform window that doesn't fit there below the status bar without
     /// shrinking it, so a window as tall as the screen lost its bottom edge,
-    /// and Zed's status bar with it (One UI outside DeX, 2026-10-31).
+    /// and Zed's status bar with it (One UI outside DeX, 2026-10-31; see
+    /// `crates/gpui_android/docs/workarounds/activity-options-launch-bounds.md`).
     private fun freeformWindowBounds(width: Int, height: Int): Rect {
         val metrics = windowManager.maximumWindowMetrics
         val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
