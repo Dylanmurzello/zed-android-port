@@ -38,7 +38,7 @@ use collections::{HashMap, HashSet};
 use futures::Future;
 use futures::future::LocalBoxFuture;
 use futures::lock::OwnedMutexGuard;
-use gpui::{App, AsyncApp, Entity, EntityId, SharedString};
+use gpui::{App, AsyncApp, BackgroundExecutor, Entity, EntityId, SharedString};
 use http_client::HttpClient;
 
 pub use language_core::{
@@ -500,6 +500,7 @@ impl CachedLspAdapter {
 pub trait LspAdapterDelegate: Send + Sync {
     fn show_notification(&self, message: &str, cx: &mut App);
     fn http_client(&self) -> Arc<dyn HttpClient>;
+    fn background_executor(&self) -> &BackgroundExecutor;
     fn worktree_id(&self) -> WorktreeId;
     fn worktree_root_path(&self) -> &Path;
     fn resolve_relative_path(&self, path: PathBuf) -> PathBuf;
@@ -956,6 +957,8 @@ pub struct FakeLspAdapter {
                 + Fn(&lsp::CompletionItem, &Arc<Language>) -> Option<CodeLabel>,
         >,
     >,
+    pub label_for_symbol:
+        Option<Box<dyn 'static + Send + Sync + Fn(&Symbol, &Arc<Language>) -> Option<CodeLabel>>>,
 }
 
 pub struct Language {
@@ -1635,6 +1638,7 @@ impl Default for FakeLspAdapter {
             },
             opt_in_languages: HashSet::default(),
             label_for_completion: None,
+            label_for_symbol: None,
         }
     }
 }
@@ -1734,6 +1738,15 @@ impl LspAdapter for FakeLspAdapter {
     ) -> Option<CodeLabel> {
         let label_for_completion = self.label_for_completion.as_ref()?;
         label_for_completion(item, language)
+    }
+
+    async fn label_for_symbol(
+        &self,
+        symbol: &Symbol,
+        language: &Arc<Language>,
+    ) -> Option<CodeLabel> {
+        let label_for_symbol = self.label_for_symbol.as_ref()?;
+        label_for_symbol(symbol, language)
     }
 
     fn is_opt_in_for(&self, language: &LanguageName) -> bool {
