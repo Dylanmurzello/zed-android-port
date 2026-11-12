@@ -107,10 +107,11 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 //
 // `zed-askpass-helper` is the SSH_ASKPASS relay binary that ssh
 // (running in the Ubuntu runtime) exec's to prompt the user for a
-// password via Zed's in-process modal. The helper MUST be statically
-// linked: the engine loader maps programs into the rootfs, where bionic's
-// dynamic linker (`/system/bin/linker64`) doesn't exist, so a
-// dynamically-linked build fails exec with the shell's misleading
+// password via Zed's in-process modal. It also stands in for
+// `zed --printenv` in Zed's login shell capture. The helper MUST be
+// statically linked: the engine loader maps programs into the rootfs,
+// where bionic's dynamic linker (`/system/bin/linker64`) doesn't exist,
+// so a dynamically-linked build fails exec with the shell's misleading
 // "not found".
 //
 // The helper crate at `examples/zed_android/askpass-helper/` is its
@@ -272,8 +273,8 @@ android {
         // raw /sdcard paths need All files access (MANAGE_EXTERNAL_STORAGE);
         // see AndroidManifest.xml.
         targetSdk = 35
-        versionCode = 80
-        versionName = "0.17.2"
+        versionCode = 81
+        versionName = "0.18.0"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

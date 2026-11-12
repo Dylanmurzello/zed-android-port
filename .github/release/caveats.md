@@ -4,6 +4,7 @@
 - Zed's path picker takes one path at a time, so the agent's **Add Images** attaches one image per pick.
 - Android stops child processes past 32 across all apps. On Android 14 and later, **Developer options → Disable child process restrictions** lifts the limit.
 - The runtime has no System V IPC, so PostgreSQL doesn't start in it.
+- Zed loads root's login shell environment once a launch, in the home folder, and not again for each project as on desktop: a version a project pins with mise or `.nvmrc` applies in its terminal but not to its language servers.
 - Language servers, terminals and SSH sessions keep running in the background while they exist. For work without them, such as Zed's own agent, turn on **Zdroid → Keep Running in Background**. On Samsung devices, also set **Settings → Apps → Zdroid → Battery** to **Unrestricted**, or use **Settings → Android → Allow Background Activity**.
 - A trackpad follows Android's settings for pointer speed, tap to click and scrolling direction. Tap, touch again and slide to drag needs Android's tap dragging, which is off by default: turn it on with `adb shell settings put system touchpad_tap_dragging 1`, or press until the pad clicks and slide instead. Two-finger scrolling needs Android 14 or later: Android 12 and 13 don't report it as a scroll.
 - On GPUs without dual-source blending, such as the Exynos 2100's Mali-G78, text is anti-aliased in grayscale rather than by subpixel.
