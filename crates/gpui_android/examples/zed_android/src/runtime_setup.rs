@@ -1,8 +1,8 @@
 //! Setup of the Ubuntu runtime without a step for the user: the first
 //! launch extracts the bundled image before the editor shows, a failure
 //! lands in a notification with Retry, and the Android settings page
-//! offers a reset and the essentials step (git, the SSH client and CA
-//! certificates, which the base image does not ship).
+//! offers a reset and the essentials step (git, the SSH client, CA
+//! certificates and time zone data, which the base image does not ship).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,9 +25,9 @@ actions!(
     zdroid_runtime,
     [
         /// Extract the bundled Ubuntu image again, replacing everything
-        /// installed inside the runtime.
+        /// installed inside the runtime, then install the essentials.
         ResetRuntime,
-        /// Install git, the SSH client and CA certificates into the runtime with apt.
+        /// Install git, the SSH client, CA certificates and time zone data into the runtime with apt.
         InstallEssentials,
     ]
 );
@@ -236,7 +236,7 @@ impl Job {
     fn title(self) -> &'static str {
         match self {
             Self::Install => "Setting up the Ubuntu runtime",
-            Self::Essentials => "Installing git, the SSH client and certificates",
+            Self::Essentials => "Installing git, the SSH client, certificates and time zones",
         }
     }
 
@@ -245,7 +245,9 @@ impl Job {
             Self::Install => {
                 "Ubuntu runtime reset. Restart Zdroid to reload the terminal and language servers."
             }
-            Self::Essentials => "git, the SSH client and CA certificates are installed.",
+            Self::Essentials => {
+                "git, the SSH client, CA certificates and time zone data are installed."
+            }
         }
     }
 
@@ -265,6 +267,12 @@ impl Job {
                     &zdroid_runtime::nameservers(),
                     &zdroid_runtime::timezone(),
                     progress,
+                )?;
+                // As after the first launch's extraction: the bundled image
+                // has no git, SSH client, certificates or time zone data.
+                install::install_essentials(&runtime, progress).context(
+                    "the runtime is set up, but installing the essentials failed \
+                     (Settings → Android → Install Essentials retries it)",
                 )
             }
             Self::Essentials => install::install_essentials(&runtime, progress),
