@@ -10,7 +10,7 @@ Everything in [UPSTREAM_MERGE.md](UPSTREAM_MERGE.md) and [RELEASING.md](RELEASIN
 
 ## Maintenance mode
 
-Since 0.11 the fork has the features its owner needs, and the regular work is taking new Zed releases: [Syncing a Zed release](#syncing-a-zed-release), then [Each release](#each-release). Before a sync, check [BACKLOG.md](BACKLOG.md)'s "Next Zed sync" for what the release needs. Afterwards, try the smoke checklist in [RELEASING.md](RELEASING.md) on the tablet. The parts of this file about Dylan's repository only matter if he publishes again.
+Since 0.11 the fork has the features its owner needs, and the regular work is taking new Zed releases: [Syncing a Zed release](#syncing-a-zed-release), then [Each release](#each-release). Before a sync, check [BACKLOG.md](BACKLOG.md)'s "Upstream follow-ups" for what to recheck. Afterwards, try the smoke checklist in [RELEASING.md](RELEASING.md) on the tablet. The parts of this file about Dylan's repository only matter if he publishes again.
 
 ## Branches
 
