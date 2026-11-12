@@ -826,6 +826,28 @@ fn boot(
             defaults.workspace.use_system_path_prompts = Some(false);
         });
     });
+    // Zed's default `file_types` make its own settings, keymap, tasks and
+    // debug files JSONC by their `zed/` folder, and the app keeps them in
+    // `<files>/config/`, where they opened as JSON and the JSON server
+    // flagged every comment.
+    let config_files = format!(
+        "{}/{{settings,keymap,tasks,debug}}.json",
+        paths::config_dir().display()
+    );
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            defaults
+                .project
+                .all_languages
+                .file_types
+                .get_or_insert_default()
+                .0
+                .entry("JSONC".into())
+                .or_default()
+                .0
+                .insert(config_files);
+        });
+    });
     zlog_settings::init(cx);
     gpui_tokio::init(cx);
 
