@@ -76,7 +76,7 @@ impl Runtime {
         let mut ops = Vec::new();
         for (name, value) in environment {
             if name == "PATH" {
-                guest_path = Some(merge_guest_path(&value));
+                guest_path = Some(guest_path_from_login(&value));
             // The engine passes its own `ZD_` variables on to the guest's
             // children; they're configuration, not the shell's.
             } else if name != "SHLVL" && !name.starts_with("ZD_") && !runtimes.contains(&name) {
@@ -121,7 +121,7 @@ impl Runtime {
 /// engine default it lacks: the farm mirrors their folders and the loader
 /// looks its links up on this PATH. Past [`MAX_GUEST_PATH`], the login
 /// shell's last entries are dropped.
-fn merge_guest_path(login_path: &str) -> String {
+fn guest_path_from_login(login_path: &str) -> String {
     let defaults: Vec<&str> = DEFAULT_GUEST_PATH.split(':').collect();
     let mut entries: Vec<&str> = Vec::new();
     for entry in login_path.split(':').chain(defaults.iter().copied()) {
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn the_login_shells_entries_come_first_and_the_defaults_stay() {
-        let path = merge_guest_path(
+        let path = guest_path_from_login(
             "/root/.local/share/mise/installs/node/24.13.1/bin:/root/.local/bin:\
              node_modules/.bin:/usr/bin:/root/.local/bin:/bin",
         );
@@ -164,7 +164,7 @@ mod tests {
         let entries: Vec<String> = (0..200)
             .map(|index| format!("/opt/tool{index:03}/bin"))
             .collect();
-        let path = merge_guest_path(&entries.join(":"));
+        let path = guest_path_from_login(&entries.join(":"));
         assert!(path.len() <= MAX_GUEST_PATH, "{}", path.len());
         assert!(path.starts_with("/opt/tool000/bin:"), "{path}");
         assert!(path.ends_with(DEFAULT_GUEST_PATH), "{path}");
@@ -179,7 +179,7 @@ mod tests {
         let node = "root/.local/share/mise/installs/node/24.13.1/bin";
         std::fs::create_dir_all(rootfs.join(node)).expect("create node dir");
         std::fs::create_dir_all(rootfs.join("usr/bin")).expect("create usr/bin");
-        let guest_path = merge_guest_path(&format!(
+        let guest_path = guest_path_from_login(&format!(
             "/{node}:/root/missing/bin:/sdcard/bin:/tmp/bin:/usr/bin"
         ));
 

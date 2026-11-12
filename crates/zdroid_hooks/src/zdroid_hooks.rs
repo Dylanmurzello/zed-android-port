@@ -146,6 +146,7 @@ pub fn guest_env_for_path(host_path: &OsStr) -> Option<(&'static str, OsString)>
 fn merge_guest_path(spec: &str, host_path: &str, root: Option<&Path>) -> String {
     const HOST_ONLY_PREFIXES: &[&str] = &[
         "/system/",
+        "/system_ext/",
         "/apex/",
         "/vendor/",
         "/product/",
@@ -252,7 +253,7 @@ mod tests {
     #[test]
     fn managed_node_dir_leads_and_host_dirs_drop() {
         let root = Path::new("/data/user/0/com.zdroid/files");
-        let host_path = "/data/user/0/com.zdroid/files/node/v24/bin:/data/user/0/com.zdroid/files/zd-runtime:/data/user/0/com.zdroid/files/bin:/system/bin";
+        let host_path = "/data/user/0/com.zdroid/files/node/v24/bin:/data/user/0/com.zdroid/files/zd-runtime:/data/user/0/com.zdroid/files/bin:/system/bin:/system_ext/bin";
         assert_eq!(
             merge_guest_path(SPEC, host_path, Some(root)),
             "HOME=/root;PATH=/data/user/0/com.zdroid/files/node/v24/bin:/usr/local/bin:/usr/bin:/bin;TMPDIR=/tmp"
