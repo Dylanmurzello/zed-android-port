@@ -184,9 +184,12 @@ The workflow rejects any APK whose certificate doesn't match `SIGNING_CERT_SHA25
    - **Verification**: APK and certificate SHA-256, commit, provenance.
 
    ```sh
-   git tag -a vX.Y.Z -m "Zdroid X.Y.Z"   # or -F notes.md, with Highlights after the subject line
+   git fetch origin
+   git tag -a vX.Y.Z -m "Zdroid X.Y.Z" origin/zdroid   # or -F notes.md, with Highlights after the subject line
    git push origin vX.Y.Z
    ```
+
+   Name `origin/zdroid` as the target: without it, the tag goes on whatever branch the clone has checked out. If a tag lands on the wrong commit, the workflow stops at "Check tag matches versionName" when the versions differ, and nothing is published; move it with `git push origin --delete refs/tags/vX.Y.Z`, `git tag -d vX.Y.Z`, then the commands above. Don't move a tag whose release was published.
 
    To preview the body before tagging (`vA.B.C` is the previous release):
 
