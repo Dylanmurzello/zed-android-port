@@ -35,6 +35,7 @@ pub mod nr {
     pub const FCHOWN: u32 = 55;
     pub const OPENAT: u32 = 56;
     pub const CLOSE: u32 = 57;
+    pub const GETDENTS64: u32 = 61;
     pub const LSEEK: u32 = 62;
     pub const READ: u32 = 63;
     pub const WRITE: u32 = 64;

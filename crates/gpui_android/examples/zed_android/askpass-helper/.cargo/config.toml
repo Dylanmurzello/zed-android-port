@@ -5,7 +5,7 @@
 # dynamically-linked bionic binary fails exec with the shell's misleading
 # "not found".
 #
-# The build pulls in NDK's static libc and zero runtime deps, so the
-# resulting ELF runs unchanged on the Android host and in the runtime.
+# The build pulls in NDK's static libc and no other native library, so
+# the resulting ELF runs unchanged on the Android host and in the runtime.
 [target.aarch64-linux-android]
 rustflags = ["-C", "target-feature=+crt-static"]

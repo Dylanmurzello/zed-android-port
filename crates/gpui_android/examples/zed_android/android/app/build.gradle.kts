@@ -107,10 +107,11 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 //
 // `zed-askpass-helper` is the SSH_ASKPASS relay binary that ssh
 // (running in the Ubuntu runtime) exec's to prompt the user for a
-// password via Zed's in-process modal. The helper MUST be statically
-// linked: the engine loader maps programs into the rootfs, where bionic's
-// dynamic linker (`/system/bin/linker64`) doesn't exist, so a
-// dynamically-linked build fails exec with the shell's misleading
+// password via Zed's in-process modal. It also stands in for
+// `zed --printenv` in Zed's login shell capture. The helper MUST be
+// statically linked: the engine loader maps programs into the rootfs,
+// where bionic's dynamic linker (`/system/bin/linker64`) doesn't exist,
+// so a dynamically-linked build fails exec with the shell's misleading
 // "not found".
 //
 // The helper crate at `examples/zed_android/askpass-helper/` is its
@@ -257,8 +258,10 @@ android {
 
     defaultConfig {
         applicationId = "com.zdroid"
-        // Android 12. Release builds need Armv9 cores (.cargo/config.toml),
-        // which shipped with it. Keep in sync with `-P` in the two tasks above.
+        // Android 12. Raised from 26 for 0.8.5's Armv9 build and kept when
+        // 0.15.0 went back to Armv8.2 cores (.cargo/config.toml), since
+        // nothing since has been checked below it. Keep in sync with `-P`
+        // in the two tasks above.
         minSdk = 31
         // targetSdk 35. The old pin at 28 kept the app in a SELinux domain
         // that may exec app-private files; the rootfs engine made that

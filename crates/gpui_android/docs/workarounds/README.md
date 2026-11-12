@@ -21,6 +21,10 @@ come from it: Snapdragon 8 Gen 2, Adreno 740 GPU, 120 Hz adaptive-refresh
 panel, ~336 dpi, Android 16 with One UI 8, and the Book Cover Keyboard's
 trackpad, in both tablet mode and DeX.
 
+Writeups about older CPUs and kernels also use a second device, a Samsung
+Galaxy S21 Ultra (SM-G998B): Exynos 2100 (Cortex-X1, A78 and A55 cores),
+Mali-G78 GPU, Android 15 with One UI 7 on Linux 5.4, without a keyboard.
+
 ## How to read this
 
 | Status | Meaning |
@@ -58,6 +62,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | [The guest environment contract](rootfs-guest-env.md) | Active | Editor keeps the host env, tools get the guest view at exec through `ZD_GUEST_ENV`; per-spawn PATH merge, terminal, SSH remotes |
 | [Two spellings of the app files dir](android-files-dir-spelling.md) | Active | At targetSdk 35 the kernel reports `/data/data/...` for the files dir; the engine gets that spelling, the editor keeps `/data/user/0` |
 | [The `/proc` files the app sandbox refuses](android-proc-restrictions.md) | Active | `stat`, `loadavg`, `uptime`, `net/*`, `sys/*` are EACCES for apps; the engine serves them from `sysinfo`, the clocks, `uname` and `/sys`; found through npm's silent no-op |
+| [Closing inherited descriptors without `close_range`](close-range-before-linux-5-9.md) | Active | `close_range` needs Linux 5.9; on older kernels the loader closes what `/proc/self/fd` lists instead of aborting every program the editor starts |
 | [Pointer authentication keys and wasm fibers](android-pointer-authentication-fibers.md) | Active | From targetSdk 31 bionic gives every thread its own IA key; wasmtime fibers resumed on another worker died with a PAC exception; the IA key is disabled at boot |
 | [JNI DNS bridge](jni-dns-bridge.md) | Active | Android has no `/etc/resolv.conf`; ConnectivityManager's servers seed the guest rootfs resolv.conf and follow network changes |
 | [Asset selection by runtime OS](runtime-os-asset-selection.md) | Active | Downloaded tools run in the Linux userland, so every asset-selection site asks `util::runtime_os()` instead of `consts::OS` |
@@ -130,7 +135,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | [cfg(target_os = "android") gates in upstream files](android-cfg-gates.md) | Active | Touch hit zones, drag claims, the quit path and the Android settings sections, each gated so iOS, web and desktop builds keep upstream's behavior |
 | [Load bundled themes via LoadThemes::All](load-themes-all.md) | Active | Default lazy-load left the theme picker empty on Android |
 | [Load default Linux keymap on boot](load-default-linux-keymap.md) | Active | Android KeyEvents look closer to Linux than macOS — pick the right keymap |
-| [Build for the reference hardware's CPU](reference-cpu-build.md) | Active | The default target is Armv8.0; the tablet's CPU has faster atomics, but its kernel leaves SVE off. Armv9 cores shipped with Android 12, hence minSdk 31 |
+| [Build for Armv8.2 CPUs](reference-cpu-build.md) | Active | The default target is Armv8.0, whose atomics are retry loops; Armv8.2 with RCpc has single-instruction ones. Armv9's further instructions measured no faster on the reference hardware, so release builds stopped requiring them in 0.15.0 |
 | [Loader in `nativeLibraryDir` via extractNativeLibs](extract-native-libs-loader.md) | Active | The engine loader is exec'd by path from the APK's lib dir; AGP 8 keeps libs un-extracted by default |
 
 ## Adding a new workaround

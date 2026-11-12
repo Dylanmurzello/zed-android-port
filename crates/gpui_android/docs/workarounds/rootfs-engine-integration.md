@@ -37,14 +37,15 @@ writeup is the editor side.
   `assets/rootfs/` (stored, not recompressed). On a launch with no
   `<data>/files/rootfs/.rootfs-version`, `runtime_setup::setup_at_boot`
   streams the asset through the installer before the first paint: every
-  symlink rewritten relative (the engine's invariant), modes kept, device
-  nodes skipped, seeds for `resolv.conf`, `hostname`, `hosts`, the
-  device's time zone (`/etc/localtime` as a relative link into
+  symlink rewritten relative (links the guest makes later store an
+  absolute target as its host path instead, so they survive a rename into
+  another folder), modes kept, device nodes skipped, seeds for
+  `resolv.conf`, `hostname`, `hosts`, the device's time zone (`/etc/localtime` as a relative link into
   `zoneinfo` plus `/etc/timezone`, from `persist.sys.timezone`: the base
   image has no tzdata, and without the link the first `apt install` that
   pulls it in stops at an interactive time zone menu), the debugger
   configs and the binding directory chains, then a two-rename swap. Seconds on a tablet, no network. The essentials step (`apt-get
-  install ca-certificates git`, which the base image lacks) runs in the
+  install ca-certificates git openssh-client tzdata`, which the base image lacks) runs in the
   background afterwards with a notification; it is the one network-bound
   part and has a button on the settings page for a retry.
 - **The farm.** `<data>/files/zd-runtime/<name> -> ../bin/zdload` for
@@ -60,28 +61,25 @@ writeup is the editor side.
 - **The environment.** `rootfs-guest-env.md`.
 - **Reset.** Settings → Android → Reset Runtime terminates the
   editor's children (`runtime_service::terminate_descendants`) and
-  extracts the bundled image again over a fresh staging dir; the home
-  folder and editor state are outside the rootfs and untouched.
-- **The home folder.** The guest's home is the app's home folder,
-  `<data>/files/home`: `$HOME` in the guest view and root's entry in the
-  rootfs's `/etc/passwd`, which ssh reads instead of `$HOME`. It holds
-  `projects/`, the `storage/` links into shared storage, dotfiles, SSH keys
-  and per-user toolchains (`~/.cargo`, `~/.local`); the Files app shows it
-  as Zdroid's root. Being outside the rootfs at an identity-mapped path, it
-  survives a reset, and a tool's `getcwd` under `~/projects` reports the
-  path Zed uses. The image's `/root` would be neither: a reset replaces
-  it, and the engine's reverse lookup reports paths under it as
-  `/root/...`, which the editor can't match to its worktrees. The
-  installer gives the folder the image's root `.bashrc` and `.profile`
-  where it has none.
-- **Upgrades from Bootstrap and chroot releases.** They aren't migrated:
-  their programs, and what Zed installed with them, don't run in the
-  rootfs. When boot finds the old prefix (`<data>/files/usr`) or the
-  `bin/zd-exec` bridge, it sets nothing up and restores no session; an
-  empty window asks to clear the app's data, and every other answer quits
-  (`runtime_setup::open_clean_start`,
-  `ActivityManager.clearApplicationUserData`). Open Files lets the user
-  copy the home folder out first.
+  extracts the bundled image again over a fresh staging dir, then moves
+  the old tree's `/root` into the new one; the app's home folder and the
+  editor state are outside the rootfs and untouched.
+- **The home folder.** The guest's home is the image's `/root`, which
+  the editor's `HOME` spells `<data>/files/rootfs/root` (see
+  `rootfs-guest-env.md`). It holds dotfiles, SSH keys and per-user
+  toolchains (`~/.cargo`, `~/.local`). `install::link_home` links
+  `projects/`, `storage/` and `received/` in it to the app's home folder,
+  `<data>/files/home`, which the Files app shows as Zdroid's root. Those
+  targets are identity-mapped, so a tool's `getcwd` under `~/projects`
+  reports the path Zed uses; binding `/root` to the app's home folder
+  instead would make the engine's reverse lookup report `/root/...`, which
+  the editor can't match to its worktrees.
+- **Upgrades from Bootstrap and chroot releases.** Boot removes what they
+  left that nothing runs anymore (`runtime_setup::sweep_previous_runtimes`:
+  the old prefix `<data>/files/usr`, the `bin/zd-exec` bridge and the
+  adapter selection file). Their home was the app's home folder, so
+  `link_home` also links its `.ssh`, `.claude`, `.claude.json` and
+  `.codex` into `/root` and includes its `.gitconfig` from root's.
 
 ## Why not the obvious fix
 

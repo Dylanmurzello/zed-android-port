@@ -72,17 +72,22 @@ impl Render for MenuBar {
             PopoverMenu::new(("zed-android-menubar", index))
                 .menu(move |window, cx| {
                     let menu = app_menus(cx).into_iter().nth(index)?.owned();
-                    // Actions go to the active item's focus handle, because
-                    // the popover has focus when they fire, and looking up
-                    // the focused element then misses the editor.
-                    let active_focus = workspace
-                        .read_with(cx, |workspace, cx| {
-                            let pane = workspace.active_pane().read(cx);
-                            pane.active_item()
-                                .map(|item| item.item_focus_handle(cx))
-                                .unwrap_or_else(|| pane.focus_handle(cx))
-                        })
-                        .ok();
+                    // Actions go to the element focused when the menu opens,
+                    // as in Zed's `ApplicationMenu`, since the menu itself
+                    // has focus when they fire. Sending them to the active
+                    // item instead pasted into the open file while the
+                    // agent's message box had focus. With nothing focused,
+                    // they go to the active item.
+                    let active_focus = window.focused(cx).or_else(|| {
+                        workspace
+                            .read_with(cx, |workspace, cx| {
+                                let pane = workspace.active_pane().read(cx);
+                                pane.active_item()
+                                    .map(|item| item.item_focus_handle(cx))
+                                    .unwrap_or_else(|| pane.focus_handle(cx))
+                            })
+                            .ok()
+                    });
                     Some(ContextMenu::build(window, cx, |menu_builder, _, _| {
                         let menu_builder = match &active_focus {
                             Some(focus) => menu_builder.context(focus.clone()),
@@ -123,7 +128,14 @@ fn add_items(
                 let dispatch_via = focus.clone();
                 let handler_action = action.boxed_clone();
                 menu.entry(name, Some(action), move |window, cx| match &dispatch_via {
-                    Some(handle) => handle.dispatch_action(handler_action.as_ref(), window, cx),
+                    // Focus moves there first, as upstream's menu entries do:
+                    // the command palette opens for the element focused when
+                    // it's toggled and later sends its pick there, so with
+                    // the closing menu focused that pick went nowhere.
+                    Some(handle) => {
+                        window.focus(handle, cx);
+                        handle.dispatch_action(handler_action.as_ref(), window, cx)
+                    }
                     None => window.dispatch_action(handler_action.boxed_clone(), cx),
                 })
             }

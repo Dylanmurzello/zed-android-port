@@ -106,7 +106,12 @@ pub(crate) async fn restore_or_create_workspace(
                             connection_options,
                             paths,
                             app_state.clone(),
-                            workspace::OpenOptions::default(),
+                            workspace::OpenOptions {
+                                // Each saved window must retain its own project roots,
+                                // even when some roots also appear in another window.
+                                workspace_matching: workspace::WorkspaceMatching::None,
+                                ..Default::default()
+                            },
                             cx,
                         )
                         .await?;
@@ -657,7 +662,8 @@ fn android_main(app: AndroidApp) {
     }
 
     // Before any AskPassSession exists: the askpass crate otherwise settles
-    // on current_exe(), which on Android is /system/bin/app_process64.
+    // on current_exe(), which on Android is /system/bin/app_process64. The
+    // helper also stands in for `zed --printenv` in Zed's shell capture.
     let askpass_path = match gpui_android::askpass_install::ensure_installed(&app, &data_path) {
         Ok(path) => path,
         Err(err) => {
@@ -667,6 +673,7 @@ fn android_main(app: AndroidApp) {
     };
     if askpass_path.is_file() {
         askpass::set_askpass_program(askpass_path.clone());
+        zdroid_hooks::register_zed_helper(askpass_path.clone());
         log::info!(
             "zed_android: askpass program set to {}",
             askpass_path.display()
@@ -675,7 +682,8 @@ fn android_main(app: AndroidApp) {
         log::warn!(
             "zed_android: askpass helper missing at {}; SSH password / \
              passphrase prompts will fall through to current_exe() and \
-             abort under SELinux",
+             abort under SELinux, and the login shell's environment can't \
+             be read",
             askpass_path.display()
         );
     }
@@ -818,10 +826,35 @@ fn boot(
             defaults.workspace.use_system_path_prompts = Some(false);
         });
     });
+    // Zed's default `file_types` make its own settings, keymap, tasks and
+    // debug files JSONC by their `zed/` folder, and the app keeps them in
+    // `<files>/config/`, where they opened as JSON and the JSON server
+    // flagged every comment.
+    let config_files = format!(
+        "{}/{{settings,keymap,tasks,debug}}.json",
+        paths::config_dir().display()
+    );
+    SettingsStore::update_global(cx, |store, cx| {
+        store.update_default_settings(cx, |defaults| {
+            defaults
+                .project
+                .all_languages
+                .file_types
+                .get_or_insert_default()
+                .0
+                .entry("JSONC".into())
+                .or_default()
+                .0
+                .insert(config_files);
+        });
+    });
     zlog_settings::init(cx);
     gpui_tokio::init(cx);
 
     let fs: Arc<dyn Fs> = RealFs::new(None, cx.background_executor().clone());
+    // As Zed's main() loads the login shell's environment here.
+    let login_environment_loaded =
+        runtime_setup::load_login_environment(fs.clone(), data_path.to_path_buf(), cx);
     zed::watch_settings_files(fs.clone(), cx);
     let (user_keymap_file_rx, user_keymap_watcher) = watch_config_file(
         cx.background_executor(),
@@ -925,7 +958,11 @@ fn boot(
     })
     .detach();
     ui::observe_scrollbar_settings::<SettingsStore>(cx);
-    let node_runtime = NodeRuntime::new(client.http_client(), None, node_options_rx);
+    let node_runtime = NodeRuntime::new(
+        client.http_client(),
+        Some(login_environment_loaded),
+        node_options_rx,
+    );
     info!("zed_android: RealFs + NodeRuntime constructed (PATH lookup + managed download)");
 
     // gpui_android reads these settings outside any window, including during
@@ -1001,7 +1038,6 @@ fn boot(
     AppState::set_global(app_state.clone(), cx);
     info!("zed_android: AppState assembled + set as global");
     dap_adapters::init(cx);
-    runtime_setup::watch_rootfs_binaries(fs.clone(), data_path.to_path_buf(), cx);
 
     // As in Zed's main(): syntax colors follow the theme.
     app_state

@@ -578,6 +578,13 @@ fn chroot(regs: &[u64; 31]) -> u64 {
         &absolute[..len]
     };
     let host_len = match translate(translator, path, host, link, target) {
+        // The translation keeps a trailing slash, which the chroot utility's
+        // `.` has once anchored (`<cwd>/.`). The new root is stored, and
+        // handed to exec'd programs, without it.
+        Ok(Translated::Host(len)) if len > 1 && host[len - 1] == b'/' => {
+            host[len - 1] = 0;
+            len - 1
+        }
         Ok(Translated::Host(len)) => len,
         Ok(_) => return sys::neg_errno(sys::EPERM),
         Err(errno) => return sys::neg_errno(errno),
@@ -953,7 +960,7 @@ fn path_syscall(
     };
     regs[0] = result;
     match number {
-        nr::READLINKAT => detranslate_readlink(translator, regs, host),
+        nr::READLINKAT => detranslate_readlink(translator, regs, &args, link, target),
         nr::NEWFSTATAT => fixup_stat(result, regs[2] as *mut u8, false),
         nr::STATX => fixup_stat(result, regs[4] as *mut u8, true),
         nr::FCHOWNAT if result == sys::neg_errno(sys::EPERM) => regs[0] = 0,
@@ -1242,7 +1249,7 @@ fn symlinkat(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &m
         }
         writer.finish()
     };
-    let Ok(_) = translator.rewrite_symlink_target(&link_guest[..link_guest_len], target, new_target, spare) else {
+    let Ok(_) = translator.guest_symlink_target(&link_guest[..link_guest_len], target, new_target, spare) else {
         regs[0] = sys::neg_errno(sys::ENAMETOOLONG);
         return;
     };
@@ -1763,8 +1770,20 @@ fn copy_out(buffer: *mut u8, size: usize, bytes: &[u8]) -> u64 {
 }
 
 /// A link target the kernel returned is a host path when it is absolute
-/// (the installer writes binding targets that way); map it back.
-fn detranslate_readlink(translator: &Translator<'static>, regs: &mut [u64; 31], scratch: &mut [u8; MAX_PATH]) {
+/// (`symlinkat` stores absolute targets that way, and the installer those
+/// in another tree); map it back. The host path can be longer than the
+/// guest path, so when it filled the guest's buffer the kernel may have cut
+/// it.
+/// It is then read again whole: a caller that grows its buffer until a read
+/// comes back shorter than it (Rust's and Go's `read_link`) would otherwise
+/// take the guest path of a cut host path for the whole target.
+fn detranslate_readlink(
+    translator: &Translator<'static>,
+    regs: &mut [u64; 31],
+    args: &[usize; 6],
+    whole: &mut [u8; MAX_PATH],
+    guest: &mut [u8; MAX_PATH],
+) {
     let written = regs[0] as i64;
     if written <= 0 {
         return;
@@ -1772,15 +1791,26 @@ fn detranslate_readlink(translator: &Translator<'static>, regs: &mut [u64; 31], 
     let buffer = regs[2] as *mut u8;
     let size = regs[3] as usize;
     // SAFETY: the kernel just wrote `written` bytes there.
-    let target = unsafe { core::slice::from_raw_parts(buffer, written as usize) };
+    let mut target = unsafe { core::slice::from_raw_parts(buffer, written as usize) };
     if target.first() != Some(&b'/') {
         return;
     }
-    let Ok(len) = translator.host_to_guest(target, scratch) else {
+    if written as usize == size {
+        let mut again = *args;
+        again[2] = whole.as_mut_ptr() as usize;
+        again[3] = MAX_PATH;
+        let read = issue(nr::READLINKAT, &again) as i64;
+        if read > 0
+            && let Some(read_target) = whole.get(..read as usize)
+        {
+            target = read_target;
+        }
+    }
+    let Ok(len) = translator.host_to_guest(target, guest) else {
         return;
     };
     let count = len.min(size);
-    // SAFETY: `scratch` and the guest buffer are distinct allocations.
-    unsafe { core::ptr::copy_nonoverlapping(scratch.as_ptr(), buffer, count) };
+    // SAFETY: `guest` and the guest's buffer are distinct allocations.
+    unsafe { core::ptr::copy_nonoverlapping(guest.as_ptr(), buffer, count) };
     regs[0] = count as u64;
 }
