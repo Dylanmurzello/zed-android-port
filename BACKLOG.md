@@ -103,3 +103,14 @@ Left from the 2026-08-07 merge, which brought upstream's mobile APIs, and upstre
 - **The `sandbox` crate on Android.** The app pulls it in through `agent`, `acp_thread` and `agent_ui`, and on Android its `wrap()` returns `SandboxError::UnsupportedPlatform`. Check which agent tool calls reach it and what the user sees then.
 - **Idle remote connections stop sending heartbeats.** In `crates/remote/src/remote_client.rs::heartbeat`, a successful ping takes the `continue` branch, which skips re-arming `keepalive_timer`, so the next ping waits until the server sends something. On the tablet (0.17.1, 2026-11-12) an idle SSH project sent nothing for minutes, and a stalled session went unnoticed until a file was opened; after that, five missed pings started the reconnect as intended. The code matches v1.28.1. Check: leave a remote project idle, `kill -STOP` its `sshd-session` on the host, and look for "No heartbeat from server" in logcat within 10 s.
 - **Closing a remote project leaves its connection open.** After Close Project on an SSH project, and after Remove Server on a server connected from the Open Remote dialog, the ssh master and the server's proxy kept running (0.17.1, 2026-11-12), so something still holds the project. `multi_workspace.rs` matches v1.28.1; not traced further. The master is Zdroid's child and ends with the app. Check: close the remote project, then `adb shell "ps -A | grep 'ssh -N'"` should list nothing.
+
+## Open items carried over from the pre-0.4.4 backlog
+
+The 0.4.4 merge took the contributor's rewrite of this file; these entries of ours were still open and are kept here.
+
+- **Mouse scroll direction reversed** (device report, 2026-05-13): Samsung One UI with a Bluetooth mouse scrolls inverted in Zdroid while every other app scrolls normally. The uncaptured wheel path passes vertical deltas through since 0.4.3; verify on One UI with a Bluetooth mouse before treating the report as resolved.
+- **The thermal frame cap.** `cmd thermalservice override-status 3` took effect, but `dumpsys SurfaceFlinger --latency` returned no frames for Zdroid's layer in that session, so the cap was never measured.
+- **The in-app update's install.** The updater compares `versionName`; its first real run is the update from 0.4.3 to 0.4.4. Installing the release by hand keeps the data if it fails.
+- **Swiping the app away during first-launch extraction.** Needs a clean install, which deletes the home folder; try it on the next wiped-device run.
+- **Speed against 0.9.23**, which ran its tools natively: rust-analyzer's first diagnostics and go to definition in a Rust project under `~/projects`, `cargo build`, and `git status` in a large repository, timed on the same project with both versions.
+- **Vim logs `Didn't find an action named "collab_panel::ToggleFocus"`.** Harmless: Android doesn't register that action.
