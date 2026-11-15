@@ -79,7 +79,14 @@ impl Runtime {
                 guest_path = Some(guest_path_from_login(&value));
             // The engine passes its own `ZD_` variables on to the guest's
             // children; they're configuration, not the shell's.
-            } else if name != "SHLVL" && !name.starts_with("ZD_") && !runtimes.contains(&name) {
+            } else if is_shell_state(&name) || name.starts_with("ZD_") || runtimes.contains(&name) {
+                continue;
+            } else if name.starts_with("LD_") {
+                // The editor is a bionic process; the shell's loader settings
+                // are for glibc programs in the rootfs and would be applied to
+                // every child the editor spawns outside the engine too.
+                continue;
+            } else {
                 ops.push((name, EnvOp::Set(value.into())));
             }
         }
@@ -140,6 +147,15 @@ fn guest_path_from_login(login_path: &str) -> String {
         entries.remove(last);
     }
     entries.join(":")
+}
+
+/// A shell's own bookkeeping, not configuration: `SHLVL` as upstream skips
+/// it, plus the capture shell's working directory and last argument. bash
+/// and zsh trust an inherited `PWD` that names the current directory, so the
+/// capture's host spelling of the home (`<files>/rootfs/root`) would show in
+/// every terminal's prompt instead of `/root`.
+fn is_shell_state(name: &str) -> bool {
+    matches!(name, "SHLVL" | "PWD" | "OLDPWD" | "_")
 }
 
 #[cfg(test)]
@@ -204,6 +220,10 @@ mod tests {
             ("SHLVL", "1"),
             ("ZD_ROOTFS", "/data/data/com.zdroid/files/rootfs"),
             ("ZD_IDENTITY", "0:0"),
+            ("PWD", "/data/user/0/com.zdroid/files/rootfs/root"),
+            ("OLDPWD", "/"),
+            ("_", "/data/user/0/com.zdroid/files/bin/zed-askpass-helper"),
+            ("LD_LIBRARY_PATH", "/usr/local/lib"),
             ("JAVA_HOME", "/usr/lib/jvm/java-21-openjdk-arm64"),
             ("__MISE_SESSION", "abc"),
         ]
