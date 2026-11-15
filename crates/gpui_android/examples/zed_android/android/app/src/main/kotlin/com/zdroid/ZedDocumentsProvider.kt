@@ -17,23 +17,24 @@ import java.util.LinkedList
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 
-/// Exposes Zdroid's `~` (i.e. `/data/data/com.zdroid/files/home`) to
-/// other apps via Android's Storage Access Framework. After install Zdroid
-/// shows up in any system "Open from / Save to" picker as its own root —
-/// same pattern as Termux. Read-write; users can browse, edit, share files
-/// from `~` without ADB or run-as.
+/// Exposes the app's home folder (`/data/data/com.zdroid/files/home`, which
+/// holds `projects`, `storage` and `received`) to other apps via Android's
+/// Storage Access Framework. After install Zdroid shows up in any system
+/// "Open from / Save to" picker as its own root — same pattern as Termux.
+/// Read-write; users can browse, edit, share files from it without ADB or
+/// run-as. The guest's `~` is `/root`, which links those three folders here.
 ///
 /// Lifecycle gotcha: ContentProviders attach earlier than Activities. The
 /// system can fork our process, run `Application.onCreate`, then
 /// `ContentProvider.onCreate`, then service queries — without ever
 /// touching `MainActivity` or `android_main`. So the runtime setup and
 /// env setup haven't run yet on a cold provider query. We rely on
-/// `ZedApplication.onCreate` mkdir-ing `~` so the root is at least
+/// `ZedApplication.onCreate` mkdir-ing the home folder so the root is at least
 /// browsable; the provider also defends with an `isDirectory()` check.
 ///
 /// Document IDs are absolute filesystem paths (matches Termux). Other apps
 /// pass them back through URI grants, so every ID is checked to stay under
-/// `~`. Symlink escape during search is blocked by canonical-path check.
+/// the home folder. Symlink escape during search is blocked by canonical-path check.
 class ZedDocumentsProvider : DocumentsProvider() {
     private lateinit var baseDir: File
 
@@ -269,8 +270,8 @@ class ZedDocumentsProvider : DocumentsProvider() {
         }
     }
 
-    // Resolves `..` without following symlinks, so `~/storage/shared` stays
-    // browsable while `~/../databases` is refused.
+    // Resolves `..` without following symlinks, so `home/storage/shared`
+    // stays browsable while `home/../../databases` is refused.
     private fun getFileForDocId(docId: String): File {
         val file = File(docId).normalize()
         if (!file.isAbsolute || !file.startsWith(baseDir)) {

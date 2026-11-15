@@ -80,9 +80,10 @@ impl std::error::Error for Cancelled {}
 
 const MIN_FREE_BYTES: u64 = 600 * 1024 * 1024;
 /// The SSH client is what Zed runs for remote projects and git's SSH
-/// remotes, and git only recommends it.
+/// remotes, and git only recommends it. tzdata gives `/etc/localtime` its
+/// target (see `seed_timezone`); without it the guest's clock reads UTC.
 const ESSENTIALS_SCRIPT: &str = "apt-get update && apt-get install -y --no-install-recommends \
-     ca-certificates git openssh-client";
+     ca-certificates git openssh-client tzdata";
 
 fn sibling(rootfs: &Path, suffix: &str) -> PathBuf {
     let mut name = rootfs
@@ -250,7 +251,7 @@ fn install_inner(
 // runtime spawns the loader directly.
 #[allow(clippy::disallowed_methods)]
 pub fn install_essentials(runtime: &Runtime, progress: &mut dyn ProgressSink) -> Result<()> {
-    progress.step("Installing git, the SSH client and certificates");
+    progress.step("Installing git, the SSH client, certificates and time zones");
     let mut command = runtime.command("/bin/sh");
     command
         .args(["-c", ESSENTIALS_SCRIPT])
@@ -599,11 +600,11 @@ fn resolv_conf(nameservers: &[String]) -> String {
 }
 
 /// `/etc/localtime` and `/etc/timezone` for the device's zone. The base
-/// image ships no tzdata, so the link dangles until the first `apt`
-/// install pulls it in; that is also what keeps tzdata's debconf
-/// questions quiet then (its config script takes the zone from an
-/// existing link and marks the questions seen), where a bare rootfs
-/// stops every first `apt install` at an interactive time zone menu.
+/// image ships no tzdata, so the link dangles until the essentials step
+/// installs it; the link is also what keeps tzdata's debconf questions
+/// quiet then (its config script takes the zone from an existing link and
+/// marks the questions seen), where a bare rootfs stops every first
+/// `apt install` that pulls tzdata in at an interactive time zone menu.
 /// The link is relative, the installer's invariant for the whole tree.
 fn seed_timezone(root: &Path, timezone: &str) -> Result<()> {
     let zone = if crate::is_zone_id(timezone) {

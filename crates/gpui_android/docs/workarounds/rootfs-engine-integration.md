@@ -37,14 +37,15 @@ writeup is the editor side.
   `assets/rootfs/` (stored, not recompressed). On a launch with no
   `<data>/files/rootfs/.rootfs-version`, `runtime_setup::setup_at_boot`
   streams the asset through the installer before the first paint: every
-  symlink rewritten relative (the engine's invariant), modes kept, device
-  nodes skipped, seeds for `resolv.conf`, `hostname`, `hosts`, the
-  device's time zone (`/etc/localtime` as a relative link into
+  symlink rewritten relative (links the guest makes later store an
+  absolute target as its host path instead, so they survive a rename into
+  another folder), modes kept, device nodes skipped, seeds for
+  `resolv.conf`, `hostname`, `hosts`, the device's time zone (`/etc/localtime` as a relative link into
   `zoneinfo` plus `/etc/timezone`, from `persist.sys.timezone`: the base
   image has no tzdata, and without the link the first `apt install` that
   pulls it in stops at an interactive time zone menu), the debugger
   configs and the binding directory chains, then a two-rename swap. Seconds on a tablet, no network. The essentials step (`apt-get
-  install ca-certificates git`, which the base image lacks) runs in the
+  install ca-certificates git openssh-client tzdata`, which the base image lacks) runs in the
   background afterwards with a notification; it is the one network-bound
   part and has a button on the settings page for a retry.
 - **The farm.** `<data>/files/zd-runtime/<name> -> ../bin/zdload` for
@@ -62,9 +63,9 @@ writeup is the editor side.
   editor's children (`runtime_service::terminate_descendants`), extracts
   the bundled image again over a fresh staging dir and carries the old
   tree's `/root` into the new one; then the essentials step the first
-  launch runs (git, the SSH client, CA certificates) follows, since the
-  base image has none of them. Editor state is outside the rootfs and
-  untouched.
+  launch runs (git, the SSH client, CA certificates and time zone data)
+  follows, since the base image has none of them. The app's home folder
+  and the editor state are outside the rootfs and untouched.
 - **The home folder.** The guest's home is the image's `/root`, inside
   the rootfs: `$HOME` in the guest view and root's entry in the rootfs's
   `/etc/passwd`, which ssh reads instead of `$HOME`. The editor's `HOME`
@@ -84,7 +85,10 @@ writeup is the editor side.
   rootfs. Boot removes the old prefix (`<data>/files/usr`), the
   `bin/zd-exec` bridge and `etc/zd-runtime.toml`
   (`runtime_setup::sweep_previous_runtimes`) and sets the rootfs up as on
-  a first launch; the home folder and editor settings stay.
+  a first launch; the home folder and editor settings stay. Their home was
+  the app's home folder, so `link_home` also links its `.ssh`, `.claude`,
+  `.claude.json` and `.codex` into `/root` and includes its `.gitconfig`
+  from root's.
 
 ## Why not the obvious fix
 

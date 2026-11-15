@@ -37,13 +37,24 @@
 //!      passphrase) the user typed into Zed's modal.
 //!   6. Write that response to stdout. ssh reads stdout and treats it
 //!      as the password.
+//!
+//! It also stands in for `zed --printenv`, which Zed's login shell capture
+//! (`util::shell_env::capture`) runs inside the shell to read its
+//! environment: `util::get_shell_safe_zed_path` returns this helper on
+//! Android (`zdroid_hooks::register_zed_helper`).
 
+use std::collections::HashMap;
 use std::env;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    if env::args().skip(1).any(|argument| argument == "--printenv") {
+        print_env();
+        return ExitCode::SUCCESS;
+    }
+
     let socket = match env::args().find_map(|a| a.strip_prefix("--askpass=").map(String::from)) {
         Some(s) if !s.is_empty() => s,
         _ => {
@@ -93,4 +104,14 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Zed's `util::shell_env::print_env`, which `zed --printenv` runs.
+fn print_env() {
+    let env_vars: HashMap<String, String> = env::vars().collect();
+    let json = serde_json::to_string_pretty(&env_vars).unwrap_or_else(|err| {
+        eprintln!("Error serializing environment variables: {}", err);
+        std::process::exit(1);
+    });
+    println!("{}", json);
 }

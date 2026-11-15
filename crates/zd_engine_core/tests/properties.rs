@@ -133,6 +133,12 @@ proptest! {
             guest = rest;
             expected_len = clamp_to_root(guest, &mut expected).unwrap();
         }
+        // A trailing `/` or `/.` is kept, so the kernel follows a final
+        // symlink as Linux does.
+        if expected_len > 1 && (guest.ends_with(b"/") || guest.ends_with(b"/.")) {
+            expected[expected_len] = b'/';
+            expected_len += 1;
+        }
         prop_assert_eq!(
             String::from_utf8_lossy(&back[..back_len]),
             String::from_utf8_lossy(&expected[..expected_len])

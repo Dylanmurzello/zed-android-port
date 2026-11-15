@@ -460,7 +460,7 @@ fn signal_mask(value: &[u8]) -> Option<u64> {
     Some(mask)
 }
 
-fn descriptor(value: &[u8]) -> Option<i32> {
+pub(crate) fn descriptor(value: &[u8]) -> Option<i32> {
     if value.is_empty() || value.len() > 9 {
         return None;
     }

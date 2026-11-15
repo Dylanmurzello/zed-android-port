@@ -102,12 +102,20 @@ impl<'a> Translator<'a> {
             None => (self.rootfs, 0),
         };
         let rest_len = len - rest_start;
-        let total = prefix.len() + rest_len;
+        // A trailing `/` or `/.` makes the kernel follow a final symlink and
+        // require a directory, even in calls that otherwise act on the link
+        // itself (`lstat`, `unlink`, `rename`). Clamping rebuilds the path
+        // from its components and drops it, so it is put back.
+        let slash = usize::from(len > 1 && names_directory(guest));
+        let total = prefix.len() + rest_len + slash;
         if total + 1 > out.len() {
             return Err(TranslateError::TooLong);
         }
         out.copy_within(rest_start..len, prefix.len());
         out[..prefix.len()].copy_from_slice(prefix);
+        if slash == 1 {
+            out[total - 1] = b'/';
+        }
         out[total] = 0;
         Ok(Translated::Host(total))
     }
@@ -140,12 +148,35 @@ impl<'a> Translator<'a> {
         Ok(writer.finish())
     }
 
-    /// Target to store for a symlink the guest creates at `link` (a guest
-    /// absolute path) pointing at `target`. Keeps every link resolvable
-    /// by the kernel without translation. The kernel resolves a relative
-    /// target from the link's host directory, so a relative form is only
-    /// meaningful when the link and the target sit in the same host tree
-    /// (both under the rootfs, or both under the same binding):
+    /// Target to store for a symlink the guest creates while it runs. An
+    /// absolute target is stored as its host path, which `readlinkat`
+    /// de-translates back, as fakechroot does: a path relative to the
+    /// link's directory would name another file once a rename moves the
+    /// link into another directory (Codex installs its daemon that way),
+    /// and `readlink` would not return the path the guest wrote. A
+    /// relative target is stored as `rewrite_symlink_target` stores it.
+    pub fn guest_symlink_target(
+        &self,
+        link: &[u8],
+        target: &[u8],
+        out: &mut [u8],
+        scratch: &mut [[u8; MAX_PATH]; 2],
+    ) -> Result<usize, TranslateError> {
+        if !is_absolute(target) {
+            return self.rewrite_symlink_target(link, target, out, scratch);
+        }
+        let [absolute, _] = scratch;
+        let absolute_len = normalize(target, absolute)?;
+        self.host_link_target(&absolute[..absolute_len], out)
+    }
+
+    /// Target to store for a symlink at `link` (a guest absolute path)
+    /// pointing at `target`, as the installer writes the image's links.
+    /// Keeps every link resolvable by the kernel without translation. The
+    /// kernel resolves a relative target from the link's host directory,
+    /// so a relative form is only meaningful when the link and the target
+    /// sit in the same host tree (both under the rootfs, or both under the
+    /// same binding):
     /// - same tree, absolute target: relative to the link's directory;
     /// - same tree, relative target: kept, minus `..` components that
     ///   would climb above the guest root;
@@ -173,11 +204,7 @@ impl<'a> Translator<'a> {
         };
         let target_absolute = &absolute[..absolute_len];
         if self.tree_of(target_absolute) != link_tree {
-            return match self.guest_to_host(target_absolute, out)? {
-                Translated::Host(len) => Ok(len),
-                // Absolute and not a /proc special: always a host path.
-                _ => Err(TranslateError::TooLong),
-            };
+            return self.host_link_target(target_absolute, out);
         }
         if is_absolute(target) {
             return Ok(relative_path(link_dir, target_absolute, out)?);
@@ -212,6 +239,15 @@ impl<'a> Translator<'a> {
         Ok(writer.finish())
     }
 
+    /// Host path of a normalized guest absolute path, as a link target.
+    fn host_link_target(&self, target_absolute: &[u8], out: &mut [u8]) -> Result<usize, TranslateError> {
+        match self.guest_to_host(target_absolute, out)? {
+            Translated::Host(len) => Ok(len),
+            // Absolute and not a /proc special: always a host path.
+            _ => Err(TranslateError::TooLong),
+        }
+    }
+
     /// Which host tree a guest absolute path lives in.
     fn tree_of(&self, guest: &[u8]) -> Tree<'a> {
         match self.bindings.match_guest(guest) {
@@ -234,6 +270,12 @@ enum Tree<'a> {
 enum ProcFile {
     Exe,
     Auxv,
+}
+
+/// Whether a path ends in `/` or `/.`, which names its final component as
+/// a directory.
+fn names_directory(path: &[u8]) -> bool {
+    path.ends_with(b"/") || path.ends_with(b"/.")
 }
 
 /// `/proc/<who>/exe` and `/proc/<who>/auxv`, the two per-process files
@@ -399,6 +441,20 @@ mod tests {
     }
 
     #[test]
+    fn trailing_slash_kept() {
+        // The kernel then follows a final symlink, as Linux does for the
+        // guest's own path.
+        assert_eq!(to_host("/root/projects/"), "/data/user/0/com.zdroid/files/rootfs/root/projects/");
+        assert_eq!(to_host("/root/projects/."), "/data/user/0/com.zdroid/files/rootfs/root/projects/");
+        assert_eq!(to_host("/root/projects//"), "/data/user/0/com.zdroid/files/rootfs/root/projects/");
+        assert_eq!(to_host("/tmp/"), "/data/user/0/com.zdroid/files/tmp/");
+        assert_eq!(to_host("/sdcard/Download/"), "/sdcard/Download/");
+        assert_eq!(to_host("/root/a/../"), "/data/user/0/com.zdroid/files/rootfs/root/a/../");
+        assert_eq!(to_host("/root/projects"), "/data/user/0/com.zdroid/files/rootfs/root/projects");
+        assert_eq!(to_host("//"), "/data/user/0/com.zdroid/files/rootfs");
+    }
+
+    #[test]
     fn bound_paths() {
         assert_eq!(to_host("/dev/null"), "/dev/null");
         assert_eq!(to_host("/proc/self/maps"), "/proc/self/maps");
@@ -481,6 +537,31 @@ mod tests {
         assert_eq!(symlink("/tmp/back", "../../tmp/hn"), "hn");
         assert_eq!(symlink("/tmp/d/e/x", "../../d/y"), "../../d/y");
         assert_eq!(symlink("/usr/lib/x", "./a/../b"), "./a/../b");
+    }
+
+    fn guest_symlink(link: &str, target: &str) -> String {
+        let mut out = [0u8; 512];
+        let mut scratch = [[0u8; MAX_PATH]; 2];
+        let len = translator()
+            .guest_symlink_target(link.as_bytes(), target.as_bytes(), &mut out, &mut scratch)
+            .unwrap();
+        String::from_utf8(out[..len].to_vec()).unwrap()
+    }
+
+    #[test]
+    fn guest_symlink_targets() {
+        // An absolute target stays the same file when the link is renamed
+        // into another directory, and reads back as the guest wrote it.
+        let stored = guest_symlink("/root/t/stage/current", "/root/t/releases/r1");
+        assert_eq!(stored, "/data/user/0/com.zdroid/files/rootfs/root/t/releases/r1");
+        assert_eq!(to_guest(&stored), "/root/t/releases/r1");
+        assert_eq!(guest_symlink("/usr/local/bin/x", "/usr/bin/../lib/x"), "/data/user/0/com.zdroid/files/rootfs/usr/lib/x");
+        assert_eq!(guest_symlink("/tmp/a/l", "/tmp/b"), "/data/user/0/com.zdroid/files/tmp/b");
+        assert_eq!(guest_symlink("/tmp/hn", "/etc/hostname"), "/data/user/0/com.zdroid/files/rootfs/etc/hostname");
+        assert_eq!(guest_symlink("/etc/resolv.conf", "/dev/null"), "/dev/null");
+        // A relative target is stored as the installer stores it.
+        assert_eq!(guest_symlink("/root/t/l", "releases/r1"), "releases/r1");
+        assert_eq!(guest_symlink("/tmp/x", "../etc/hostname"), "/data/user/0/com.zdroid/files/rootfs/etc/hostname");
     }
 
     #[test]

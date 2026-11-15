@@ -496,38 +496,22 @@ impl AndroidPlatform {
             .clone()
     }
 
-    /// Translate the gpui-side `WindowParams.bounds` (in logical pixels at
-    /// the primary's scale factor) into device-pixel `Rect` coordinates the
-    /// OS will use as the freeform window's initial size and position. Falls
-    /// back to `None` (let the OS pick) if either the requested size is
-    /// nonsense or we can't read screen dimensions.
-    fn compute_launch_bounds(
+    /// The device-pixel size of gpui's requested `WindowParams.bounds`
+    /// (logical pixels at the primary's scale factor) for an extra window's
+    /// freeform rectangle, or `None` to let the OS pick. The origin is
+    /// ignored: `MainActivity.launchExtraWindow` fits the size into the
+    /// screen and centers it.
+    fn compute_launch_size(
         &self,
         bounds: &Bounds<Pixels>,
         scale_factor: f32,
-    ) -> Option<crate::multi_window::LaunchBounds> {
-        let width_px = (bounds.size.width.as_f32() * scale_factor).round() as i32;
-        let height_px = (bounds.size.height.as_f32() * scale_factor).round() as i32;
-        if width_px <= 0 || height_px <= 0 {
+    ) -> Option<crate::multi_window::LaunchSize> {
+        let width = (bounds.size.width.as_f32() * scale_factor).round() as i32;
+        let height = (bounds.size.height.as_f32() * scale_factor).round() as i32;
+        if width <= 0 || height <= 0 {
             return None;
         }
-        let nw = self.android_app.native_window()?;
-        let screen_w = nw.width();
-        let screen_h = nw.height();
-        if screen_w <= 0 || screen_h <= 0 {
-            return None;
-        }
-        // Center the window on screen by default. Caller-supplied origin is
-        // ignored for now — gpui's WindowParams.bounds.origin is meaningless
-        // on Android (no window manager coordinate space prior to L7e).
-        let left = ((screen_w - width_px) / 2).max(0);
-        let top = ((screen_h - height_px) / 2).max(0);
-        Some(crate::multi_window::LaunchBounds {
-            left,
-            top,
-            right: left + width_px,
-            bottom: top + height_px,
-        })
+        Some(crate::multi_window::LaunchSize { width, height })
     }
 
     /// Read the device's display density and convert to a scale factor.
@@ -552,9 +536,8 @@ impl AndroidPlatform {
     /// chrome and routes touch/lifecycle events to that Activity's
     /// `SurfaceView`; events flow through `drain_extra_window_events`.
     ///
-    /// `options.bounds` is informational only — actual placement is
-    /// controlled by the OS window manager (or by ActivityOptions launch
-    /// bounds, deferred to L7e).
+    /// Only the size of `options.bounds` is used, as the freeform window's
+    /// launch size (see [`compute_launch_size`](Self::compute_launch_size)).
     fn open_extra_window(
         &self,
         handle: AnyWindowHandle,
@@ -562,9 +545,9 @@ impl AndroidPlatform {
     ) -> Result<Box<dyn PlatformWindow>> {
         let scale_factor = self.compute_scale_factor();
         let window_id = handle.window_id().as_u64();
-        let launch_bounds = self.compute_launch_bounds(&options.bounds, scale_factor);
+        let launch_size = self.compute_launch_size(&options.bounds, scale_factor);
         log::info!(
-            "open_extra_window: windowId={window_id} launching ExtraWindowActivity bounds={launch_bounds:?}"
+            "open_extra_window: windowId={window_id} launching ExtraWindowActivity size={launch_size:?}"
         );
 
         // Mark the window as known BEFORE launching the Activity. If we
@@ -578,7 +561,7 @@ impl AndroidPlatform {
         let native_window = crate::multi_window::create_extra_window_blocking(
             &self.android_app,
             window_id,
-            launch_bounds,
+            launch_size,
             |timeout| {
                 self.android_app.poll_events(Some(timeout), |event| {
                     if let android_activity::PollEvent::Main(main_event) = event {

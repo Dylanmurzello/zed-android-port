@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Phase / Commit:** rootfs engine, chunk 2
-**Files:** `crates/zdroid_runtime/src/{runtime,env}.rs`, `crates/zdroid_hooks/src/zdroid_hooks.rs` (`guest_env_for_path`), `crates/util/src/command.rs` (`env`), `crates/project/src/environment.rs` and `crates/languages/src/{rust,python}.rs` (comments)
+**Files:** `crates/zdroid_runtime/src/{runtime,env,login_path}.rs`, `crates/zdroid_hooks/src/zdroid_hooks.rs` (`guest_env_for_path`), `crates/util/src/command.rs` (`env`), `crates/util/src/util.rs` (`get_shell_safe_zed_path`), `crates/project/src/environment.rs` and `crates/languages/src/{rust,python}.rs` (comments)
 
 ## Problem
 
@@ -35,7 +35,7 @@ every exec.
   `ZD_CLOSE_FDS=1`, `ZD_GUEST_ENV`, and `ZD_LOG` when the dev toggle file
   `<data>/files/etc/zd-engine-log` exists. `SHELL` is the loader link.
 - **Guest view (`ZD_GUEST_ENV`).** `HOME=/root;USER=root;
-  LOGNAME=root;SHELL=<root's login shell>;PATH=<engine default PATH>;LANG=C.UTF-8;TMPDIR=/tmp`.
+  LOGNAME=root;SHELL=<root's login shell>;PATH=<guest PATH>;LANG=C.UTF-8;TMPDIR=/tmp`.
   The home is the image's `/root`, inside the rootfs; a reset carries it
   into the new tree, and `install::link_home` links `~/projects`,
   `~/storage` and `~/received` to the app's home folder
@@ -46,6 +46,29 @@ every exec.
   persistent `ZD_ROOTFS`, `ZD_BINDS`, `ZD_FAKE_ROOT`, `ZD_HOSTNAME` and
   `ZD_LOG` are re-injected into children (they are engine configuration,
   not the guest's business).
+- **Login shell environment (`login_path.rs`).** Desktop Zed captures the
+  login shell's environment at startup with `util::shell_env::capture` and
+  sets every variable on its process (`util::load_login_shell_environment`),
+  which is how the tools mise, asdf and nvm put on PATH reach it. The app's
+  `runtime_setup::load_login_environment` runs that same capture with root's
+  login shell (`<rootfs>/usr/bin/zsh`, which `new_std_command` routes
+  through the loader) in the home folder. The capture runs `zed --printenv`
+  inside the shell, and the app's executable is `app_process64`, so
+  `util::get_shell_safe_zed_path` returns the askpass helper on Android,
+  which prints the environment the same way. `Runtime::env_for_login_shell`
+  then applies it as Zed does, except for what the runtime sets for the
+  editor or the guest (`HOME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, the
+  engine's `ZD_` variables and the rest above): the editor keeps those, and
+  the loader passes every other variable on to the guest's children. The
+  shell's PATH becomes the guest PATH: its absolute entries with the
+  default's missing ones appended, so every folder the farm mirrors stays on
+  it, capped at 3072 bytes, since the engine holds all of `ZD_GUEST_ENV` in
+  4096. `Runtime::binary_dirs` adds its folders beyond the default's that the
+  rootfs holds, the farm is rebuilt, and the watcher, started afterwards,
+  watches them. As in Zed's `main()`, Node.js detection waits for the
+  capture, and so does the project environment (`environment.rs`'s Android
+  gate, through `zdroid_hooks::login_environment_loaded`), which desktop Zed
+  loads from another login shell in the project's folder.
 - **A PATH set on one spawn (`zdroid_hooks::guest_env_for_path`).** npm runs
   lifecycle scripts as `sh -c "node install.js"` with the managed Node's
   `bin` prepended to PATH by Zed. The guest PATH from `ZD_GUEST_ENV`
@@ -92,7 +115,8 @@ directory as `/root`.
 ## Failure mode
 
 A tool that cannot find another tool the user installed: check the farm
-(`ls <data>/files/zd-runtime`) and the guest PATH in `ZD_GUEST_ENV`. A
+(`ls <data>/files/zd-runtime`) and the guest PATH in `ZD_GUEST_ENV`, and
+logcat's `runtime_setup` line for the login shell's capture. A
 remote server complaining about `ZD_*` or a preload: a Zed release started
 sending local variables to remotes.
 

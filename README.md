@@ -37,7 +37,7 @@ Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/D
 ### First launch
 
 1. **Access to /sdcard.** Projects under the app's own files need no permission. For anything under `/sdcard` the first launch opens Android's "All files access" toggle for Zdroid; turn it on, or later from **Settings → Android → Allow Access to /sdcard**.
-2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client and the CA certificates are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
+2. **Runtime.** The Ubuntu base image bundled in the APK is extracted into the app's private data dir behind the splash, a few seconds, no network. Then git, the SSH client, the CA certificates and time zone data are installed with apt in the background; a notification shows progress and needs a network. If that step fails, **Settings → Android → Install Essentials** runs it again.
 3. **Notifications and battery.** Language servers and terminals keep running while Zdroid is in the background through a foreground service. Android asks once whether Zdroid may post notifications; declining keeps the service running with its notification hidden. Some skins (One UI's sleeping apps) still stop background apps unless Zdroid is excluded; **Settings → Android → Allow Background Activity** asks for the exemption.
 
 ### Setting up your shell environment
@@ -57,11 +57,11 @@ apt install -y nodejs npm
 npm install -g @anthropic-ai/claude-code @openai/codex
 ```
 
-In the terminal, run Codex as `codex --no-daemon` (or add `alias codex='codex --no-daemon'` to `~/.bashrc`): by default it starts a background server that sandboxes itself with bubblewrap, which needs namespaces that Android doesn't give an app. The agent panel's Codex doesn't use that server.
+Codex runs its commands in its own sandbox, which needs bubblewrap and Linux namespaces that Android doesn't give an app. With its default permissions every command fails with `error building bubblewrap command` (Codex 0.167.0), with or without its background server. Give it full access: in the terminal, run `codex -s danger-full-access` (or add `alias codex='codex -s danger-full-access'` to `~/.bashrc`); in the agent panel, pick **Full access** in the permissions menu under the message box. Codex can then change any file Zdroid can reach, including `/sdcard` when All files access is on.
 
-Go comes from the official `linux-arm64` tarball unpacked into `/usr/local`; gopls, delve, clangd and the rest install the way their docs say for Linux. Anything that lands in `/usr/bin`, `/usr/local/bin`, `~/.cargo/bin` or `~/.local/bin` shows up on the editor's PATH within a couple of seconds, so language servers start from the editor without configuration.
+Go comes from the official `linux-arm64` tarball unpacked into `/usr/local`; gopls, delve, clangd and the rest install the way their docs say for Linux. Anything that lands in `/usr/bin`, `/usr/local/bin`, `~/.cargo/bin` or `~/.local/bin` shows up on the editor's PATH within a couple of seconds, so language servers start from the editor without configuration. As desktop Zed does, the editor also loads root's login shell environment at each launch, so the tools mise, nvm or asdf put on PATH, and the variables your startup files export, reach language servers and Node.js too; a change there counts from the next launch.
 
-**Settings → Android → Reset Runtime** extracts the bundled image again when you want a clean slate; your home folder, projects and editor settings stay.
+**Settings → Android → Reset Runtime** extracts the bundled image again when you want a clean slate, then installs the essentials again; your home folder, projects and editor settings stay.
 
 ### Working with projects
 
@@ -208,7 +208,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 ## <img src="https://api.iconify.design/lucide:tablet-smartphone.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Tested on
 
-Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver, and release builds are compiled for its CPU. Other high-end devices from 2022 on should run them too (Snapdragon 8 Gen 1, Dimensity 9000, Exynos 2200, Tensor G3 and later), but older CPUs crash at launch, including the Tensor G2 in the Pixel 7 and Pixel Tablet. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Android 12 or later and Vulkan 1.1 are required too, and only Adreno is exercised. Mali / Xclipse will run but may want shader tweaks.
+Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver. A Galaxy S21 Ultra (Exynos 2100 / Mali-G78, Android 15, One UI 7, Linux 5.4) checks older CPUs and kernels and a Mali GPU, where text is anti-aliased in grayscale. Release builds need Android 12 or later, Vulkan 1.1, and Cortex-A55, A75 or newer cores (Armv8.2 with dot product); older CPUs, such as Cortex-A53 ones, crash at launch. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Xclipse GPUs haven't been tried.
 
 A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, foldable in tablet mode, or DeX/desktop-mode with monitor and peripherals all work. Phones technically run but are de-prioritized.
 

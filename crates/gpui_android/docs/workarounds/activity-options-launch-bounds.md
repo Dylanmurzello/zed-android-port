@@ -3,8 +3,8 @@
 **Status:** Active
 **Phase / Commit:** L7e
 **Files:**
-- `crates/gpui_android/src/multi_window.rs` (`LaunchBounds`) and `MainActivity.launchExtraWindow`
-- `crates/gpui_android/src/platform.rs` (`compute_launch_bounds`)
+- `crates/gpui_android/src/multi_window.rs` (`LaunchSize`) and `MainActivity.launchExtraWindow`
+- `crates/gpui_android/src/platform.rs` (`compute_launch_size`)
 
 ## Problem
 
@@ -32,61 +32,25 @@ the app's `minSdk`, fine.
 
 ## Solution
 
-Translate gpui's `WindowParams.bounds` (logical pixels at the primary's
-scale factor) into device-pixel screen coordinates centered on the primary
-display:
+`compute_launch_size` turns the size of gpui's `WindowParams.bounds`
+(logical pixels at the primary's scale factor) into device pixels, and
+`launch_extra_activity` passes it to `MainActivity.launchExtraWindow` over
+JNI. That method places the window: it takes the display's maximum
+`WindowMetrics`, removes the insets of `systemBars() | displayCutout()`
+ignoring their visibility, shrinks the size to fit that area and centers it
+there, then starts the Activity with
+`ActivityOptions.makeBasic().setLaunchBounds(rect).toBundle()`.
 
-```rust
-fn compute_launch_bounds(
-    &self,
-    bounds: &Bounds<Pixels>,
-    scale_factor: f32,
-) -> Option<crate::multi_window::LaunchBounds> {
-    let width_px = (bounds.size.width.as_f32() * scale_factor).round() as i32;
-    let height_px = (bounds.size.height.as_f32() * scale_factor).round() as i32;
-    if width_px <= 0 || height_px <= 0 { return None; }
-    let nw = self.android_app.native_window()?;
-    let screen_w = nw.width() as i32;
-    let screen_h = nw.height() as i32;
-    let left = ((screen_w - width_px) / 2).max(0);
-    let top  = ((screen_h - height_px) / 2).max(0);
-    Some(LaunchBounds {
-        left, top,
-        right: left + width_px,
-        bottom: top + height_px,
-    })
-}
-```
+A size that isn't positive starts the Activity without options, and the OS
+picks the rectangle.
 
-JNI side: when bounds are present, route through ActivityOptions.toBundle:
-
-```rust
-let rect_class = env.find_class("android/graphics/Rect")?;
-let rect_obj = env.new_object(
-    &rect_class, "(IIII)V",
-    &[JValue::Int(rect.left), JValue::Int(rect.top),
-      JValue::Int(rect.right), JValue::Int(rect.bottom)],
-)?;
-let activity_options_class = env.find_class("android/app/ActivityOptions")?;
-let opts = env.call_static_method(
-    &activity_options_class, "makeBasic",
-    "()Landroid/app/ActivityOptions;", &[],
-)?.l()?;
-env.call_method(
-    &opts, "setLaunchBounds",
-    "(Landroid/graphics/Rect;)Landroid/app/ActivityOptions;",
-    &[JValue::Object(&rect_obj)],
-)?;
-let bundle = env.call_method(&opts, "toBundle", "()Landroid/os/Bundle;", &[])?.l()?;
-env.call_method(
-    &main_activity, "startActivity",
-    "(Landroid/content/Intent;Landroid/os/Bundle;)V",
-    &[JValue::Object(&intent), JValue::Object(&bundle)],
-)?;
-```
-
-`None` bounds (degenerate width/height, or no native_window available)
-falls back to the unbounded `startActivity(Intent)` overload.
+The fit matters because Android doesn't shrink a launch rectangle that
+doesn't fit the area clear of the system bars: it moves the rectangle to
+that area's top. Ctrl+Shift+N asks for a window at least as large as the screen, and
+until 0.17.2 the app centered it on the whole screen, so One UI outside DeX
+put it at `[0,45][2960,1893]` on the reference tablet: 45 px down, below
+the status bar, with its bottom edge and Zed's status bar off the screen
+(2026-10-31).
 
 ## Why this works
 
