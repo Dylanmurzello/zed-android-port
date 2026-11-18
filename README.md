@@ -135,7 +135,7 @@ apt install -y build-essential curl python3 gdb
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c rust-analyzer
 ```
 
-Zed downloads its own Node for the Node-based language servers (vtsls, eslint, json, tailwind) and for the agent panel's Claude Agent and Codex, so those work without installing Node; `apt install -y nodejs npm` gives you a system one for the terminal. The Claude Code and Codex CLIs, for example:
+Zed downloads its own Node for the Node-based language servers (vtsls, eslint, json, tailwind) and for the agent panel's Codex, and a Linux build of the agent panel's Claude Agent, so those work without installing Node; `apt install -y nodejs npm` gives you a system one for the terminal. The Claude Code and Codex CLIs, for example:
 
 ```sh
 apt install -y nodejs npm
