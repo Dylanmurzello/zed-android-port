@@ -130,6 +130,11 @@ pub fn os_name(cx: &App) -> String {
     {
         "Windows".to_string()
     }
+
+    #[cfg(target_os = "android")]
+    {
+        "Android".to_string()
+    }
 }
 
 /// Returns the OS name, guessing the display server from the environment.
