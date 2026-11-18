@@ -1203,6 +1203,7 @@ fn boot(
     tab_switcher::init(cx);
     outline::init(cx);
     call_hierarchy::init(cx);
+    project_bookmarks::init(cx);
     project_symbols::init(cx);
     project_panel::init(cx);
     outline_panel::init(cx);

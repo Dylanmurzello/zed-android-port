@@ -83,6 +83,7 @@ picker = { path = "../../../picker" }
 project = { path = "../../../project" }
 prompt_store = { path = "../../../prompt_store" }
 project_panel = { path = "../../../project_panel" }
+project_bookmarks = { path = "../../../project_bookmarks" }
 project_symbols = { path = "../../../project_symbols" }
 rayon = "1.8"
 recent_projects = { path = "../../../recent_projects" }
@@ -336,6 +337,7 @@ picker = { opt-level = "z" }
 picker_preview = { opt-level = "z" }
 platform_title_bar = { opt-level = "z" }
 prettier = { opt-level = "z" }
+project_bookmarks = { opt-level = "z" }
 project_panel = { opt-level = "z" }
 project_symbols = { opt-level = "z" }
 prompt_store = { opt-level = "z" }

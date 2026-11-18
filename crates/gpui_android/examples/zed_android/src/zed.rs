@@ -76,9 +76,9 @@ use util::rel_path::RelPath;
 use vim_mode_setting::VimModeSetting;
 use workspace::notifications::{NotificationId, dismiss_app_notification, show_app_notification};
 use workspace::{
-    AppState, CloseProject, CloseWindow, MultiWorkspace, Pane, Panel, Workspace, WorkspaceSettings,
-    create_and_open_local_file, notifications::simple_message_notification::MessageNotification,
-    with_active_or_new_workspace,
+    AppState, CloseProject, CloseWindow, MultiWorkspace, OpenPathPromptMode, Pane, Panel,
+    Workspace, WorkspaceSettings, create_and_open_local_file,
+    notifications::simple_message_notification::MessageNotification, with_active_or_new_workspace,
 };
 use zed_actions::{
     GetMerch, OpenBrowser, OpenDocs, OpenProjectTasks, OpenServerSettings, OpenSettingsFile,
@@ -628,12 +628,14 @@ fn register_actions(
                     multiple: true,
                     prompt: None,
                 },
-                action.create_new_window.unwrap_or_else(|| {
-                    matches!(
-                        WorkspaceSettings::get_global(cx).default_open_behavior,
-                        DefaultOpenBehavior::NewWindow
-                    )
-                }),
+                if action.create_new_window.unwrap_or_else(|| {
+                    WorkspaceSettings::get_global(cx).default_open_behavior
+                        == DefaultOpenBehavior::NewWindow
+                }) {
+                    OpenPathPromptMode::NewWindow
+                } else {
+                    OpenPathPromptMode::CurrentWindow
+                },
                 window,
                 cx,
             );
@@ -649,13 +651,13 @@ fn register_actions(
                     multiple: true,
                     prompt: None,
                 },
-                // Desktop always opens these in a new window. Android opens
-                // content in the current window and leaves a new one to the
-                // user, so this follows `default_open_behavior` as Open does.
-                matches!(
-                    WorkspaceSettings::get_global(cx).default_open_behavior,
-                    DefaultOpenBehavior::NewWindow
-                ),
+                if WorkspaceSettings::get_global(cx).default_open_behavior
+                    == DefaultOpenBehavior::NewWindow
+                {
+                    OpenPathPromptMode::NewWindow
+                } else {
+                    OpenPathPromptMode::CurrentWindow
+                },
                 window,
                 cx,
             );
@@ -684,19 +686,24 @@ fn register_actions(
                     prompt: None,
                 },
                 DirectoryLister::Project(workspace.project().clone()),
+                if create_new_window {
+                    OpenPathPromptMode::NewWindow
+                } else {
+                    OpenPathPromptMode::CurrentWindow
+                },
                 window,
                 cx,
             );
             cx.spawn_in(window, async move |this, cx| {
-                let Some(paths) = paths.await.log_err().flatten() else {
+                let Some(result) = paths.await.log_err().flatten() else {
                     return;
                 };
                 if let Some(task) = this
                     .update_in(cx, |this, window, cx| {
                         open_new_ssh_project_from_project(
                             this,
-                            paths,
-                            create_new_window,
+                            result.paths,
+                            result.open_in_new_window,
                             window,
                             cx,
                         )
