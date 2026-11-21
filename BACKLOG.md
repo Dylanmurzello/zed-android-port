@@ -20,13 +20,9 @@ A profile on 0.9.21 (2026-10-29) found `android_main` spending about 12.5 ms of 
 
 ## 0.19.1 device checks
 
-0.19.1 merges Zed v1.29.3, a patch release that conflicted only in two upstream workflows the fork deletes. It changes how the Anthropic and OpenAI providers send requests, so prompt caching and mid-conversation system prompt updates survive, and the text finder's list now empties when a query matches nothing. 0.19.1 also renames the remote server Zdroid installs on an SSH host. Check:
+0.19.1 merges Zed v1.29.3 and renames the remote server Zdroid installs on an SSH host. On the tablet on 2026-11-21, Zdroid downloaded `zed-remote-server-zdroid-1.29.3`, removed an unused older `zdroid-1.29.1` and kept a running `zdroid-1.29.0` and a newer `zdroid-1.30.0`; desktop Zed's 1.29.3 server, started while Zdroid was disconnected, removed a `stable-1.29.1` placeholder and kept Zdroid's binary, and Zdroid then reconnected without downloading; the text finder's list emptied when the query stopped matching. Still to check:
 
-- Open an SSH project on a host where desktop Zed is also used: Zed downloads the 1.29.3 remote server, and the host's `~/.zed_server` holds `zed-remote-server-zdroid-1.29.3` next to desktop Zed's `zed-remote-server-stable-*`.
-- Before that connection, put an empty `zed-remote-server-zdroid-1.29.1` in `~/.zed_server` and run a copy of `sleep` named `zed-remote-server-zdroid-1.29.0` from there: after the download, the 1.29.1 file is gone, the running 1.29.0 copy stays, and logcat shows "removing old remote server binary" for 1.29.1 only.
-- With Zdroid disconnected, start desktop Zed's server on that host: `zed-remote-server-zdroid-1.29.3` stays, and Zdroid's next connection doesn't download it again.
-- Start a Claude and a Codex thread in the agent panel in the SSH project.
-- Open **text finder: toggle** from the command palette, type a query with matches, then extend it until nothing matches: the list empties.
+- Start a Claude and a Codex thread in the agent panel in an SSH project.
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
