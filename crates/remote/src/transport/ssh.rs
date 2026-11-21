@@ -32,6 +32,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
+#[cfg(target_os = "android")]
+use util::ResultExt as _;
 use util::command::{Child, Command, Stdio};
 use util::{
     paths::{PathStyle, RemotePathBuf},
@@ -41,6 +43,10 @@ use util::{
 
 /// How long to wait for SSH to connect when no askpass prompt has opened.
 const SSH_CONNECTION_PROMPT_TIMEOUT: Duration = Duration::from_secs(17);
+
+/// The channel name in the remote server binaries that Android installs. No
+/// Zed server's cleanup matches it (see `ensure_server_binary`).
+const ZDROID_SERVER_CHANNEL: &str = "zdroid";
 
 pub(crate) struct SshRemoteConnection {
     socket: SshSocket,
@@ -1030,14 +1036,17 @@ impl SshRemoteConnection {
             ReleaseChannel::Dev => "build".to_string(),
             _ => version.to_string(),
         };
-        // Android fetches a stable release's server (see `wanted_version`) and
-        // names it as one: the server removes older binaries of its own
-        // channel when it starts, so under a `dev` name every version stayed.
-        // A server from a preview release takes the stable name without a
-        // clash, since Zed never reuses a version number across channels.
+        // Android names the stable or preview server it fetches (see
+        // `wanted_version`) under a channel of its own. A Zed server removes
+        // the older binaries of its channel when it starts: under the stable
+        // name, desktop Zed's newer server deleted the app's binary whenever
+        // the app wasn't connected to the same SSH host, and the app
+        // downloaded it again on its next connection. The app removes its own
+        // older binaries instead (see `remove_older_zdroid_servers` and
+        // crates/gpui_android/docs/workarounds/remote-development-on-android.md).
         let channel_name = if cfg!(target_os = "android") && release_channel == ReleaseChannel::Dev
         {
-            ReleaseChannel::Stable.dev_name()
+            ZDROID_SERVER_CHANNEL
         } else {
             release_channel.dev_name()
         };
@@ -1141,6 +1150,8 @@ impl SshRemoteConnection {
                     self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
                         .await
                         .context("extracting server binary")?;
+                    #[cfg(target_os = "android")]
+                    self.remove_older_zdroid_servers(&version).await.log_err();
                     return Ok(dst_path.into());
                 }
                 Err(e) => {
@@ -1166,7 +1177,54 @@ impl SshRemoteConnection {
         self.extract_server_binary(&dst_path, &tmp_path_compressed, delegate, cx)
             .await
             .context("extracting server binary")?;
+        #[cfg(target_os = "android")]
+        self.remove_older_zdroid_servers(&version).await.log_err();
         Ok(dst_path.into())
+    }
+
+    /// Removes the app's server binaries older than `current_version` that no
+    /// process runs, as `cleanup_old_binaries` in `remote_server` does for a
+    /// Zed channel. It runs only after a new binary is installed, since only
+    /// an app update leaves older ones behind.
+    #[cfg(target_os = "android")]
+    async fn remove_older_zdroid_servers(&self, current_version: &Version) -> Result<()> {
+        if self.ssh_platform.os.is_windows() {
+            return Ok(());
+        }
+        let server_dir = remote_server_dir_relative();
+        let file_names = self
+            .socket
+            .run_command(
+                self.ssh_shell_kind,
+                "ls",
+                &[server_dir.display(self.path_style())],
+                false,
+            )
+            .await?;
+        // A server's command line starts with its path, so this finds the
+        // binaries in use without reading /proc, which macOS lacks. When `ps`
+        // is missing, the command fails and nothing is removed.
+        let command_lines = self
+            .socket
+            .run_command(self.ssh_shell_kind, "ps", &["-A", "-o", "args="], false)
+            .await?;
+        let prefix = format!("zed-remote-server-{ZDROID_SERVER_CHANNEL}-");
+        for file_name in file_names.lines() {
+            let Some(version) = file_name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let is_older = Version::parse(version).is_ok_and(|version| version < *current_version);
+            if !is_older || command_lines.contains(file_name) {
+                continue;
+            }
+            let path = server_dir.join(RelPath::from_unix_str(file_name)?);
+            let path = path.display(self.path_style());
+            log::info!("removing old remote server binary: {path}");
+            self.socket
+                .run_command(self.ssh_shell_kind, "rm", &["-f", path.as_ref()], false)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn download_binary_on_server(

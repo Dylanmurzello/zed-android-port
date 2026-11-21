@@ -37,10 +37,21 @@ the Dev channel refuses CDN downloads by design. The app stays on Dev, which
 keeps its data dir and settings where they were and allows the newest
 extension API. Fix: `ssh.rs` adds a `Dev if cfg!(target_os = "android")`
 arm that asks for the server of the app's own version (`AppVersion`, the Zed
-version in `crates/zed/Cargo.toml`), and names it by version like a stable
-server, so a newer Zed never reuses an older server left on the host.
-Client and server must match: newer clients start agents through server
-subcommands older servers lack.
+version in `crates/zed/Cargo.toml`), and names it
+`zed-remote-server-zdroid-<version>`, so a newer Zed never reuses an older
+server left on the host. Client and server must match: newer clients start
+agents through server subcommands older servers lack.
+
+The channel in that name is the app's own because a Zed server removes the
+older binaries of its own channel when it starts. Under `stable`, desktop
+Zed's newer server on the same host deleted the app's binary whenever the
+app wasn't connected, and the app downloaded it again on its next
+connection: the host's server logs show desktop Zed 1.29.2 and 1.29.3
+removing Zdroid 0.19.0's `zed-remote-server-stable-1.29.1` three times
+between 2026-11-19 and 2026-11-21. After installing a new binary, the app
+removes its own older ones that no process runs
+(`remove_older_zdroid_servers`). It finds the running ones in
+`ps -A -o args=`, so a host without `ps` keeps every version.
 
 ### C. `failed to fetch release: "invalid channel: dev"`
 
@@ -95,7 +106,8 @@ cat /proc/<remote_server_pid>/environ | tr '\0' '\n' | grep -E 'LD_PRELOAD|^ZD_|
 - **(E)** Android variables added to `insert_zed_terminal_env` again: the
   tablet's `HOME`, `PATH` and the `ZD_*` engine variables reach the remote.
 - **(B)** the Android arm lost in a merge: Open Remote bails on the Dev
-  channel again.
+  channel again. The `zdroid` channel name lost: desktop Zed's newer server
+  deletes the app's server binary, and the app downloads it again.
 - **(C)** the stable/preview funnel lost: "invalid channel: dev".
 - **(D)** `auto_update::init` removed: every Open Remote attempt bails with
   "auto-update not initialized".
