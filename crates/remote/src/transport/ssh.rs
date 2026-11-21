@@ -1038,8 +1038,10 @@ impl SshRemoteConnection {
         };
         // Android names the stable or preview server it fetches (see
         // `wanted_version`) under a channel of its own. A Zed server removes
-        // the older binaries of its channel when it starts: under the stable
-        // name, desktop Zed's newer server deleted the app's binary whenever
+        // the older binaries of its channel when it starts, and the app's
+        // version has no build metadata, so it sorts below desktop Zed's
+        // version of the same release (`+stable.<build>.<sha>`): under the
+        // stable name, desktop Zed's server deleted the app's binary whenever
         // the app wasn't connected to the same SSH host, and the app
         // downloaded it again on its next connection. The app removes its own
         // older binaries instead (see `remove_older_zdroid_servers` and
