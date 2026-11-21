@@ -15,7 +15,8 @@ use anyhow::{Context as _, Result};
 use fs::Fs;
 use futures::StreamExt as _;
 use futures::channel::oneshot;
-use gpui::{App, AppContext as _, Context, DismissEvent, PromptLevel, Window, actions};
+use futures::future::{self, Either};
+use gpui::{App, AppContext as _, AsyncApp, Context, DismissEvent, PromptLevel, Window, actions};
 use util::ResultExt as _;
 use workspace::Workspace;
 use workspace::notifications::{NotificationId, simple_message_notification::MessageNotification};
@@ -28,6 +29,9 @@ actions!(
         /// Extract the bundled Ubuntu image again, replacing everything
         /// installed inside the runtime, then install the essentials.
         ResetRuntime,
+        /// Reset the runtime without asking again: the Settings page, which
+        /// asks in its own window, dispatches this. Hidden from the palette.
+        ResetRuntimeConfirmed,
         /// Install git, the SSH client, CA certificates and time zone data into the runtime with apt.
         InstallEssentials,
     ]
@@ -141,6 +145,7 @@ pub fn register(boot: BootSetup, cx: &mut App) {
     cx.observe_new(
         move |workspace: &mut Workspace, _window, cx: &mut Context<Workspace>| {
             workspace.register_action(reset_runtime);
+            workspace.register_action(reset_runtime_confirmed);
             workspace.register_action(install_essentials);
             static BOOT_HANDLED: AtomicBool = AtomicBool::new(false);
             if BOOT_HANDLED.swap(true, Ordering::AcqRel) {
@@ -172,19 +177,13 @@ fn reset_runtime(
     }
     let answer = window.prompt(
         PromptLevel::Warning,
-        "Reset the Ubuntu runtime?",
-        Some(
-            "Everything installed inside it with apt is removed and the base image is \
-             extracted again. Your home folder (dotfiles, SSH keys, toolchains), your \
-             projects and the editor settings are kept. Running terminals and language \
-             servers are stopped.",
-        ),
-        // Cancel first: Enter answers the first button.
-        &["Cancel", "Reset"],
+        zdroid_runtime::RESET_PROMPT_TITLE,
+        Some(zdroid_runtime::RESET_PROMPT_DETAIL),
+        &zdroid_runtime::RESET_PROMPT_BUTTONS,
         cx,
     );
     cx.spawn_in(window, async move |workspace, cx| {
-        if answer.await != Ok(1) {
+        if answer.await != Ok(zdroid_runtime::RESET_PROMPT_CONFIRM) {
             return;
         }
         workspace
@@ -194,6 +193,23 @@ fn reset_runtime(
             .ok();
     })
     .detach();
+}
+
+fn reset_runtime_confirmed(
+    workspace: &mut Workspace,
+    _: &ResetRuntimeConfirmed,
+    _window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    start_job(workspace, Job::Install, cx);
+}
+
+/// Keeps the no-prompt reset out of the command palette. Runs after
+/// `command_palette::init`, which creates the filter.
+pub fn hide_confirmed_actions(cx: &mut App) {
+    command_palette_hooks::CommandPaletteFilter::update_global(cx, |filter, _| {
+        filter.hide_action_types(&[std::any::TypeId::of::<ResetRuntimeConfirmed>()]);
+    });
 }
 
 fn install_essentials(
@@ -244,7 +260,8 @@ impl Job {
     fn done_message(self) -> &'static str {
         match self {
             Self::Install => {
-                "Ubuntu runtime reset. Restart Zdroid to reload the terminal and language servers."
+                "Ubuntu runtime reset, with git, the SSH client, CA certificates and time zone \
+                 data installed. Restart Zdroid to reload the terminal and language servers."
             }
             Self::Essentials => {
                 "git, the SSH client, CA certificates and time zone data are installed."
@@ -386,6 +403,51 @@ fn notification_id() -> NotificationId {
     NotificationId::unique::<RuntimeSetupNotification>()
 }
 
+/// How long tools wait for the login shell's environment. A startup file
+/// that never finishes (a foreground command waiting on the network, a job
+/// that keeps the capture's pipe open) would otherwise hold Node, every
+/// project's language servers and the terminal's PATH forever, with nothing
+/// on screen. The capture itself keeps running and is applied when it ends.
+const LOGIN_CAPTURE_DEADLINE: Duration = Duration::from_secs(15);
+
+struct LoginWaiters {
+    node_loaded: oneshot::Sender<()>,
+    projects_loaded: oneshot::Sender<()>,
+    fs: Arc<dyn Fs>,
+}
+
+fn release_login_waiters(waiters: &mut Option<LoginWaiters>, data_path: &Path, cx: &mut AsyncApp) {
+    let Some(waiters) = waiters.take() else {
+        return;
+    };
+    waiters.node_loaded.send(()).ok();
+    waiters.projects_loaded.send(()).ok();
+    let data_path = data_path.to_path_buf();
+    cx.update(|cx| watch_rootfs_binaries(waiters.fs, data_path, cx));
+}
+
+fn notify_slow_login_shell(shell: &str, cx: &mut AsyncApp) {
+    let message = format!(
+        "Your login shell ({shell}) has not finished its startup files after {} seconds. \
+         Language servers and terminals start without its environment until it does; a \
+         startup file that waits on the network or runs a job in the foreground is the \
+         usual cause.",
+        LOGIN_CAPTURE_DEADLINE.as_secs()
+    );
+    cx.update(|cx| {
+        workspace::with_active_or_new_workspace(cx, move |workspace, _window, cx| {
+            workspace.show_notification(login_shell_notification_id(), cx, |cx| {
+                cx.new(|cx| MessageNotification::new(message.clone(), cx))
+            });
+        })
+    });
+}
+
+fn login_shell_notification_id() -> NotificationId {
+    struct LoginShellNotification;
+    NotificationId::unique::<LoginShellNotification>()
+}
+
 /// Zed's `main()` loads the login shell's environment at this point
 /// (`util::load_login_shell_environment`), and Node.js detection waits for
 /// it. This runs Zed's capture with root's login shell and applies it as
@@ -405,16 +467,34 @@ pub fn load_login_environment(
     zdroid_hooks::register_login_environment(projects_receiver);
     let runtime = Arc::new(Runtime::new(&data_path));
     cx.spawn(async move |cx| {
+        let mut waiters = Some(LoginWaiters {
+            node_loaded,
+            projects_loaded,
+            fs,
+        });
         if runtime.is_installed() {
             let shell = runtime
                 .rootfs_dir()
                 .join(runtime.login_shell().trim_start_matches('/'));
-            let environment = cx
-                .background_spawn({
-                    let shell = shell.clone();
-                    async move { util::shell_env::capture(&shell, &[], paths::home_dir()).await }
-                })
-                .await;
+            let capture = cx.background_spawn({
+                let shell = shell.clone();
+                async move { util::shell_env::capture(&shell, &[], paths::home_dir()).await }
+            });
+            let deadline = cx.background_executor().timer(LOGIN_CAPTURE_DEADLINE);
+            let environment = match future::select(Box::pin(capture), Box::pin(deadline)).await {
+                Either::Left((environment, _)) => environment,
+                Either::Right(((), capture)) => {
+                    log::warn!(
+                        "runtime_setup: {} has not finished its startup files after {}s; \
+                         tools start without its environment until it does",
+                        shell.display(),
+                        LOGIN_CAPTURE_DEADLINE.as_secs()
+                    );
+                    release_login_waiters(&mut waiters, &data_path, cx);
+                    notify_slow_login_shell(&runtime.login_shell(), cx);
+                    capture.await
+                }
+            };
             match environment {
                 Ok(environment) => {
                     // SAFETY: as Zed's `load_login_shell_environment` sets the
@@ -449,9 +529,7 @@ pub fn load_login_environment(
                 ),
             }
         }
-        node_loaded.send(()).ok();
-        projects_loaded.send(()).ok();
-        cx.update(|cx| watch_rootfs_binaries(fs, data_path, cx));
+        release_login_waiters(&mut waiters, &data_path, cx);
     })
     .detach();
     node_receiver

@@ -90,8 +90,10 @@ internal object OpenedFiles {
 
     fun handle(context: Context, intent: Intent?) {
         if (intent?.action != ACTION_OPEN_FILE) return
+        // Compared by value: the token came back through an Intent, so it is
+        // another String object than the one issued.
         val token = intent.getStringExtra(EXTRA_TOKEN)
-        if (token == null || !pendingToken.compareAndSet(token, null)) {
+        if (token == null || pendingToken.getAndSet(null) != token) {
             Log.w(TAG, "ignoring OPEN_FILE without this launch's token")
             return
         }
