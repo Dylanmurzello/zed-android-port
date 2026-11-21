@@ -356,10 +356,7 @@ mod tests {
             press(&mut state, BUTTON_STYLUS_PRIMARY | BUTTON_PRIMARY, 10.),
             (MouseButton::Right, 1)
         );
-        assert_eq!(
-            release(&mut state, 0, 10.).button,
-            MouseButton::Right
-        );
+        assert_eq!(release(&mut state, 0, 10.).button, MouseButton::Right);
     }
 
     #[test]
