@@ -26,13 +26,16 @@ A profile on 0.9.21 (2026-10-29) found `android_main` spending about 12.5 ms of 
 
 ## 0.20.0 device checks
 
-0.20.0 merges Dylan's 0.4.4: his release of this fork's 0.18.1 with his own fixes. Check:
+0.20.0 merges Dylan's 0.4.4: his release of this fork's 0.18.1 with his own fixes. On the tablet on 2026-11-22:
 
-- **Settings → Android → Reset Runtime** asks in the Settings window, and **Cancel** leaves Settings open with nothing changed. Don't confirm: a reset removes the packages installed with apt. The question's text and buttons fit the window, and so do they when **zdroid runtime: reset runtime** from the command palette asks in the main window, also answered with **Cancel**. The palette doesn't list **reset runtime confirmed**.
-- **Open with** from the Files app opens the file in Zdroid. Dylan found that the app compared the handoff's token by identity, which a token that came back through an Intent never matches.
+- **Settings → Android → Reset Runtime** asked in the Settings window, and **Cancel** left Settings open with nothing changed. The same question from **zdroid runtime: reset runtime** in the command palette asked in the main window and fit it, text wrapped and both buttons full width; Cancel there changed nothing too. The palette has no match for **reset runtime confirmed**.
+- **Open with** opened the file in a new tab, both for a `file://` link and for a `content://media/…` link (sent with `am start` to `OpenFileActivity`; 0.19.1 ignored the same handoff).
+- A finger drag that started 20 px (logical) beside the divider between two panes moved it, keeping the finger's offset; 0.19.1's 16 px area wouldn't have reached. One that started 40 px beside it left the divider in place.
+- The environment a new terminal's shell gets from Zdroid has no `PWD`, `OLDPWD`, `SHLVL` or `LD_*`, its `SHLVL` is 1, and a login shell in the home folder shows `~`.
+
+Still to check:
+
 - A tap with the S Pen's side button held opens the context menu, as a right-click does.
-- A finger drag that starts about 20 px beside a pane splitter moves it.
-- A new terminal's prompt shows `/root` (`~`), not `/data/user/0/com.zdroid/files/rootfs/root`.
 
 ## Open findings from the 2026-10-26 and 2026-10-27 reviews
 
