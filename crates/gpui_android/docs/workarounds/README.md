@@ -94,6 +94,7 @@ seccomp trap path translator that runs a stock Ubuntu userland.
 | [UI mode → window appearance](ui-mode-system-appearance.md) | Active | Hardcoded Light made dark-mode-following themes always pick One Light |
 | [AssetSource threaded through gpui_android::run](assetsource-icons.md) | Active | Without it, every icon rendered as a blank rectangle |
 | [PointerIcon JNI cursor mapping](pointer-icon-cursor-mapping.md) | Active | set_cursor_style was a no-op; mouse hover never showed I-beam, resize handles, etc. |
+| [Confirmation prompts fit Android windows](android-confirmation-prompts.md) | Active | Zed's prompt renderer is 20 rem wide with 22 px buttons and no scrolling; on Android it clipped the reset question's detail and gave fingers nothing to hit |
 
 ## Window / render
 

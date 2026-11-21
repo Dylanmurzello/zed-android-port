@@ -31,6 +31,18 @@ pub use runtime::{Runtime, TerminalShell};
 /// App files dir when the platform did not hand us one.
 pub const DEFAULT_DATA_PATH: &str = "/data/data/com.zdroid/files";
 
+/// The question asked before a reset, shared by the palette action and the
+/// Settings page so the two never drift. Cancel comes first: the prompt
+/// answers Enter with its first button.
+pub const RESET_PROMPT_TITLE: &str = "Reset the Ubuntu runtime?";
+pub const RESET_PROMPT_DETAIL: &str = "Everything installed inside it with apt is removed and \
+    the base image is extracted again. Your home folder (dotfiles, SSH keys, toolchains), your \
+    projects and the editor settings are kept. Running terminals and language servers are \
+    stopped.";
+pub const RESET_PROMPT_BUTTONS: [&str; 2] = ["Cancel", "Reset"];
+/// The index of the Reset button in [`RESET_PROMPT_BUTTONS`].
+pub const RESET_PROMPT_CONFIRM: usize = 1;
+
 static DATA_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// Record the app files dir once at boot so code without access to the

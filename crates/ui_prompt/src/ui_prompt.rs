@@ -136,19 +136,46 @@ impl Render for ZedPromptRenderer {
             .elevation_3(cx)
             .overflow_hidden()
             .font_family(settings.ui_font.family.clone())
-            .child(div().w_full().child(MarkdownElement::new(
-                self.message.clone(),
-                markdown_style(true, window, cx),
-            )))
+            .map(|this| {
+                #[cfg(target_os = "android")]
+                {
+                    let viewport = window.viewport_size();
+                    this.id("zed-prompt")
+                        .w((viewport.width - px(32.)).max(Pixels::ZERO))
+                        .max_w(rems(36.))
+                        .max_h((viewport.height - px(32.)).max(Pixels::ZERO))
+                        .overflow_y_scroll()
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    this
+                }
+            })
+            .child(
+                div()
+                    .w_full()
+                    .when(cfg!(target_os = "android"), |this| this.flex_shrink_0())
+                    .child(MarkdownElement::new(
+                        self.message.clone(),
+                        markdown_style(true, window, cx),
+                    )),
+            )
             .children(self.detail.clone().map(|detail| {
-                div().w_full().text_xs().child(MarkdownElement::new(
-                    detail,
-                    markdown_style(false, window, cx),
-                ))
+                div()
+                    .w_full()
+                    .text_xs()
+                    .when(cfg!(target_os = "android"), |this| this.flex_shrink_0())
+                    .child(MarkdownElement::new(
+                        detail,
+                        markdown_style(false, window, cx),
+                    ))
             }))
             .child(
                 v_flex()
                     .gap_1()
+                    .when(cfg!(target_os = "android"), |this| {
+                        this.gap_2().flex_shrink_0()
+                    })
                     .children(self.actions.iter().enumerate().map(|(ix, action)| {
                         Button::new(ix, action.clone())
                             .full_width()
@@ -160,6 +187,16 @@ impl Render for ZedPromptRenderer {
                             .on_click(cx.listener(move |_, _, _window, cx| {
                                 cx.emit(PromptResponse(ix));
                             }))
+                            .map(|button| {
+                                #[cfg(target_os = "android")]
+                                {
+                                    button.render(window, cx).height(px(48.).into())
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    button
+                                }
+                            })
                     })),
             );
 

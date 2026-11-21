@@ -1182,6 +1182,7 @@ fn boot(
     workspace::init(app_state.clone(), cx);
     ui_prompt::init(cx);
     command_palette::init(cx);
+    runtime_setup::hide_confirmed_actions(cx);
     search::init(cx);
     lsp_locations::init(cx);
     // As in Zed's main(). The terminal panel uses this for its own buffer
