@@ -60,26 +60,35 @@ writeup is the editor side.
   the loader would open its own link as the guest program.
 - **The environment.** `rootfs-guest-env.md`.
 - **Reset.** Settings → Android → Reset Runtime terminates the
-  editor's children (`runtime_service::terminate_descendants`) and
-  extracts the bundled image again over a fresh staging dir, then moves
-  the old tree's `/root` into the new one; the app's home folder and the
-  editor state are outside the rootfs and untouched.
-- **The home folder.** The guest's home is the image's `/root`, which
-  the editor's `HOME` spells `<data>/files/rootfs/root` (see
-  `rootfs-guest-env.md`). It holds dotfiles, SSH keys and per-user
-  toolchains (`~/.cargo`, `~/.local`). `install::link_home` links
-  `projects/`, `storage/` and `received/` in it to the app's home folder,
-  `<data>/files/home`, which the Files app shows as Zdroid's root. Those
-  targets are identity-mapped, so a tool's `getcwd` under `~/projects`
-  reports the path Zed uses; binding `/root` to the app's home folder
-  instead would make the engine's reverse lookup report `/root/...`, which
-  the editor can't match to its worktrees.
-- **Upgrades from Bootstrap and chroot releases.** Boot removes what they
-  left that nothing runs anymore (`runtime_setup::sweep_previous_runtimes`:
-  the old prefix `<data>/files/usr`, the `bin/zd-exec` bridge and the
-  adapter selection file). Their home was the app's home folder, so
-  `link_home` also links its `.ssh`, `.claude`, `.claude.json` and
-  `.codex` into `/root` and includes its `.gitconfig` from root's.
+  editor's children (`runtime_service::terminate_descendants`), extracts
+  the bundled image again over a fresh staging dir and carries the old
+  tree's `/root` into the new one; then the essentials step the first
+  launch runs (git, the SSH client, CA certificates and time zone data)
+  follows, since the base image has none of them. The app's home folder
+  and the editor state are outside the rootfs and untouched.
+- **The home folder.** The guest's home is the image's `/root`, inside
+  the rootfs: `$HOME` in the guest view and root's entry in the rootfs's
+  `/etc/passwd`, which ssh reads instead of `$HOME`. The editor's `HOME`
+  is the same directory in the host's spelling
+  (`<data>/files/rootfs/root`), so `~` is one folder to both. Dotfiles,
+  SSH keys and per-user toolchains (`~/.cargo`, `~/.local`) live there;
+  `~/projects`, `~/storage` and `~/received` are links
+  (`install::link_home`) into the app's home folder `<data>/files/home`,
+  which the Files app shows as Zdroid's root and Zed's picker opens.
+  Projects belong under `~/projects`: the files dir is identity-mapped,
+  so a path there reads the same on both sides, while a tool's `getcwd`
+  elsewhere under `/root` answers in the guest spelling (`/root/...`),
+  which the editor does not map back. A reset carries `/root` into the
+  new tree. `rootfs-guest-env.md` has the reasoning.
+- **Upgrades from Bootstrap and chroot releases.** They aren't migrated:
+  their programs, and what Zed installed with them, don't run in the
+  rootfs. Boot removes the old prefix (`<data>/files/usr`), the
+  `bin/zd-exec` bridge and `etc/zd-runtime.toml`
+  (`runtime_setup::sweep_previous_runtimes`) and sets the rootfs up as on
+  a first launch; the home folder and editor settings stay. Their home was
+  the app's home folder, so `link_home` also links its `.ssh`, `.claude`,
+  `.claude.json` and `.codex` into `/root` and includes its `.gitconfig`
+  from root's.
 
 ## Why not the obvious fix
 

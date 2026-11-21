@@ -151,6 +151,8 @@ git push origin main           # updates the pull request on Dylan's repository
 
 When Dylan merges the pull request, fast-forward `main` to `dylan/main` (`git merge --ff-only dylan/main` on `main`) and sync `zdroid` from it as in [Syncing Dylan's repo](#syncing-dylans-repo). His version numbers then become `main`'s.
 
+If `main` moved on after the commit he merged, GitHub can't mark the pull request merged, so he closes it (0.4.4 took 0.18.1's `main` that way, after `main` had moved to 0.19.0). `main` can't fast-forward then: sync `zdroid` from `dylan/main` first, release it, then update `main` from `zdroid` as usual, keeping Dylan's version numbers, and open a new pull request.
+
 Keep `main`'s history: its Zed tag merges are real merges, which later Zed syncs in Dylan's repository depend on, so the pull request should be merged with a merge commit, not squashed.
 
 ## Releasing

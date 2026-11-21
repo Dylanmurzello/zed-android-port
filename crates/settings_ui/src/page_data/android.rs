@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use gpui::{App, Window};
+use gpui::{App, PromptLevel, Window};
 
 use crate::{ActionLink, SettingField, SettingItem, SettingsPage, SettingsPageItem, USER};
 
@@ -18,10 +18,10 @@ fn dispatch_app_action(name: &'static str, cx: &mut App) {
     });
 }
 
-/// Closes Settings after a runtime button, as Zed's Open Keymap link does:
-/// the job's progress, and the reset's confirmation, show in the workspace's
-/// window, which the Settings window covers, and on Android activating the
-/// workspace's window doesn't bring it forward.
+/// Closes Settings once a runtime job starts, as Zed's Open Keymap link
+/// does: the job's progress shows in the workspace's window, which the
+/// Settings window covers, and on Android activating the workspace's window
+/// doesn't bring it forward.
 fn close_for_runtime_job(window: &mut Window) {
     window.remove_window();
 }
@@ -29,6 +29,7 @@ fn close_for_runtime_job(window: &mut Window) {
 pub(super) fn android_page() -> SettingsPage {
     let runtime = zdroid_runtime::Runtime::new(&zdroid_runtime::data_path());
     let installed = runtime.installed_image();
+    let runtime_installed = installed.is_some();
     let runtime_description = match &installed {
         Some(image) => format!(
             "Installed from {}. Resetting extracts the bundled image again and removes what \
@@ -57,9 +58,37 @@ pub(super) fn android_page() -> SettingsPage {
                     "Install"
                 }
                 .into(),
-                on_click: Arc::new(|_settings_window, window, cx| {
-                    dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
-                    close_for_runtime_job(window);
+                on_click: Arc::new(move |_settings_window, window, cx| {
+                    if !runtime_installed {
+                        dispatch_app_action("zdroid_runtime::ResetRuntime", cx);
+                        close_for_runtime_job(window);
+                        return;
+                    }
+                    // Asked in the window the button is in: the workspace's
+                    // window, where the action would ask, can sit behind it.
+                    // Settings closes only once the reset is confirmed, so
+                    // Cancel leaves the page as it was.
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        zdroid_runtime::RESET_PROMPT_TITLE,
+                        Some(zdroid_runtime::RESET_PROMPT_DETAIL),
+                        &zdroid_runtime::RESET_PROMPT_BUTTONS,
+                        cx,
+                    );
+                    window
+                        .spawn(cx, async move |cx| {
+                            if answer.await == Ok(zdroid_runtime::RESET_PROMPT_CONFIRM) {
+                                cx.update(|window, cx| {
+                                    dispatch_app_action(
+                                        "zdroid_runtime::ResetRuntimeConfirmed",
+                                        cx,
+                                    );
+                                    close_for_runtime_job(window);
+                                })
+                                .ok();
+                            }
+                        })
+                        .detach();
                 }),
                 files: USER,
             }),

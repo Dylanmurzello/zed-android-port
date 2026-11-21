@@ -15,18 +15,21 @@ crates/zed/resources/windows/zed.sh text eol=lf
 # Identity / docs (ONLY files where we have actually authored content
 # different from upstream, verified via
 #   git diff --quiet $(git merge-base origin/main upstream/main) origin/main -- <file>
+# The leading `/` anchors each pattern to the repository root: an unanchored
+# `README.md` also matches `docs/README.md` and every other README upstream
+# edits, and the v1.28.1 merge dropped such an edit that way.
 # AGENTS.md / GEMINI.md / CLAUDE.md are upstream Zed's agent-rule files,
 # UNCHANGED from upstream; they intentionally are NOT in this list so
 # future upstream improvements still flow through.
-README.md               merge=ours
-CONTRIBUTING.md         merge=ours
-BACKLOG.md              merge=ours
-RELEASING.md            merge=ours
-UPSTREAM_MERGE.md       merge=ours
+/README.md              merge=ours
+/CONTRIBUTING.md        merge=ours
+/BACKLOG.md             merge=ours
+/RELEASING.md           merge=ours
+/UPSTREAM_MERGE.md      merge=ours
 # This tree is a Dev build of Zed on every platform; a release tag flips
 # the file to stable or preview.
 crates/zed/RELEASE_CHANNEL merge=ours
-.gitattributes          merge=ours
+/.gitattributes         merge=ours
 
 # .github surface (issue templates, PR template, funding)
 .github/ISSUE_TEMPLATE/**            merge=ours

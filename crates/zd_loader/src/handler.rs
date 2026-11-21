@@ -1812,5 +1812,15 @@ fn detranslate_readlink(
     let count = len.min(size);
     // SAFETY: `guest` and the guest's buffer are distinct allocations.
     unsafe { core::ptr::copy_nonoverlapping(guest.as_ptr(), buffer, count) };
+    // The kernel wrote the longer host path into the caller's buffer. Linux
+    // leaves the bytes past a link's length as the caller had them, so the
+    // host path's tail is cleared instead of being left for a caller that
+    // zero-fills and ignores the returned length.
+    let written = written as usize;
+    if written > count {
+        // SAFETY: the kernel wrote `written` bytes there, so the range is the
+        // caller's buffer.
+        unsafe { core::ptr::write_bytes(buffer.add(count), 0, written - count) };
+    }
     regs[0] = count as u64;
 }

@@ -26,6 +26,7 @@ client = { path = "../../../client" }
 collections = { path = "../../../collections" }
 copilot_chat = { path = "../../../copilot_chat" }
 command_palette = { path = "../../../command_palette" }
+command_palette_hooks = { path = "../../../command_palette_hooks" }
 tabular_data_preview = { path = "../../../tabular_data_preview" }
 db = { path = "../../../db" }
 diagnostics = { path = "../../../diagnostics" }

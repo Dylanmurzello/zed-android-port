@@ -58,8 +58,12 @@ every exec.
   which prints the environment the same way. `Runtime::env_for_login_shell`
   then applies it as Zed does, except for what the runtime sets for the
   editor or the guest (`HOME`, `PATH`, `SHELL`, `TMPDIR`, `LANG`, the
-  engine's `ZD_` variables and the rest above): the editor keeps those, and
-  the loader passes every other variable on to the guest's children. The
+  engine's `ZD_` variables and the rest above), the shell's own state
+  (`SHLVL`, `PWD`, `OLDPWD`, `_`: bash and zsh trust an inherited `PWD`, so
+  the capture's host spelling of the home showed in every prompt) and `LD_`
+  variables, which are for the rootfs's glibc programs, not the bionic
+  editor: the editor keeps its own, and the loader passes every other
+  variable on to the guest's children. The
   shell's PATH becomes the guest PATH: its absolute entries with the
   default's missing ones appended, so every folder the farm mirrors stays on
   it, capped at 3072 bytes, since the engine holds all of `ZD_GUEST_ENV` in
@@ -68,7 +72,10 @@ every exec.
   watches them. As in Zed's `main()`, Node.js detection waits for the
   capture, and so does the project environment (`environment.rs`'s Android
   gate, through `zdroid_hooks::login_environment_loaded`), which desktop Zed
-  loads from another login shell in the project's folder.
+  loads from another login shell in the project's folder. They wait at most
+  15 seconds (`LOGIN_CAPTURE_DEADLINE`): after that they start without the
+  shell's environment, a notification names the shell whose startup files
+  haven't finished, and the environment is applied when the capture ends.
 - **A PATH set on one spawn (`zdroid_hooks::guest_env_for_path`).** npm runs
   lifecycle scripts as `sh -c "node install.js"` with the managed Node's
   `bin` prepended to PATH by Zed. The guest PATH from `ZD_GUEST_ENV`

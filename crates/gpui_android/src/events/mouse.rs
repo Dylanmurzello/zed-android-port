@@ -20,6 +20,8 @@ const BUTTON_SECONDARY: u32 = 1 << 1;
 const BUTTON_TERTIARY: u32 = 1 << 2;
 const BUTTON_BACK: u32 = 1 << 3;
 const BUTTON_FORWARD: u32 = 1 << 4;
+const BUTTON_STYLUS_PRIMARY: u32 = 1 << 5;
+const BUTTON_STYLUS_SECONDARY: u32 = 1 << 6;
 
 /// As Zed's Linux backends do (`DOUBLE_CLICK_INTERVAL` and
 /// `DOUBLE_CLICK_DISTANCE` in `gpui_linux`).
@@ -199,7 +201,14 @@ fn invert_pixels(delta: Point<Pixels>) -> Point<Pixels> {
 /// The gpui button for a `MotionEvent.getButtonState()`, the first pressed one
 /// when there are several.
 fn button_from_state(state: u32) -> Option<MouseButton> {
-    if state & BUTTON_PRIMARY != 0 {
+    // A tap with the S Pen's side button held arrives as the stylus buttons,
+    // which Android apps treat as the secondary and middle buttons; they are
+    // checked first because the tip's own press can be reported alongside.
+    if state & BUTTON_STYLUS_PRIMARY != 0 {
+        Some(MouseButton::Right)
+    } else if state & BUTTON_STYLUS_SECONDARY != 0 {
+        Some(MouseButton::Middle)
+    } else if state & BUTTON_PRIMARY != 0 {
         Some(MouseButton::Left)
     } else if state & BUTTON_TERTIARY != 0 {
         Some(MouseButton::Middle)
@@ -338,6 +347,16 @@ mod tests {
         let mut state = MouseState::default();
         assert_eq!(press(&mut state, 0, 10.), (MouseButton::Left, 1));
         assert_eq!(release(&mut state, 0, 10.).button, MouseButton::Left);
+    }
+
+    #[test]
+    fn the_stylus_side_button_is_the_right_one() {
+        let mut state = MouseState::default();
+        assert_eq!(
+            press(&mut state, BUTTON_STYLUS_PRIMARY | BUTTON_PRIMARY, 10.),
+            (MouseButton::Right, 1)
+        );
+        assert_eq!(release(&mut state, 0, 10.).button, MouseButton::Right);
     }
 
     #[test]
