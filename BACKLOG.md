@@ -44,6 +44,10 @@ The Android audit, the review of that week's PR stack and the two upstream-diver
 
 - **Terminal touch scrolling moves by whole rows.** A finger drag on the terminal scrolls the grid a row per row of travel, because `Terminal::determine_scroll_lines` (`crates/terminal/src/terminal.rs`) turns pixels into whole lines. That reads as stepping next to the editor's pixel scrolling. A sub-row variant would keep a fractional offset in the terminal element and round it at paint. Deferred: correct as it is, and the editor's touch scrolling is where the time went.
 
+## Open from the 0.4.4 sync review, 2026-11-21
+
+- **A late login shell's folders aren't watched.** When the login shell's capture misses `LOGIN_CAPTURE_DEADLINE` (15 s), `runtime_setup::load_login_environment` starts `watch_rootfs_binaries` at the deadline, before the shell's PATH is applied, so it watches only the default binary folders. The farm is rebuilt when the capture ends, but a tool installed later into a folder only that PATH adds (mise's, for example) reaches the farm only after a change in a watched folder or a restart. Desktop Zed has no deadline: its Node detection waits for the shell. Starting the watcher again after a late capture would close it; it's Dylan's code, so send the fix to him first.
+
 ## Open from the final pass, 2026-10-31
 
 Seen on the tablet while testing 0.11.0, none of them caused by that release:
