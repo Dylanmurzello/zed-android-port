@@ -30,7 +30,7 @@ A userland chroot without root or ptrace: the kernel only ever execs a 500 KB st
 
 ---
 
-## <img src="https://api.iconify.design/lucide:download.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Install
+## <img src="https://api.iconify.design/lucide/download.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Install
 
 Grab the latest `Zdroid-X.Y.Z.apk` from the [releases page](https://github.com/Dylanmurzello/zed-android-port/releases/latest) and open it in your file manager. Android prompts for unknown-source installs the first time; grant it. Reinstalls upgrade in place because every release ships from the same signing cert.
 
@@ -79,7 +79,7 @@ Three workflows that work with this constraint:
 
 ---
 
-## <img src="https://api.iconify.design/lucide:hand.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Gestures & input
+## <img src="https://api.iconify.design/lucide/hand.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Gestures & input
 
 Each surface toggles in **Settings → Android** (or on the first-run onboarding card).
 
@@ -111,7 +111,7 @@ Settings and any other spawned window each open as their own Recents entries and
 ---
 
 <a id="userland"></a>
-## <img src="https://api.iconify.design/lucide:server.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Userland
+## <img src="https://api.iconify.design/lucide/server.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Userland
 
 The editor is bionic-linked and runs as the Android app process. Every subprocess it spawns (`bash`, `apt`, language servers, debug adapters, formatters, terminal shells, `git`, `ssh`) runs inside a stock Ubuntu 26.04 rootfs extracted from the APK into the app's private data dir. No root, no Magisk, no second app.
 
@@ -125,7 +125,7 @@ Not in the engine: SysV IPC (PostgreSQL), 32-bit guests, mount or user namespace
 
 ---
 
-## <img src="https://api.iconify.design/lucide:layers.svg?color=%23999999&height=22" valign="middle" /> &nbsp;What works
+## <img src="https://api.iconify.design/lucide/layers.svg?color=%23999999&height=22" valign="middle" /> &nbsp;What works
 
 <p align="center">
   <table>
@@ -152,7 +152,7 @@ Not in the engine: SysV IPC (PostgreSQL), 32-bit guests, mount or user namespace
 ---
 
 <a id="ai"></a>
-## <img src="https://api.iconify.design/lucide:bot.svg?color=%23999999&height=22" valign="middle" /> &nbsp;AI with your own API keys
+## <img src="https://api.iconify.design/lucide/bot.svg?color=%23999999&height=22" valign="middle" /> &nbsp;AI with your own API keys
 
 Besides ACP agents, Zed's own agent and inline assistant work with your API keys, no Zed account needed. Zdroid keeps the API providers Zed supports (Anthropic, OpenAI, Google, OpenRouter and the rest) and OpenAI-compatible endpoints such as a LiteLLM or vLLM gateway. It leaves out Zed-hosted models and web search, Zed sign-in, and the local model servers (Ollama, LM Studio, llama.cpp). ACP agents on an SSH remote keep their own authentication on the remote machine.
 
@@ -178,7 +178,7 @@ Requests come from the tablet, even in an SSH project, so the endpoint must be r
 
 ---
 
-## <img src="https://api.iconify.design/lucide:hammer.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Build from source
+## <img src="https://api.iconify.design/lucide/hammer.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Build from source
 
 You'll need:
 
@@ -206,7 +206,7 @@ First build is around 10 minutes. Incremental Rust rebuilds are 20 seconds, Grad
 
 ---
 
-## <img src="https://api.iconify.design/lucide:tablet-smartphone.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Tested on
+## <img src="https://api.iconify.design/lucide/tablet-smartphone.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Tested on
 
 Samsung Galaxy Tab S9 Ultra (Snapdragon 8 Gen 2 / Adreno 740, Android 16, One UI 8) is the daily driver. A Galaxy S21 Ultra (Exynos 2100 / Mali-G78, Android 15, One UI 7, Linux 5.4) checks older CPUs and kernels and a Mali GPU, where text is anti-aliased in grayscale. Release builds need Android 12 or later, Vulkan 1.1, and Cortex-A55, A75 or newer cores (Armv8.2 with dot product); older CPUs, such as Cortex-A53 ones, crash at launch. See [`docs/workarounds/reference-cpu-build.md`](crates/gpui_android/docs/workarounds/reference-cpu-build.md). Xclipse GPUs haven't been tried.
 
@@ -214,7 +214,7 @@ A hardware keyboard is the supported config. Tablet plus Bluetooth keyboard, fol
 
 ---
 
-## <img src="https://api.iconify.design/lucide:file-text.svg?color=%23999999&height=22" valign="middle" /> &nbsp;License
+## <img src="https://api.iconify.design/lucide/file-text.svg?color=%23999999&height=22" valign="middle" /> &nbsp;License
 
 GPL-3.0-or-later, same as upstream Zed. The engine crates `crates/zd_engine_core` and `crates/zd_loader` are MIT. The APK bundles the unmodified Ubuntu 26.04 base image (`ubuntu-base`, from [cdimage.ubuntu.com](https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/)), whose packages carry their own licenses (GPL, LGPL, BSD, MIT and others); the source of every package is in the Ubuntu archive, and nothing in the image is modified.
 
@@ -222,7 +222,7 @@ GPL-3.0-or-later, same as upstream Zed. The engine crates `crates/zd_engine_core
 
 ---
 
-## <img src="https://api.iconify.design/lucide:handshake.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Acknowledgments
+## <img src="https://api.iconify.design/lucide/handshake.svg?color=%23999999&height=22" valign="middle" /> &nbsp;Acknowledgments
 
 - [Zed Industries](https://zed.dev/) for [`gpui`](https://github.com/zed-industries/zed/tree/main/crates/gpui) being platform-agnostic enough that an Android port is plumbing rather than a rewrite.
 - The [`wgpu`](https://github.com/gfx-rs/wgpu) and [`blade-graphics`](https://github.com/kvark/blade) maintainers for a Vulkan abstraction that just works on Adreno.
@@ -231,7 +231,7 @@ GPL-3.0-or-later, same as upstream Zed. The engine crates `crates/zd_engine_core
 
 ---
 
-## <img src="https://api.iconify.design/lucide:circle-help.svg?color=%23999999&height=22" valign="middle" /> &nbsp;So why this ?
+## <img src="https://api.iconify.design/lucide/circle-help.svg?color=%23999999&height=22" valign="middle" /> &nbsp;So why this ?
 
 Zed Industries' position on a mobile/tablet port: **not planned**.
 
