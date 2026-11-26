@@ -76,6 +76,9 @@ every exec.
   15 seconds (`LOGIN_CAPTURE_DEADLINE`): after that they start without the
   shell's environment, a notification names the shell whose startup files
   haven't finished, and the environment is applied when the capture ends.
+  The farm watcher starts at the deadline on the default binary folders and
+  adds the shell's PATH folders when the capture ends, so a tool installed
+  into one of them later still reaches the farm.
 - **A PATH set on one spawn (`zdroid_hooks::guest_env_for_path`).** npm runs
   lifecycle scripts as `sh -c "node install.js"` with the managed Node's
   `bin` prepended to PATH by Zed. The guest PATH from `ZD_GUEST_ENV`

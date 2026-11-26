@@ -413,17 +413,23 @@ const LOGIN_CAPTURE_DEADLINE: Duration = Duration::from_secs(15);
 struct LoginWaiters {
     node_loaded: oneshot::Sender<()>,
     projects_loaded: oneshot::Sender<()>,
-    fs: Arc<dyn Fs>,
 }
 
-fn release_login_waiters(waiters: &mut Option<LoginWaiters>, data_path: &Path, cx: &mut AsyncApp) {
+fn release_login_waiters(waiters: &mut Option<LoginWaiters>) {
     let Some(waiters) = waiters.take() else {
         return;
     };
     waiters.node_loaded.send(()).ok();
     waiters.projects_loaded.send(()).ok();
-    let data_path = data_path.to_path_buf();
-    cx.update(|cx| watch_rootfs_binaries(waiters.fs, data_path, cx));
+}
+
+/// The rootfs binary folders with a watcher on them. A login shell that
+/// misses the deadline has the default folders watched at the deadline and
+/// its PATH's folders added when its capture ends, so the list grows in two
+/// steps.
+struct BinaryWatch {
+    fs: Arc<dyn Fs>,
+    watched: Vec<PathBuf>,
 }
 
 fn notify_slow_login_shell(shell: &str, cx: &mut AsyncApp) {
@@ -455,8 +461,9 @@ fn login_shell_notification_id() -> NotificationId {
 /// variables, the shell's PATH becomes the guest's, and the farm mirrors its
 /// folders. The project environments wait for it too
 /// (`zdroid_hooks::login_environment_loaded`), and the binary dirs, its
-/// folders included, are watched once it's done. Returns `NodeRuntime`'s
-/// receiver.
+/// folders included, are watched once it's done; a shell that misses the
+/// deadline gets the default dirs watched at the deadline and its own folders
+/// added when it finishes. Returns `NodeRuntime`'s receiver.
 pub fn load_login_environment(
     fs: Arc<dyn Fs>,
     data_path: PathBuf,
@@ -470,8 +477,11 @@ pub fn load_login_environment(
         let mut waiters = Some(LoginWaiters {
             node_loaded,
             projects_loaded,
-            fs,
         });
+        let mut watch = BinaryWatch {
+            fs,
+            watched: Vec::new(),
+        };
         if runtime.is_installed() {
             let shell = runtime
                 .rootfs_dir()
@@ -490,7 +500,8 @@ pub fn load_login_environment(
                         shell.display(),
                         LOGIN_CAPTURE_DEADLINE.as_secs()
                     );
-                    release_login_waiters(&mut waiters, &data_path, cx);
+                    release_login_waiters(&mut waiters);
+                    cx.update(|cx| watch_rootfs_binaries(&mut watch, &data_path, cx));
                     notify_slow_login_shell(&runtime.login_shell(), cx);
                     capture.await
                 }
@@ -529,7 +540,8 @@ pub fn load_login_environment(
                 ),
             }
         }
-        release_login_waiters(&mut waiters, &data_path, cx);
+        release_login_waiters(&mut waiters);
+        cx.update(|cx| watch_rootfs_binaries(&mut watch, &data_path, cx));
     })
     .detach();
     node_receiver
@@ -554,17 +566,20 @@ fn refresh_farm(runtime: &Runtime, data_path: &Path, reason: &str) {
 /// installed from the terminal (apt, cargo install, pip, npm) is on Zed's
 /// PATH a couple of seconds later instead of at the next launch. `bin` and
 /// `sbin` are symlinks into `usr/`, so watching the `usr/` dirs covers them.
-fn watch_rootfs_binaries(fs: Arc<dyn Fs>, data_path: PathBuf, cx: &mut App) {
-    let runtime = Arc::new(Runtime::new(&data_path));
-    let watched: Vec<PathBuf> = runtime
+/// Folders already in `watch` are skipped, so a call after a late login
+/// shell's capture adds only the folders its PATH brought in.
+fn watch_rootfs_binaries(watch: &mut BinaryWatch, data_path: &Path, cx: &mut App) {
+    let runtime = Arc::new(Runtime::new(data_path));
+    let unwatched: Vec<PathBuf> = runtime
         .binary_dirs()
         .into_iter()
-        .filter(|dir| dir.is_dir())
+        .filter(|dir| dir.is_dir() && !watch.watched.contains(dir))
         .collect();
-    for dir in watched {
-        let fs = fs.clone();
+    for dir in unwatched {
+        watch.watched.push(dir.clone());
+        let fs = watch.fs.clone();
         let runtime = runtime.clone();
-        let data_path = data_path.clone();
+        let data_path = data_path.to_path_buf();
         cx.spawn(async move |cx| {
             let (mut events, _watcher) = fs.watch(&dir, Duration::from_secs(2)).await;
             while events.next().await.is_some() {
