@@ -1038,13 +1038,13 @@ impl SshRemoteConnection {
         };
         // Android names the stable or preview server it fetches (see
         // `wanted_version`) under a channel of its own. A Zed server removes
-        // the older binaries of its channel when it starts, and the app's
-        // version has no build metadata, so it sorts below desktop Zed's
-        // version of the same release (`+stable.<build>.<sha>`): under the
-        // stable name, desktop Zed's server deleted the app's binary whenever
-        // the app wasn't connected to the same SSH host, and the app
-        // downloaded it again on its next connection. The app removes its own
-        // older binaries instead (see `remove_older_zdroid_servers` and
+        // the older binaries of its channel when it starts, comparing their
+        // versions with its own release, and the app lags desktop Zed by a
+        // release or two: under the stable name, the server of a newer
+        // desktop Zed release deleted the app's binary whenever the app
+        // wasn't connected to the same SSH host, and the app downloaded it
+        // again on its next connection. The app removes its own older
+        // binaries instead (see `remove_older_zdroid_servers` and
         // crates/gpui_android/docs/workarounds/remote-development-on-android.md).
         let channel_name = if cfg!(target_os = "android") && release_channel == ReleaseChannel::Dev
         {
@@ -1203,20 +1203,26 @@ impl SshRemoteConnection {
                 false,
             )
             .await?;
-        // A server's command line starts with its path, so this finds the
-        // binaries in use without reading /proc, which macOS lacks. When `ps`
-        // is missing, the command fails and nothing is removed.
+        // A server's command line starts with its path, so the basenames of
+        // the first words of `ps` output are the binaries in use, found
+        // without reading /proc, which macOS lacks. When `ps` is missing, the
+        // command fails and nothing is removed.
         let command_lines = self
             .socket
             .run_command(self.ssh_shell_kind, "ps", &["-A", "-o", "args="], false)
             .await?;
+        let running_binaries: Vec<&str> = command_lines
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .map(|program| program.rsplit_once('/').map_or(program, |(_, name)| name))
+            .collect();
         let prefix = format!("zed-remote-server-{ZDROID_SERVER_CHANNEL}-");
         for file_name in file_names.lines() {
             let Some(version) = file_name.strip_prefix(&prefix) else {
                 continue;
             };
             let is_older = Version::parse(version).is_ok_and(|version| version < *current_version);
-            if !is_older || command_lines.contains(file_name) {
+            if !is_older || running_binaries.contains(&file_name) {
                 continue;
             }
             let path = server_dir.join(RelPath::from_unix_str(file_name)?);

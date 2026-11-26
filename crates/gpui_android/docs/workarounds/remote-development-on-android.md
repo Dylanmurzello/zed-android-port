@@ -43,17 +43,19 @@ server left on the host. Client and server must match: newer clients start
 agents through server subcommands older servers lack.
 
 The channel in that name is the app's own because a Zed server removes the
-older binaries of its own channel when it starts. Under `stable`, desktop
-Zed's server on the same host deleted the app's binary whenever the app
+older binaries of its own channel when it starts, comparing each file's
+version with its own release. Under `stable`, the server of a newer desktop
+Zed release on the same host deleted the app's binary whenever the app
 wasn't connected, and the app downloaded it again on its next connection:
 the host's server logs show desktop Zed 1.29.2 and 1.29.3 removing Zdroid
 0.19.0's `zed-remote-server-stable-1.29.1` three times between 2026-11-19
-and 2026-11-21. That happens at the same release too: the app's version has
-no build metadata, and `semver` (1.0.28) orders `1.29.3` below desktop
-Zed's `1.29.3+stable.395.<sha>`. After installing a new binary, the app
-removes its own older ones that no process runs
-(`remove_older_zdroid_servers`). It finds the running ones in
-`ps -A -o args=`, so a host without `ps` keeps every version.
+and 2026-11-21. A server of the same release keeps the app's binary (the
+comparison uses the plain package version, `ZED_PKG_VERSION`, with no build
+metadata), but the app lags desktop Zed by a release or two most of the
+time. After installing a new binary, the app removes its own older ones that
+no process runs (`remove_older_zdroid_servers`). It finds the running ones
+in `ps -A -o args=`, matching the basename of each command's first word, so
+a host without `ps` keeps every version.
 
 ### C. `failed to fetch release: "invalid channel: dev"`
 
